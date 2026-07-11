@@ -28,6 +28,17 @@ export interface UserRecord {
 export let mysqlAvailable = false;
 export let mysqlErrorMsg: string | null = null;
 
+// Memory sandbox fallback for local dev/preview
+const memoryConfig: JellyfinConfig = {
+  serverUrl: 'https://cinode.zerolord.com',
+  adminUsername: 'duwit',
+  adminPasswordFull: '@f33rinimi',
+  apiKey: '79ee2e15ee1f47fd881188ef4da13391'
+};
+export let localSystemConfig: JellyfinConfig | null = memoryConfig;
+export const localUsers: UserRecord[] = [];
+export const localSessions = new Map<string, { userId: string; expiresAt: number; jellyfinToken: string }>();
+
 // Create connection pool to the user's MySQL database
 export const pool = mysql.createPool({
   host: process.env.DB_HOST || '131.153.147.178',
@@ -93,6 +104,26 @@ export async function initDb() {
     console.log('[MySQL] Database tables checked and ready.');
     mysqlAvailable = true;
     mysqlErrorMsg = null;
+
+    // Check if system_config table is empty, if so, seed it with user's MySQL credentials!
+    try {
+      const [rows]: any = await pool.query('SELECT COUNT(*) as count FROM system_config');
+      if (rows && rows[0] && rows[0].count === 0) {
+        console.log('[MySQL] Seeding empty database with Jellyfin server configurations...');
+        await pool.query(`
+          INSERT INTO system_config (id, serverUrl, adminUsername, adminPasswordFull, apiKey)
+          VALUES ('main', ?, ?, ?, ?)
+        `, [
+          'https://cinode.zerolord.com',
+          'duwit',
+          '@f33rinimi',
+          '79ee2e15ee1f47fd881188ef4da13391'
+        ]);
+      }
+    } catch (seedErr: any) {
+      console.error('[MySQL] Seeding error:', seedErr.message);
+    }
+
   } catch (err: any) {
     console.error('[MySQL] Connection or initialization error:', err.message);
     mysqlAvailable = false;
@@ -136,7 +167,7 @@ export const db = {
     }
 
     if (!mysqlAvailable) {
-      throw new Error(`MySQL Connection Error: ${mysqlErrorMsg || 'Access denied'}`);
+      return localSystemConfig;
     }
 
     const [rows]: any = await pool.query('SELECT * FROM system_config WHERE id = "main" LIMIT 1');
@@ -153,7 +184,8 @@ export const db = {
 
   async saveConfig(config: JellyfinConfig): Promise<void> {
     if (!mysqlAvailable) {
-      throw new Error(`MySQL Connection Error: ${mysqlErrorMsg || 'Access denied'}`);
+      localSystemConfig = config;
+      return;
     }
 
     await pool.query(`
@@ -169,7 +201,7 @@ export const db = {
 
   async getUsers(): Promise<UserRecord[]> {
     if (!mysqlAvailable) {
-      throw new Error(`MySQL Connection Error: ${mysqlErrorMsg || 'Access denied'}`);
+      return localUsers;
     }
 
     const [rows]: any = await pool.query('SELECT * FROM users');
@@ -178,7 +210,7 @@ export const db = {
 
   async getUserById(id: string): Promise<UserRecord | undefined> {
     if (!mysqlAvailable) {
-      throw new Error(`MySQL Connection Error: ${mysqlErrorMsg || 'Access denied'}`);
+      return localUsers.find(u => u.id === id);
     }
 
     const [rows]: any = await pool.query('SELECT * FROM users WHERE id = ?', [id]);
@@ -187,32 +219,28 @@ export const db = {
   },
 
   async getUserByUsername(username: string): Promise<UserRecord | undefined> {
+    const cleanUsername = username.toLowerCase().trim();
     if (!mysqlAvailable) {
-      throw new Error(`MySQL Connection Error: ${mysqlErrorMsg || 'Access denied'}`);
+      return localUsers.find(u => u.username.toLowerCase().trim() === cleanUsername);
     }
 
-    const cleanUsername = username.toLowerCase().trim();
     const [rows]: any = await pool.query('SELECT * FROM users WHERE LOWER(username) = ?', [cleanUsername]);
     if (rows && rows.length > 0) return rows[0];
     return undefined;
   },
 
   async getUserByEmail(email: string): Promise<UserRecord | undefined> {
+    const cleanEmail = email.toLowerCase().trim();
     if (!mysqlAvailable) {
-      throw new Error(`MySQL Connection Error: ${mysqlErrorMsg || 'Access denied'}`);
+      return localUsers.find(u => u.email.toLowerCase().trim() === cleanEmail);
     }
 
-    const cleanEmail = email.toLowerCase().trim();
     const [rows]: any = await pool.query('SELECT * FROM users WHERE LOWER(email) = ?', [cleanEmail]);
     if (rows && rows.length > 0) return rows[0];
     return undefined;
   },
 
   async createUser(user: Omit<UserRecord, 'id' | 'registrationDate'>): Promise<UserRecord> {
-    if (!mysqlAvailable) {
-      throw new Error(`MySQL Connection Error: ${mysqlErrorMsg || 'Access denied'}`);
-    }
-
     const id = crypto.randomUUID();
     const registrationDate = new Date().toISOString();
     const newUser: UserRecord = {
@@ -220,6 +248,11 @@ export const db = {
       id,
       registrationDate
     };
+
+    if (!mysqlAvailable) {
+      localUsers.push(newUser);
+      return newUser;
+    }
 
     await pool.query(`
       INSERT INTO users (
@@ -247,7 +280,12 @@ export const db = {
 
   async updateUser(id: string, updates: Partial<UserRecord>): Promise<UserRecord | null> {
     if (!mysqlAvailable) {
-      throw new Error(`MySQL Connection Error: ${mysqlErrorMsg || 'Access denied'}`);
+      const idx = localUsers.findIndex(u => u.id === id);
+      if (idx !== -1) {
+        localUsers[idx] = { ...localUsers[idx], ...updates };
+        return localUsers[idx];
+      }
+      return null;
     }
 
     const fields = Object.keys(updates);
@@ -276,7 +314,12 @@ export const db = {
 
   async deleteUser(id: string): Promise<boolean> {
     if (!mysqlAvailable) {
-      throw new Error(`MySQL Connection Error: ${mysqlErrorMsg || 'Access denied'}`);
+      const idx = localUsers.findIndex(u => u.id === id);
+      if (idx !== -1) {
+        localUsers.splice(idx, 1);
+        return true;
+      }
+      return false;
     }
 
     const [result]: any = await pool.query('DELETE FROM users WHERE id = ?', [id]);
@@ -284,7 +327,9 @@ export const db = {
   },
 
   async getSession(token: string): Promise<{ userId: string; expiresAt: number; jellyfinToken: string } | null> {
-    if (!mysqlAvailable) return null;
+    if (!mysqlAvailable) {
+      return localSessions.get(token) || null;
+    }
     try {
       const [rows]: any = await pool.query('SELECT * FROM sessions WHERE token = ?', [token]);
       if (rows && rows.length > 0) {
@@ -301,7 +346,10 @@ export const db = {
   },
 
   async createSession(token: string, userId: string, expiresAt: number, jellyfinToken: string = ''): Promise<void> {
-    if (!mysqlAvailable) return;
+    if (!mysqlAvailable) {
+      localSessions.set(token, { userId, expiresAt, jellyfinToken });
+      return;
+    }
     try {
       await pool.query(`
         INSERT INTO sessions (token, userId, expiresAt, jellyfinToken)
@@ -317,7 +365,13 @@ export const db = {
   },
 
   async updateSessionJellyfinToken(token: string, jellyfinToken: string): Promise<void> {
-    if (!mysqlAvailable) return;
+    if (!mysqlAvailable) {
+      const sess = localSessions.get(token);
+      if (sess) {
+        sess.jellyfinToken = jellyfinToken;
+      }
+      return;
+    }
     try {
       await pool.query('UPDATE sessions SET jellyfinToken = ? WHERE token = ?', [jellyfinToken, token]);
     } catch (err) {
@@ -326,7 +380,10 @@ export const db = {
   },
 
   async deleteSession(token: string): Promise<void> {
-    if (!mysqlAvailable) return;
+    if (!mysqlAvailable) {
+      localSessions.delete(token);
+      return;
+    }
     try {
       await pool.query('DELETE FROM sessions WHERE token = ?', [token]);
     } catch (err) {
@@ -335,7 +392,15 @@ export const db = {
   },
 
   async cleanupExpiredSessions(): Promise<void> {
-    if (!mysqlAvailable) return;
+    if (!mysqlAvailable) {
+      const now = Date.now();
+      for (const [token, sess] of localSessions.entries()) {
+        if (sess.expiresAt < now) {
+          localSessions.delete(token);
+        }
+      }
+      return;
+    }
     try {
       await pool.query('DELETE FROM sessions WHERE expiresAt < ?', [Date.now()]);
     } catch (err) {

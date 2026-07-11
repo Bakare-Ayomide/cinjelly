@@ -77,6 +77,25 @@ class DB {
                 jellyfinToken VARCHAR(255) NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ");
+
+        // Seed default Jellyfin configurations if the system_config table is empty
+        try {
+            $count = $pdo->query("SELECT COUNT(*) FROM system_config")->fetchColumn();
+            if ($count == 0) {
+                $stmt = $pdo->prepare("
+                    INSERT INTO system_config (id, serverUrl, adminUsername, adminPasswordFull, apiKey)
+                    VALUES ('main', ?, ?, ?, ?)
+                ");
+                $stmt->execute([
+                    'https://cinode.zerolord.com',
+                    'duwit',
+                    '@f33rinimi',
+                    '79ee2e15ee1f47fd881188ef4da13391'
+                ]);
+            }
+        } catch (Exception $e) {
+            // Ignore seeding errors silently
+        }
     }
 
     public static function hashPassword($password) {

@@ -199,8 +199,7 @@ export default function App() {
   }
 
   // 1. Explicit Portal Setup routing
-  const isConfigured = systemStatus && systemStatus.configured && systemStatus.hasAdmin;
-  if (!isConfigured && currentHash === '#setup') {
+  if (currentHash === '#setup') {
     return (
       <SetupWizard 
         onSetupSuccess={() => {

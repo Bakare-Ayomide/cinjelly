@@ -249,11 +249,71 @@ if ($method === 'POST' && $path === '/api/setup') {
     exit;
 }
 
-// Block admin configs access from client (matches express locked policies)
-if (($path === '/api/admin/config') && ($method === 'GET' || $method === 'POST')) {
-    http_response_code(403);
-    echo json_encode(['error' => 'Jellyfin configuration is locked to backend configuration variables and cannot be accessed or modified via the browser.']);
-    exit;
+// Support GET and POST to /api/admin/config for administrators and bootstrapping
+if ($path === '/api/admin/config') {
+    if ($method === 'GET') {
+        if (!$currentUser || $currentUser['role'] !== 'admin') {
+            http_response_code(403);
+            echo json_encode(['error' => 'Unauthorized. Admin session required.']);
+            exit;
+        }
+        $config = DB::getConfig() ?: [
+            'serverUrl' => '',
+            'adminUsername' => '',
+            'adminPasswordFull' => '',
+            'apiKey' => ''
+        ];
+        echo json_encode($config);
+        exit;
+    }
+    
+    if ($method === 'POST') {
+        $existingConfig = DB::getConfig();
+        $users = DB::getUsers();
+        $hasAdmin = false;
+        foreach ($users as $u) {
+            if ($u['role'] === 'admin') {
+                $hasAdmin = true;
+                break;
+            }
+        }
+        $isAllowed = ($currentUser && $currentUser['role'] === 'admin') || !$existingConfig || !$hasAdmin;
+        
+        if (!$isAllowed) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Unauthorized.']);
+            exit;
+        }
+        
+        $serverUrl = $input['serverUrl'] ?? '';
+        $adminUsername = $input['adminUsername'] ?? '';
+        $adminPasswordFull = $input['adminPasswordFull'] ?? '';
+        $apiKey = $input['apiKey'] ?? '';
+        
+        if (empty($serverUrl) || empty($adminUsername) || empty($apiKey)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Server URL, Admin Username, and API Key are required.']);
+            exit;
+        }
+        
+        $newConfig = [
+            'serverUrl' => $serverUrl,
+            'adminUsername' => $adminUsername,
+            'adminPasswordFull' => $adminPasswordFull,
+            'apiKey' => $apiKey
+        ];
+        
+        $jellyfin = new JellyfinService($newConfig);
+        if (!$jellyfin->verifyConnection()) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Could not connect to the Jellyfin Server with these credentials. Please verify the URL and API Key are correct and that the Jellyfin server is running and accessible.']);
+            exit;
+        }
+        
+        DB::saveConfig($newConfig);
+        echo json_encode(['success' => true, 'message' => 'Jellyfin configuration updated and saved in the database!']);
+        exit;
+    }
 }
 
 // POST /api/auth/register

@@ -9,6 +9,7 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [checkingEnv, setCheckingEnv] = useState(true);
+  const [step, setStep] = useState<1 | 2>(1);
   const [isEnvConfigured, setIsEnvConfigured] = useState(false);
   const [showAdminPass, setShowAdminPass] = useState(false);
 
@@ -18,6 +19,13 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
+  // Jellyfin Config States (for bootstrapping in DB)
+  const [serverUrl, setServerUrl] = useState('https://cinode.zerolord.com');
+  const [jellyfinAdminUser, setJellyfinAdminUser] = useState('duwit');
+  const [jellyfinAdminPass, setJellyfinAdminPass] = useState('@f33rinimi');
+  const [apiKey, setApiKey] = useState('79ee2e15ee1f47fd881188ef4da13391');
+  const [savingConfig, setSavingConfig] = useState(false);
+
   // Check backend environment status on load
   const verifyEnvStatus = async () => {
     try {
@@ -25,11 +33,13 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
       const response = await fetch('/api/status');
       const data = await response.json();
       setIsEnvConfigured(!!data.configured);
+      if (data.serverUrl) setServerUrl(data.serverUrl);
+      if (data.adminUsername) setJellyfinAdminUser(data.adminUsername);
       if (!data.configured) {
-        setError('Jellyfin Server is not configured. Please define JELLYFIN_SERVER_URL, JELLYFIN_ADMIN_USERNAME, JELLYFIN_ADMIN_PASSWORD, and JELLYFIN_API_KEY in your hosting environment variables first.');
+        setError(null); // Clear blocking errors so they can configure via the form
       }
     } catch (err) {
-      setError('Could not connect to the backend server. Please verify the dev server is running.');
+      setError('Could not connect to the backend server. Please verify the server is running.');
     } finally {
       setCheckingEnv(false);
     }
@@ -38,6 +48,39 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
   useEffect(() => {
     verifyEnvStatus();
   }, []);
+
+  const handleSaveConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (!serverUrl || !jellyfinAdminUser || !apiKey) {
+      setError('Server URL, Admin Username, and API Key are required.');
+      return;
+    }
+    setSavingConfig(true);
+    try {
+      const response = await fetch('/api/admin/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          serverUrl,
+          adminUsername: jellyfinAdminUser,
+          adminPasswordFull: jellyfinAdminPass,
+          apiKey
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to save configuration');
+      }
+      setIsEnvConfigured(true);
+      setStep(2);
+      await verifyEnvStatus();
+    } catch (err: any) {
+      setError(err.message || 'Failed to connect to Jellyfin server.');
+    } finally {
+      setSavingConfig(false);
+    }
+  };
 
   // Submit entire setup to backend
   const handleSubmitSetup = async (e: React.FormEvent) => {
@@ -124,35 +167,148 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
           </div>
         )}
 
-        {!isEnvConfigured ? (
-          <div className="space-y-6 text-center">
-            <div className="p-6 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-200 text-xs space-y-3 leading-relaxed">
-              <p className="font-semibold text-sm">Awaiting Backend Environment variables</p>
+        {step === 1 ? (
+          <form onSubmit={handleSaveConfig} className="space-y-5" id="jellyfin-config-form">
+            <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-200 text-xs leading-relaxed space-y-1.5">
+              <p className="font-semibold text-sm flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <span>Step 1: Configure Jellyfin Connection</span>
+              </p>
               <p>
-                To keep all your Jellyfin secrets fully secure, credentials are loaded directly from the system environment instead of the web browser.
+                To activate your streaming portal, please connect it to your Jellyfin Server. These credentials will be stored securely in your database.
               </p>
-              <p className="font-mono text-[10px] bg-[#07080c] p-2.5 rounded-lg text-slate-400 text-left">
-                Please configure these in your settings or .env file:<br />
-                • JELLYFIN_SERVER_URL<br />
-                • JELLYFIN_ADMIN_USERNAME<br />
-                • JELLYFIN_ADMIN_PASSWORD<br />
-                • JELLYFIN_API_KEY
-              </p>
+              {isEnvConfigured && (
+                <div className="pt-2 border-t border-amber-500/10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                  <span className="text-emerald-400 font-bold">✓ Active connection settings found!</span>
+                  <button
+                    type="button"
+                    onClick={() => setStep(2)}
+                    className="text-xs text-amber-300 hover:text-amber-200 font-extrabold underline transition"
+                  >
+                    Proceed with current connection ➡️
+                  </button>
+                </div>
+              )}
             </div>
-            <button
-              onClick={verifyEnvStatus}
-              className="px-6 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold rounded-xl text-sm transition cursor-pointer flex items-center justify-center gap-2 mx-auto"
-            >
-              Check Environment Connection Again
-            </button>
-          </div>
+
+            <div className="space-y-1">
+              <label htmlFor="serverUrl" className="block text-xs font-semibold text-slate-300">
+                Jellyfin Server URL
+              </label>
+              <input
+                type="url"
+                id="serverUrl"
+                required
+                placeholder="e.g. http://131.153.147.178:8096"
+                className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-sm transition"
+                value={serverUrl}
+                onChange={(e) => setServerUrl(e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label htmlFor="jellyfinAdminUser" className="block text-xs font-semibold text-slate-300">
+                Jellyfin Admin Username
+              </label>
+              <input
+                type="text"
+                id="jellyfinAdminUser"
+                required
+                placeholder="e.g. admin"
+                className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-sm transition"
+                value={jellyfinAdminUser}
+                onChange={(e) => setJellyfinAdminUser(e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label htmlFor="jellyfinAdminPass" className="block text-xs font-semibold text-slate-300">
+                Jellyfin Admin Password (Optional)
+              </label>
+              <input
+                type="password"
+                id="jellyfinAdminPass"
+                placeholder="Enter password (if required for auth)"
+                className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-sm transition"
+                value={jellyfinAdminPass}
+                onChange={(e) => setJellyfinAdminPass(e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label htmlFor="apiKey" className="block text-xs font-semibold text-slate-300">
+                Jellyfin API Key
+              </label>
+              <input
+                type="password"
+                id="apiKey"
+                required
+                placeholder="Paste your Jellyfin API Key"
+                className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-sm transition"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+              />
+              <span className="text-[10px] text-slate-500 block mt-1">
+                Generated in Jellyfin under Admin Dashboard &gt; API Keys
+              </span>
+            </div>
+
+            <div className="pt-2 flex gap-3">
+              <button
+                type="submit"
+                disabled={savingConfig}
+                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition disabled:opacity-50 text-sm shadow-lg shadow-rose-950/20"
+              >
+                {savingConfig ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Saving & Verifying...
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-4 h-4" /> Save & Connect Jellyfin
+                  </>
+                )}
+              </button>
+              {isEnvConfigured && (
+                <button
+                  type="button"
+                  onClick={() => setStep(2)}
+                  className="bg-slate-900 hover:bg-slate-800 text-slate-300 font-bold py-3.5 px-5 rounded-xl text-sm transition border border-slate-800"
+                >
+                  Skip ➡️
+                </button>
+              )}
+            </div>
+
+            <div className="text-center pt-3">
+              <button
+                type="button"
+                onClick={verifyEnvStatus}
+                className="text-[11px] text-rose-400 hover:text-rose-300 font-bold transition hover:underline"
+              >
+                Verify Connection via Environment Variables Again
+              </button>
+            </div>
+          </form>
         ) : (
           <form onSubmit={handleSubmitSetup} className="space-y-5" id="portal-admin-form">
-            <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-200 text-xs flex gap-2.5 items-start leading-relaxed">
-              <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5 text-emerald-400" />
-              <span>
-                <strong>Jellyfin server connection verified successfully in the background!</strong> Ready to register your streaming portal administrator login.
-              </span>
+            <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-200 text-xs flex flex-col gap-2 leading-relaxed">
+              <div className="flex gap-2.5 items-start">
+                <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5 text-emerald-400" />
+                <span>
+                  <strong>Step 2: Register Portal Administrator</strong>
+                </span>
+              </div>
+              <p className="text-slate-400 text-[11px]">
+                Create your local administrator account to access the control panel.
+              </p>
+              <button
+                type="button"
+                onClick={() => setStep(1)}
+                className="text-left text-xs text-rose-400 hover:text-rose-300 underline font-semibold transition mt-1.5 w-fit cursor-pointer flex items-center gap-1"
+              >
+                ⬅️ Back to Jellyfin connection
+              </button>
             </div>
 
             <div className="space-y-1">

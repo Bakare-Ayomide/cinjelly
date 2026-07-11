@@ -108,12 +108,6 @@ app.get('/api/status', async (req, res) => {
       await initDb();
     }
 
-    if (!mysqlAvailable) {
-      return res.status(500).json({
-        error: mysqlErrorMsg || 'MySQL database is currently offline or access is denied.'
-      });
-    }
-
     const config = await db.getConfig();
     const users = await db.getUsers();
     const hasAdmin = users.some(u => u.role === 'admin');
@@ -123,8 +117,8 @@ app.get('/api/status', async (req, res) => {
       hasAdmin,
       serverUrl: config?.serverUrl || '',
       adminUsername: config?.adminUsername || '',
-      mysqlAvailable: true,
-      mysqlError: null
+      mysqlAvailable: mysqlAvailable,
+      mysqlError: mysqlAvailable ? null : (mysqlErrorMsg || 'Sandbox Memory Fallback Mode active')
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -201,13 +195,48 @@ app.post('/api/setup', async (req, res) => {
   }
 });
 
-// Admin config update (Disabled and isolated from browser)
-app.get('/api/admin/config', (req: any, res) => {
-  return res.status(403).json({ error: 'Jellyfin configuration is locked to backend environment variables and cannot be accessed via the browser.' });
+// Admin config update
+app.get('/api/admin/config', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin session required.' });
+  }
+  const config = await db.getConfig() || {
+    serverUrl: '',
+    adminUsername: '',
+    adminPasswordFull: '',
+    apiKey: ''
+  };
+  res.json(config);
 });
 
 app.post('/api/admin/config', async (req: any, res) => {
-  return res.status(403).json({ error: 'Jellyfin configuration is locked to backend environment variables and cannot be modified via the browser.' });
+  const existingConfig = await db.getConfig();
+  const isAllowed = (req.user && req.user.role === 'admin') || !existingConfig;
+  
+  if (!isAllowed) {
+    return res.status(403).json({ error: 'Unauthorized.' });
+  }
+  
+  const { serverUrl, adminUsername, adminPasswordFull, apiKey } = req.body;
+  if (!serverUrl || !adminUsername || !apiKey) {
+    return res.status(400).json({ error: 'Server URL, Admin Username, and API Key are required.' });
+  }
+  
+  const newConfig = {
+    serverUrl,
+    adminUsername,
+    adminPasswordFull,
+    apiKey
+  };
+  
+  const jellyfin = new JellyfinService(newConfig);
+  const connectionOk = await jellyfin.verifyConnection();
+  if (!connectionOk) {
+    return res.status(400).json({ error: 'Could not connect to the Jellyfin Server with these credentials. Please verify the URL and API Key are correct and that the Jellyfin server is running and accessible.' });
+  }
+  
+  await db.saveConfig(newConfig);
+  res.json({ success: true, message: 'Jellyfin configuration updated and saved in the database!' });
 });
 
 // Authentication

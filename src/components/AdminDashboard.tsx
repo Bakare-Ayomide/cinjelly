@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Users, CheckCircle, AlertTriangle, ShieldCheck, Search, RefreshCw, 
-  ArrowLeft, Eye, EyeOff, Loader2, Play, Ban, PlusCircle, Activity, Sparkles, Mail, UserCheck
+  ArrowLeft, Eye, EyeOff, Loader2, Play, Ban, PlusCircle, Activity, Sparkles, Mail, UserCheck, Tv
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -19,6 +19,16 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
   // Manual audit trigger state
   const [auditLoading, setAuditLoading] = useState(false);
+
+  // Config state
+  const [serverUrl, setServerUrl] = useState('');
+  const [jellyfinAdminUser, setJellyfinAdminUser] = useState('');
+  const [jellyfinAdminPass, setJellyfinAdminPass] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [configLoading, setConfigLoading] = useState(false);
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [configSuccess, setConfigSuccess] = useState<string | null>(null);
 
   // Fetch all users
   const fetchUsers = async () => {
@@ -53,9 +63,58 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
     }
   };
 
+  const fetchConfig = async () => {
+    setConfigLoading(true);
+    setConfigError(null);
+    try {
+      const response = await fetch('/api/admin/config');
+      if (response.ok) {
+        const data = await response.json();
+        setServerUrl(data.serverUrl || '');
+        setJellyfinAdminUser(data.adminUsername || '');
+        setJellyfinAdminPass(data.adminPasswordFull || '');
+        setApiKey(data.apiKey || '');
+      }
+    } catch (err: any) {
+      setConfigError('Could not load active Jellyfin server settings.');
+    } finally {
+      setConfigLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchUsers();
+    fetchConfig();
   }, [searchQuery]);
+
+  const handleSaveConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setConfigError(null);
+    setConfigSuccess(null);
+    setConfigSaving(true);
+    try {
+      const response = await fetch('/api/admin/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          serverUrl,
+          adminUsername: jellyfinAdminUser,
+          adminPasswordFull: jellyfinAdminPass,
+          apiKey
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to save configuration');
+      }
+      setConfigSuccess('Jellyfin server configuration successfully updated and verified in database!');
+      fetchUsers();
+    } catch (err: any) {
+      setConfigError(err.message || 'Verification failed. Please check the Server URL and API Key.');
+    } finally {
+      setConfigSaving(false);
+    }
+  };
 
   // Handle subscriber action (activate, extend, disable, reactivate)
   const handleUserAction = async (userId: string, action: 'activate' | 'extend' | 'disable' | 'reactivate') => {
@@ -434,6 +493,121 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               ))
             )}
           </div>
+        </div>
+
+        {/* Jellyfin Server Configuration Card */}
+        <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl" id="jellyfin-config-card">
+          <div>
+            <h3 className="text-xl font-display font-extrabold text-white flex items-center gap-2">
+              <Tv className="w-5 h-5 text-rose-500" />
+              <span>Jellyfin Connection Settings</span>
+            </h3>
+            <p className="text-slate-400 text-sm mt-1">
+              Directly adjust the connection parameters to your streaming server. Settings are stored securely in your active database.
+            </p>
+          </div>
+
+          {configError && (
+            <div className="p-4 bg-rose-500/10 border border-rose-500/20 text-rose-200 text-xs rounded-xl">
+              {configError}
+            </div>
+          )}
+
+          {configSuccess && (
+            <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 text-emerald-200 text-xs rounded-xl">
+              {configSuccess}
+            </div>
+          )}
+
+          {configLoading ? (
+            <div className="py-8 text-center text-slate-500">
+              <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2 text-rose-500" />
+              <span className="text-xs">Loading active configuration...</span>
+            </div>
+          ) : (
+            <form onSubmit={handleSaveConfig} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label htmlFor="serverUrl" className="block text-xs font-semibold text-slate-300">
+                    Jellyfin Server URL
+                  </label>
+                  <input
+                    type="url"
+                    id="serverUrl"
+                    required
+                    placeholder="e.g. http://131.153.147.178:8096"
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-4 text-white text-xs placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 transition"
+                    value={serverUrl}
+                    onChange={(e) => setServerUrl(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label htmlFor="jellyfinAdminUser" className="block text-xs font-semibold text-slate-300">
+                    Jellyfin Admin Username
+                  </label>
+                  <input
+                    type="text"
+                    id="jellyfinAdminUser"
+                    required
+                    placeholder="e.g. admin"
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-4 text-white text-xs placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 transition"
+                    value={jellyfinAdminUser}
+                    onChange={(e) => setJellyfinAdminUser(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label htmlFor="jellyfinAdminPass" className="block text-xs font-semibold text-slate-300">
+                    Jellyfin Admin Password (Optional)
+                  </label>
+                  <input
+                    type="password"
+                    id="jellyfinAdminPass"
+                    placeholder="Enter password (if required for auth)"
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-4 text-white text-xs placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 transition"
+                    value={jellyfinAdminPass}
+                    onChange={(e) => setJellyfinAdminPass(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label htmlFor="apiKey" className="block text-xs font-semibold text-slate-300">
+                    Jellyfin API Key
+                  </label>
+                  <input
+                    type="password"
+                    id="apiKey"
+                    required
+                    placeholder="Paste your Jellyfin API Key"
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-4 text-white text-xs placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 transition"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <button
+                  type="submit"
+                  disabled={configSaving}
+                  className="bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-bold py-2.5 px-5 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-md shadow-rose-950/20"
+                >
+                  {configSaving ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" /> Verifying & Saving Connection...
+                    </>
+                  ) : (
+                    <>
+                      <ShieldCheck className="w-4 h-4" /> Save Connection Settings
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          )}
         </div>
 
       </main>
