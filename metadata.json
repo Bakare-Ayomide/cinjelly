@@ -1,0 +1,6 @@
+{
+  "name": "Streaming Portal",
+  "description": "A premium streaming service landing page and subscription manager integrated seamlessly with Jellyfin.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
