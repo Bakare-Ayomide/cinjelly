@@ -7,6 +7,17 @@ export interface JellyfinConfig {
   adminPassword?: string;
   adminPasswordFull?: string;
   apiKey: string;
+  defaultCommission?: number;
+  bankAccountNo?: string;
+  bankName?: string;
+  bankBeneficiary?: string;
+  bankInstructions?: string;
+  chatbotInfo?: string;
+  chatbotInstructions?: string;
+  contactEmail?: string;
+  contactPhone?: string;
+  contactWhatsApp?: string;
+  contactOther?: string;
 }
 
 export interface UserRecord {
@@ -17,12 +28,32 @@ export interface UserRecord {
   passwordHash: string;
   jellyfinUserId?: string;
   subscriptionStatus: 'Active' | 'Expired' | 'Disabled';
-  paymentStatus: 'Paid' | 'Unpaid';
+  paymentStatus: 'Paid' | 'Unpaid' | 'Pending Verification';
   registrationDate: string;
   subscriptionStartDate?: string;
   subscriptionExpiryDate?: string;
   accountStatus: 'Active' | 'Expired' | 'Disabled';
   role: 'admin' | 'user';
+  isAffiliate?: number;
+  affiliateCode?: string;
+  referredBy?: string;
+  disabledAt?: string;
+  receiptUrl?: string;
+  declineReason?: string;
+  phone?: string;
+  transactionRef?: string;
+  lastPaymentTime?: string;
+  systemNotification?: string;
+}
+
+export interface CommissionRecord {
+  id: string;
+  affiliateId: string;
+  referredUserId: string;
+  amount: number;
+  status: 'Pending' | 'Approved' | 'Paid';
+  createdAt: string;
+  updatedAt: string;
 }
 
 export let mysqlAvailable = false;
@@ -33,10 +64,12 @@ const memoryConfig: JellyfinConfig = {
   serverUrl: 'https://cinode.zerolord.com',
   adminUsername: 'duwit',
   adminPasswordFull: '@f33rinimi',
-  apiKey: '79ee2e15ee1f47fd881188ef4da13391'
+  apiKey: '79ee2e15ee1f47fd881188ef4da13391',
+  defaultCommission: 100.00
 };
 export let localSystemConfig: JellyfinConfig | null = memoryConfig;
 export const localUsers: UserRecord[] = [];
+export const localCommissions: CommissionRecord[] = [];
 export const localSessions = new Map<string, { userId: string; expiresAt: number; jellyfinToken: string }>();
 
 // Create connection pool to the user's MySQL database
@@ -80,6 +113,18 @@ export async function initDb() {
       )
     `);
 
+    // Alter columns in users to ensure support for affiliates/expiires
+    try { await pool.query("ALTER TABLE users ADD COLUMN isAffiliate TINYINT(1) NOT NULL DEFAULT 0"); } catch (e) {}
+    try { await pool.query("ALTER TABLE users ADD COLUMN affiliateCode VARCHAR(100) NULL UNIQUE"); } catch (e) {}
+    try { await pool.query("ALTER TABLE users ADD COLUMN referredBy VARCHAR(100) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE users ADD COLUMN disabledAt VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE users ADD COLUMN receiptUrl TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE users ADD COLUMN declineReason TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE users ADD COLUMN phone VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE users ADD COLUMN transactionRef VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE users ADD COLUMN lastPaymentTime VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE users ADD COLUMN systemNotification TEXT NULL"); } catch (e) {}
+
     // Create system_config table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS system_config (
@@ -91,6 +136,18 @@ export async function initDb() {
       )
     `);
 
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN defaultCommission DECIMAL(10,2) NOT NULL DEFAULT 100.00"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN bankAccountNo VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN bankName VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN bankBeneficiary VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN bankInstructions TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN chatbotInfo TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN chatbotInstructions TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN contactEmail VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN contactPhone VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN contactWhatsApp VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN contactOther TEXT NULL"); } catch (e) {}
+
     // Create persistent sessions table to keep user logins intact across server restarts/compiles
     await pool.query(`
       CREATE TABLE IF NOT EXISTS sessions (
@@ -98,6 +155,19 @@ export async function initDb() {
         userId VARCHAR(255) NOT NULL,
         expiresAt BIGINT NOT NULL,
         jellyfinToken VARCHAR(255) NULL
+      )
+    `);
+
+    // Create commissions table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS commissions (
+        id VARCHAR(255) PRIMARY KEY,
+        affiliateId VARCHAR(255) NOT NULL,
+        referredUserId VARCHAR(255) NOT NULL,
+        amount DECIMAL(10,2) NOT NULL,
+        status VARCHAR(50) NOT NULL DEFAULT 'Pending',
+        createdAt VARCHAR(255) NOT NULL,
+        updatedAt VARCHAR(255) NOT NULL
       )
     `);
     
@@ -111,8 +181,8 @@ export async function initDb() {
       if (rows && rows[0] && rows[0].count === 0) {
         console.log('[MySQL] Seeding empty database with Jellyfin server configurations...');
         await pool.query(`
-          INSERT INTO system_config (id, serverUrl, adminUsername, adminPasswordFull, apiKey)
-          VALUES ('main', ?, ?, ?, ?)
+          INSERT INTO system_config (id, serverUrl, adminUsername, adminPasswordFull, apiKey, defaultCommission)
+          VALUES ('main', ?, ?, ?, ?, 100.00)
         `, [
           'https://cinode.zerolord.com',
           'duwit',
@@ -151,34 +221,61 @@ export function verifyPassword(password: string, storedHash: string): boolean {
 
 export const db = {
   async getConfig(): Promise<JellyfinConfig | null> {
-    // Priority: Environment variables (isolated backend configuration)
     const envUrl = process.env.JELLYFIN_SERVER_URL;
     const envUsername = process.env.JELLYFIN_ADMIN_USERNAME;
     const envPassword = process.env.JELLYFIN_ADMIN_PASSWORD;
     const envApiKey = process.env.JELLYFIN_API_KEY;
+
+    let dbConfig: JellyfinConfig | null = null;
+    if (mysqlAvailable) {
+      try {
+        const [rows]: any = await pool.query('SELECT * FROM system_config WHERE id = "main" LIMIT 1');
+        if (rows && rows.length > 0) {
+          dbConfig = {
+            serverUrl: rows[0].serverUrl,
+            adminUsername: rows[0].adminUsername,
+            adminPasswordFull: rows[0].adminPasswordFull,
+            apiKey: rows[0].apiKey,
+            defaultCommission: rows[0].defaultCommission !== undefined ? Number(rows[0].defaultCommission) : 100.00,
+            bankAccountNo: rows[0].bankAccountNo || '',
+            bankName: rows[0].bankName || '',
+            bankBeneficiary: rows[0].bankBeneficiary || '',
+            bankInstructions: rows[0].bankInstructions || '',
+            chatbotInfo: rows[0].chatbotInfo || '',
+            chatbotInstructions: rows[0].chatbotInstructions || '',
+            contactEmail: rows[0].contactEmail || '',
+            contactPhone: rows[0].contactPhone || '',
+            contactWhatsApp: rows[0].contactWhatsApp || '',
+            contactOther: rows[0].contactOther || ''
+          };
+        }
+      } catch (err) {
+        console.error('Error fetching config from MySQL:', err);
+      }
+    } else {
+      dbConfig = localSystemConfig;
+    }
+
+    if (dbConfig) {
+      return {
+        ...dbConfig,
+        serverUrl: envUrl || dbConfig.serverUrl,
+        adminUsername: envUsername || dbConfig.adminUsername,
+        adminPasswordFull: envPassword || dbConfig.adminPasswordFull,
+        apiKey: envApiKey || dbConfig.apiKey
+      };
+    }
 
     if (envUrl && envUsername && envApiKey) {
       return {
         serverUrl: envUrl,
         adminUsername: envUsername,
         adminPasswordFull: envPassword,
-        apiKey: envApiKey
+        apiKey: envApiKey,
+        defaultCommission: 100.00
       };
     }
 
-    if (!mysqlAvailable) {
-      return localSystemConfig;
-    }
-
-    const [rows]: any = await pool.query('SELECT * FROM system_config WHERE id = "main" LIMIT 1');
-    if (rows && rows.length > 0) {
-      return {
-        serverUrl: rows[0].serverUrl,
-        adminUsername: rows[0].adminUsername,
-        adminPasswordFull: rows[0].adminPasswordFull,
-        apiKey: rows[0].apiKey
-      };
-    }
     return null;
   },
 
@@ -189,14 +286,41 @@ export const db = {
     }
 
     await pool.query(`
-      INSERT INTO system_config (id, serverUrl, adminUsername, adminPasswordFull, apiKey)
-      VALUES ('main', ?, ?, ?, ?)
+      INSERT INTO system_config (id, serverUrl, adminUsername, adminPasswordFull, apiKey, defaultCommission, bankAccountNo, bankName, bankBeneficiary, bankInstructions, chatbotInfo, chatbotInstructions, contactEmail, contactPhone, contactWhatsApp, contactOther)
+      VALUES ('main', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         serverUrl = VALUES(serverUrl),
         adminUsername = VALUES(adminUsername),
         adminPasswordFull = VALUES(adminPasswordFull),
-        apiKey = VALUES(apiKey)
-    `, [config.serverUrl, config.adminUsername, config.adminPasswordFull || null, config.apiKey]);
+        apiKey = VALUES(apiKey),
+        defaultCommission = VALUES(defaultCommission),
+        bankAccountNo = VALUES(bankAccountNo),
+        bankName = VALUES(bankName),
+        bankBeneficiary = VALUES(bankBeneficiary),
+        bankInstructions = VALUES(bankInstructions),
+        chatbotInfo = VALUES(chatbotInfo),
+        chatbotInstructions = VALUES(chatbotInstructions),
+        contactEmail = VALUES(contactEmail),
+        contactPhone = VALUES(contactPhone),
+        contactWhatsApp = VALUES(contactWhatsApp),
+        contactOther = VALUES(contactOther)
+    `, [
+      config.serverUrl, 
+      config.adminUsername, 
+      config.adminPasswordFull || null, 
+      config.apiKey,
+      config.defaultCommission !== undefined ? Number(config.defaultCommission) : 100.00,
+      config.bankAccountNo || null,
+      config.bankName || null,
+      config.bankBeneficiary || null,
+      config.bankInstructions || null,
+      config.chatbotInfo || null,
+      config.chatbotInstructions || null,
+      config.contactEmail || null,
+      config.contactPhone || null,
+      config.contactWhatsApp || null,
+      config.contactOther || null
+    ]);
   },
 
   async getUsers(): Promise<UserRecord[]> {
@@ -258,8 +382,9 @@ export const db = {
       INSERT INTO users (
         id, fullName, username, email, passwordHash, jellyfinUserId, 
         subscriptionStatus, paymentStatus, registrationDate, 
-        subscriptionStartDate, subscriptionExpiryDate, accountStatus, role
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        subscriptionStartDate, subscriptionExpiryDate, accountStatus, role,
+        isAffiliate, affiliateCode, referredBy, disabledAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       id,
       newUser.fullName,
@@ -273,9 +398,72 @@ export const db = {
       newUser.subscriptionStartDate || null,
       newUser.subscriptionExpiryDate || null,
       newUser.accountStatus,
-      newUser.role
+      newUser.role,
+      newUser.isAffiliate || 0,
+      newUser.affiliateCode || null,
+      newUser.referredBy || null,
+      newUser.disabledAt || null
     ]);
     return newUser;
+  },
+
+  async getUserByAffiliateCode(code: string): Promise<UserRecord | undefined> {
+    const cleanCode = code.toUpperCase().trim();
+    if (!mysqlAvailable) {
+      return localUsers.find(u => u.affiliateCode && u.affiliateCode.toUpperCase().trim() === cleanCode);
+    }
+    const [rows]: any = await pool.query('SELECT * FROM users WHERE UPPER(affiliateCode) = ?', [cleanCode]);
+    if (rows && rows.length > 0) return rows[0];
+    return undefined;
+  },
+
+  async createCommission(commission: Omit<CommissionRecord, 'id' | 'createdAt' | 'updatedAt'>): Promise<CommissionRecord> {
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const record: CommissionRecord = {
+      ...commission,
+      id,
+      createdAt: now,
+      updatedAt: now
+    };
+    if (!mysqlAvailable) {
+      localCommissions.push(record);
+      return record;
+    }
+    await pool.query(`
+      INSERT INTO commissions (id, affiliateId, referredUserId, amount, status, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [id, record.affiliateId, record.referredUserId, record.amount, record.status, record.createdAt, record.updatedAt]);
+    return record;
+  },
+
+  async getCommissions(): Promise<CommissionRecord[]> {
+    if (!mysqlAvailable) {
+      return localCommissions;
+    }
+    const [rows]: any = await pool.query('SELECT * FROM commissions ORDER BY createdAt DESC');
+    return rows;
+  },
+
+  async getCommissionsByAffiliate(affiliateId: string): Promise<CommissionRecord[]> {
+    if (!mysqlAvailable) {
+      return localCommissions.filter(c => c.affiliateId === affiliateId);
+    }
+    const [rows]: any = await pool.query('SELECT * FROM commissions WHERE affiliateId = ? ORDER BY createdAt DESC', [affiliateId]);
+    return rows;
+  },
+
+  async updateCommissionStatus(id: string, status: 'Pending' | 'Approved' | 'Paid'): Promise<void> {
+    const now = new Date().toISOString();
+    if (!mysqlAvailable) {
+      const idx = localCommissions.findIndex(c => c.id === id);
+      if (idx !== -1) {
+        localCommissions[idx].status = status;
+        localCommissions[idx].updatedAt = now;
+      }
+      return;
+    }
+    await pool.query('UPDATE commissions SET status = ?, updatedAt = ? WHERE id = ?', [status, now, id]);
   },
 
   async updateUser(id: string, updates: Partial<UserRecord>): Promise<UserRecord | null> {

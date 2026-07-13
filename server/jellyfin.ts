@@ -235,4 +235,16 @@ export class JellyfinService {
       return null;
     }
   }
+
+  // Delete user from Jellyfin
+  async deleteUser(jellyfinUserId: string): Promise<boolean> {
+    try {
+      await this.request(`/Users/${jellyfinUserId}`, 'DELETE', undefined, true);
+      console.log(`Successfully deleted Jellyfin User ${jellyfinUserId}`);
+      return true;
+    } catch (err: any) {
+      console.error(`Failed to delete Jellyfin user ${jellyfinUserId}:`, err.message);
+      return false;
+    }
+  }
 }

@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import crypto from 'crypto';
@@ -217,7 +218,23 @@ app.post('/api/admin/config', async (req: any, res) => {
     return res.status(403).json({ error: 'Unauthorized.' });
   }
   
-  const { serverUrl, adminUsername, adminPasswordFull, apiKey } = req.body;
+  const { 
+    serverUrl, 
+    adminUsername, 
+    adminPasswordFull, 
+    apiKey, 
+    defaultCommission, 
+    bankAccountNo, 
+    bankName, 
+    bankBeneficiary, 
+    bankInstructions,
+    chatbotInfo,
+    chatbotInstructions,
+    contactEmail,
+    contactPhone,
+    contactWhatsApp,
+    contactOther
+  } = req.body;
   if (!serverUrl || !adminUsername || !apiKey) {
     return res.status(400).json({ error: 'Server URL, Admin Username, and API Key are required.' });
   }
@@ -226,7 +243,18 @@ app.post('/api/admin/config', async (req: any, res) => {
     serverUrl,
     adminUsername,
     adminPasswordFull,
-    apiKey
+    apiKey,
+    defaultCommission: defaultCommission !== undefined ? Number(defaultCommission) : 100.00,
+    bankAccountNo: bankAccountNo || '',
+    bankName: bankName || '',
+    bankBeneficiary: bankBeneficiary || '',
+    bankInstructions: bankInstructions || '',
+    chatbotInfo: chatbotInfo || '',
+    chatbotInstructions: chatbotInstructions || '',
+    contactEmail: contactEmail || '',
+    contactPhone: contactPhone || '',
+    contactWhatsApp: contactWhatsApp || '',
+    contactOther: contactOther || ''
   };
   
   const jellyfin = new JellyfinService(newConfig);
@@ -236,13 +264,13 @@ app.post('/api/admin/config', async (req: any, res) => {
   }
   
   await db.saveConfig(newConfig);
-  res.json({ success: true, message: 'Jellyfin configuration updated and saved in the database!' });
+  res.json({ success: true, message: 'Configuration and payment information updated and saved in the database!' });
 });
 
 // Authentication
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { fullName, username, email, password } = req.body;
+    const { fullName, username, email, password, referredBy } = req.body;
 
     if (!fullName || !username || !email || !password) {
       return res.status(400).json({ error: 'All fields are required' });
@@ -255,6 +283,13 @@ app.post('/api/auth/register', async (req, res) => {
     const config = await db.getConfig();
     if (!config) {
       return res.status(500).json({ error: 'Streaming server integration is not yet active. Please contact administrator.' });
+    }
+
+    if (referredBy) {
+      const affiliateUser = await db.getUserByAffiliateCode(referredBy);
+      if (!affiliateUser) {
+        return res.status(400).json({ error: 'Invalid affiliate referral code' });
+      }
     }
 
     // Check if user already exists
@@ -296,7 +331,8 @@ app.post('/api/auth/register', async (req, res) => {
       subscriptionStatus: 'Expired',
       paymentStatus: 'Unpaid',
       accountStatus: 'Expired',
-      role: 'user'
+      role: 'user',
+      referredBy: referredBy ? referredBy.trim().toUpperCase() : undefined
     });
 
     // Disable account in Jellyfin initially since they are Unpaid/Expired!
@@ -428,13 +464,31 @@ app.get('/api/auth/me', async (req: any, res) => {
         subscriptionStartDate: req.user.subscriptionStartDate,
         subscriptionExpiryDate: req.user.subscriptionExpiryDate,
         jellyfinUserId: req.user.jellyfinUserId,
-        role: req.user.role
+        role: req.user.role,
+        isAffiliate: !!req.user.isAffiliate,
+        affiliateCode: req.user.affiliateCode,
+        referredBy: req.user.referredBy,
+        declineReason: req.user.declineReason,
+        systemNotification: req.user.systemNotification
       },
       jellyfinToken: jellyfinAuthToken
     });
   } catch (err: any) {
     console.error('Error in /api/auth/me:', err);
     res.status(500).json({ error: err.message || 'Internal session validation error' });
+  }
+});
+
+// POST /api/auth/clear-notification
+app.post('/api/auth/clear-notification', async (req: any, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    await db.updateUser(req.user.id, { systemNotification: null });
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -480,11 +534,16 @@ app.post('/api/payment/simulate', async (req: any, res) => {
   }
 
   try {
+    const userRecord = await db.getUserById(req.user.id);
+    if (!userRecord) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
     const startDate = new Date();
     const expiryDate = new Date();
     expiryDate.setDate(startDate.getDate() + 30); // 30 days expiration
 
-    await db.updateUser(req.user.id, {
+    const updatedUser = await db.updateUser(req.user.id, {
       subscriptionStatus: 'Active',
       paymentStatus: 'Paid',
       accountStatus: 'Active',
@@ -493,9 +552,23 @@ app.post('/api/payment/simulate', async (req: any, res) => {
     });
 
     // Automatically re-enable Jellyfin account
-    if (req.user.jellyfinUserId) {
+    if (userRecord.jellyfinUserId) {
       const jellyfin = new JellyfinService(config);
-      await jellyfin.setUserDisabledStatus(req.user.jellyfinUserId, false);
+      await jellyfin.setUserDisabledStatus(userRecord.jellyfinUserId, false);
+    }
+
+    // Generate affiliate commission if user has a valid referral
+    if (userRecord.referredBy) {
+      const affiliateUser = await db.getUserByAffiliateCode(userRecord.referredBy);
+      if (affiliateUser) {
+        const commissionAmount = config.defaultCommission !== undefined ? Number(config.defaultCommission) : 100.00;
+        await db.createCommission({
+          affiliateId: affiliateUser.id,
+          referredUserId: userRecord.id,
+          amount: commissionAmount,
+          status: 'Approved'
+        });
+      }
     }
 
     res.json({
@@ -506,6 +579,183 @@ app.post('/api/payment/simulate', async (req: any, res) => {
   } catch (err: any) {
     console.error('Payment simulation failed:', err);
     res.status(500).json({ error: 'Failed to process simulated payment' });
+  }
+});
+
+// GET /api/payment/bank-info
+app.get('/api/payment/bank-info', async (req: any, res) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const config = await db.getConfig();
+    if (!config) {
+      return res.status(500).json({ error: 'System not configured' });
+    }
+    res.json({
+      bankAccountNo: config.bankAccountNo || '',
+      bankName: config.bankName || '',
+      bankBeneficiary: config.bankBeneficiary || '',
+      bankInstructions: config.bankInstructions || '',
+      chatbotInfo: config.chatbotInfo || '',
+      chatbotInstructions: config.chatbotInstructions || '',
+      contactEmail: config.contactEmail || '',
+      contactPhone: config.contactPhone || '',
+      contactWhatsApp: config.contactWhatsApp || '',
+      contactOther: config.contactOther || ''
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/payment/request-verification
+app.post('/api/payment/request-verification', async (req: any, res) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const updatedUser = await db.updateUser(req.user.id, {
+      paymentStatus: 'Pending Verification'
+    });
+    res.json({ success: true, user: updatedUser });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/payment/upload-receipt
+app.post('/api/payment/upload-receipt', async (req: any, res) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { base64Data, fileName, phone, transactionRef } = req.body;
+    if (!base64Data || !fileName || !phone) {
+      return res.status(400).json({ error: 'Missing base64Data, fileName, or phone number' });
+    }
+
+    const date = new Date();
+    const monthFolder = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    const relativeDir = path.join('uploads', 'receipts', monthFolder);
+    const distDirPath = path.join(process.cwd(), 'dist', relativeDir);
+    const publicDirPath = path.join(process.cwd(), 'public', relativeDir);
+
+    if (!fs.existsSync(distDirPath)) {
+      fs.mkdirSync(distDirPath, { recursive: true });
+    }
+    try {
+      if (!fs.existsSync(publicDirPath)) {
+        fs.mkdirSync(publicDirPath, { recursive: true });
+      }
+    } catch (e) {}
+
+    const base64Image = base64Data.replace(/^data:image\/\w+;base64,/, '');
+    const buffer = Buffer.from(base64Image, 'base64');
+    const fileExt = path.extname(fileName) || '.png';
+    const cleanFileName = `${req.user.username}_${Date.now()}${fileExt}`;
+
+    const distFilePath = path.join(distDirPath, cleanFileName);
+    fs.writeFileSync(distFilePath, buffer);
+
+    try {
+      const publicFilePath = path.join(publicDirPath, cleanFileName);
+      fs.writeFileSync(publicFilePath, buffer);
+    } catch (e) {}
+
+    const relativeUrl = `/uploads/receipts/${monthFolder}/${cleanFileName}`;
+
+    const updatedUser = await db.updateUser(req.user.id, {
+      paymentStatus: 'Pending Verification',
+      receiptUrl: relativeUrl,
+      phone,
+      transactionRef: transactionRef || null,
+      lastPaymentTime: date.toISOString()
+    });
+
+    res.json({ success: true, user: updatedUser, receiptUrl: relativeUrl });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/payments/verify
+app.post('/api/admin/payments/verify', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Access forbidden: Admin only' });
+  }
+
+  const { userId, action, declineReason } = req.body;
+  if (!userId || !action) {
+    return res.status(400).json({ error: 'Missing userId or action' });
+  }
+
+  try {
+    const userToVerify = await db.getUserById(userId);
+    if (!userToVerify) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const config = await db.getConfig();
+
+    if (action === 'accept') {
+      const daysToAdd = 30;
+      let currentExpiry = Date.now();
+      if (userToVerify.subscriptionExpiryDate) {
+        const existingExpiry = new Date(userToVerify.subscriptionExpiryDate).getTime();
+        if (existingExpiry > Date.now()) {
+          currentExpiry = existingExpiry;
+        }
+      }
+      const newExpiryDate = new Date(currentExpiry + daysToAdd * 24 * 60 * 60 * 1000).toISOString();
+
+      const updatedUser = await db.updateUser(userId, {
+        subscriptionStatus: 'Active',
+        accountStatus: 'Active',
+        paymentStatus: 'Paid',
+        subscriptionExpiryDate: newExpiryDate,
+        declineReason: null,
+        systemNotification: 'accepted'
+      });
+
+      if (userToVerify.jellyfinUserId && config) {
+        try {
+          const jellyfin = new JellyfinService(config);
+          await jellyfin.setUserDisabledStatus(userToVerify.jellyfinUserId, false);
+        } catch (e: any) {
+          console.error(`[Admin Verify] Jellyfin sync failed for user ${userToVerify.username}:`, e.message);
+        }
+      }
+
+      if (userToVerify.referredBy) {
+        const affiliateUser = await db.getUserByAffiliateCode(userToVerify.referredBy);
+        if (affiliateUser) {
+          const commissionAmount = config?.defaultCommission !== undefined ? Number(config.defaultCommission) : 100.00;
+          await db.createCommission({
+            affiliateId: affiliateUser.id,
+            referredUserId: userToVerify.id,
+            amount: commissionAmount,
+            status: 'Approved'
+          });
+        }
+      }
+
+      return res.json({ success: true, user: updatedUser });
+
+    } else if (action === 'decline') {
+      const updatedUser = await db.updateUser(userId, {
+        paymentStatus: 'Unpaid',
+        declineReason: declineReason || 'Payment verification failed',
+        systemNotification: 'declined'
+      });
+
+      return res.json({ success: true, user: updatedUser });
+    } else {
+      return res.status(400).json({ error: 'Invalid action' });
+    }
+
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
   }
 });
 
@@ -528,6 +778,180 @@ app.get('/api/admin/users', async (req: any, res) => {
     }
 
     res.json(users);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin Create User
+app.post('/api/admin/users', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin access required.' });
+  }
+
+  const { fullName, username, email, password, subscriptionStatus, paymentStatus, accountStatus, role, subscriptionExpiryDate, referredBy, isAffiliate, affiliateCode } = req.body;
+
+  if (!fullName || !username || !email || !password) {
+    return res.status(400).json({ error: 'Full Name, Username, Email, and Password are required.' });
+  }
+
+  try {
+    const existingUserByUsername = await db.getUserByUsername(username);
+    if (existingUserByUsername) {
+      return res.status(400).json({ error: 'Username is already taken' });
+    }
+
+    const existingUserByEmail = await db.getUserByEmail(email);
+    if (existingUserByEmail) {
+      return res.status(400).json({ error: 'Email address is already registered' });
+    }
+
+    const config = await db.getConfig();
+    let jellyfinUserId = '';
+
+    if (config) {
+      const jellyfin = new JellyfinService(config);
+      try {
+        const existingJUserId = await jellyfin.getUserIdByName(username);
+        if (existingJUserId) {
+          jellyfinUserId = existingJUserId;
+          await jellyfin.grantAllPermissions(existingJUserId);
+        } else {
+          jellyfinUserId = await jellyfin.createUser(username, password);
+        }
+
+        if (subscriptionStatus !== 'Active') {
+          await jellyfin.setUserDisabledStatus(jellyfinUserId, true);
+        }
+      } catch (err: any) {
+        console.error('Jellyfin user sync failed on admin create:', err.message);
+      }
+    }
+
+    const newUser = await db.createUser({
+      fullName,
+      username: username.trim(),
+      email: email.toLowerCase().trim(),
+      passwordHash: hashPassword(password),
+      jellyfinUserId: jellyfinUserId || null,
+      subscriptionStatus: subscriptionStatus || 'Disabled',
+      paymentStatus: paymentStatus || 'Unpaid',
+      accountStatus: accountStatus || 'Disabled',
+      role: role || 'user',
+      subscriptionStartDate: subscriptionStatus === 'Active' ? new Date().toISOString() : null,
+      subscriptionExpiryDate: subscriptionExpiryDate || null,
+      referredBy: referredBy || null,
+      isAffiliate: isAffiliate ? 1 : 0,
+      affiliateCode: affiliateCode || null
+    });
+
+    res.json(newUser);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin Update User
+app.put('/api/admin/users/:id', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin access required.' });
+  }
+
+  const targetUserId = req.params.id;
+  const { fullName, username, email, password, subscriptionStatus, paymentStatus, accountStatus, role, subscriptionStartDate, subscriptionExpiryDate, referredBy, isAffiliate, affiliateCode } = req.body;
+
+  try {
+    const targetUser = await db.getUserById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (username && username.toLowerCase() !== targetUser.username.toLowerCase()) {
+      const duplicate = await db.getUserByUsername(username);
+      if (duplicate) {
+        return res.status(400).json({ error: 'Username is already taken' });
+      }
+    }
+
+    if (email && email.toLowerCase() !== targetUser.email.toLowerCase()) {
+      const duplicate = await db.getUserByEmail(email);
+      if (duplicate) {
+        return res.status(400).json({ error: 'Email address is already registered' });
+      }
+    }
+
+    const updates: any = {};
+    if (fullName !== undefined) updates.fullName = fullName;
+    if (username !== undefined) updates.username = username.trim();
+    if (email !== undefined) updates.email = email.toLowerCase().trim();
+    if (subscriptionStatus !== undefined) updates.subscriptionStatus = subscriptionStatus;
+    if (paymentStatus !== undefined) updates.paymentStatus = paymentStatus;
+    if (accountStatus !== undefined) updates.accountStatus = accountStatus;
+    if (role !== undefined) updates.role = role;
+    if (subscriptionStartDate !== undefined) updates.subscriptionStartDate = subscriptionStartDate;
+    if (subscriptionExpiryDate !== undefined) updates.subscriptionExpiryDate = subscriptionExpiryDate;
+    if (referredBy !== undefined) updates.referredBy = referredBy;
+    if (isAffiliate !== undefined) updates.isAffiliate = isAffiliate ? 1 : 0;
+    if (affiliateCode !== undefined) updates.affiliateCode = affiliateCode;
+
+    if (password) {
+      updates.passwordHash = hashPassword(password);
+    }
+
+    const updatedUser = await db.updateUser(targetUserId, updates);
+
+    // Sync status and password if updated
+    const config = await db.getConfig();
+    if (config && targetUser.jellyfinUserId) {
+      const jellyfin = new JellyfinService(config);
+      try {
+        if (subscriptionStatus !== undefined) {
+          const isDisabled = subscriptionStatus !== 'Active';
+          await jellyfin.setUserDisabledStatus(targetUser.jellyfinUserId, isDisabled);
+        }
+        if (password) {
+          await jellyfin.updateUserPassword(targetUser.jellyfinUserId, password);
+        }
+      } catch (err: any) {
+        console.error('Jellyfin sync failed on admin update:', err.message);
+      }
+    }
+
+    res.json(updatedUser);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin Delete User
+app.delete('/api/admin/users/:id', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin access required.' });
+  }
+
+  const targetUserId = req.params.id;
+
+  try {
+    const targetUser = await db.getUserById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Delete locally
+    await db.deleteUser(targetUserId);
+
+    // Delete from Jellyfin
+    const config = await db.getConfig();
+    if (config && targetUser.jellyfinUserId) {
+      const jellyfin = new JellyfinService(config);
+      try {
+        await jellyfin.deleteUser(targetUser.jellyfinUserId);
+      } catch (err: any) {
+        console.error('Jellyfin user deletion failed:', err.message);
+      }
+    }
+
+    res.json({ success: true, message: 'User deleted successfully' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -600,6 +1024,20 @@ app.post('/api/admin/users/:id/subscription', async (req: any, res) => {
       await jellyfin.setUserDisabledStatus(targetUser.jellyfinUserId, isDisabledInJellyfin);
     }
 
+    // Generate affiliate commission if user has a valid referral
+    if ((action === 'activate' || action === 'reactivate' || action === 'extend') && targetUser.referredBy) {
+      const affiliateUser = await db.getUserByAffiliateCode(targetUser.referredBy);
+      if (affiliateUser) {
+        const commissionAmount = config.defaultCommission !== undefined ? Number(config.defaultCommission) : 100.00;
+        await db.createCommission({
+          affiliateId: affiliateUser.id,
+          referredUserId: targetUser.id,
+          amount: commissionAmount,
+          status: 'Approved'
+        });
+      }
+    }
+
     res.json({ success: true, user: updatedUser });
   } catch (err: any) {
     console.error(`Admin action ${action} failed for user ${targetUserId}:`, err);
@@ -614,6 +1052,201 @@ app.post('/api/admin/run-expiry-check', async (req: any, res) => {
   }
   const count = await checkSubscriptionExpiries();
   res.json({ success: true, expiredCount: count });
+});
+
+// --- AFFILIATE PROGRAM ENDPOINTS ---
+
+// POST /api/affiliate/join
+app.post('/api/affiliate/join', async (req: any, res) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const affiliateCode = req.user.username.toUpperCase().slice(0, 4) + Math.floor(100 + Math.random() * 900);
+    const updatedUser = await db.updateUser(req.user.id, {
+      isAffiliate: 1,
+      affiliateCode
+    });
+
+    res.json({ success: true, user: updatedUser });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/affiliate/stats
+app.get('/api/affiliate/stats', async (req: any, res) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const user = await db.getUserById(req.user.id);
+  if (!user || !user.isAffiliate) {
+    return res.status(403).json({ error: 'User is not registered as an affiliate' });
+  }
+
+  try {
+    const config = await db.getConfig();
+    const defaultCommission = config?.defaultCommission !== undefined ? Number(config.defaultCommission) : 100.00;
+    const affiliateCode = user.affiliateCode || '';
+    const users = await db.getUsers();
+    const commissions = await db.getCommissionsByAffiliate(user.id);
+
+    const referredUsers = [];
+    let registeredCount = 0;
+    let paidCount = 0;
+
+    for (const u of users) {
+      if (u.referredBy && u.referredBy.toUpperCase() === affiliateCode.toUpperCase()) {
+        registeredCount++;
+        const isPaid = u.paymentStatus === 'Paid' || u.subscriptionStatus === 'Active';
+        if (isPaid) {
+          paidCount++;
+        }
+        referredUsers.push({
+          id: u.id,
+          fullName: u.fullName,
+          username: u.username,
+          registrationDate: u.registrationDate,
+          paymentStatus: u.paymentStatus,
+          subscriptionStatus: u.subscriptionStatus
+        });
+      }
+    }
+
+    let pendingCommission = 0.0;
+    let approvedCommission = 0.0;
+    let paidCommission = 0.0;
+    let totalCommission = 0.0;
+
+    for (const c of commissions) {
+      const amt = Number(c.amount);
+      totalCommission += amt;
+      if (c.status === 'Pending') {
+        pendingCommission += amt;
+      } else if (c.status === 'Approved') {
+        approvedCommission += amt;
+      } else if (c.status === 'Paid') {
+        paidCommission += amt;
+      }
+    }
+
+    res.json({
+      affiliateCode,
+      registeredCount,
+      paidCount,
+      pendingCommission,
+      approvedCommission,
+      paidCommission,
+      totalCommission,
+      defaultCommission,
+      referredUsers,
+      commissions
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/users/:id/affiliate
+app.post('/api/admin/users/:id/affiliate', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin access required.' });
+  }
+
+  const targetUserId = req.params.id;
+  const isAffiliate = req.body.isAffiliate ? 1 : 0;
+  let affiliateCode = (req.body.affiliateCode || '').trim();
+
+  try {
+    const targetUser = await db.getUserById(targetUserId);
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (isAffiliate) {
+      if (!affiliateCode) {
+        affiliateCode = targetUser.username.toUpperCase().slice(0, 4) + Math.floor(100 + Math.random() * 900);
+      }
+
+      const existing = await db.getUserByAffiliateCode(affiliateCode);
+      if (existing && existing.id !== targetUserId) {
+        return res.status(400).json({ error: 'Affiliate code is already taken' });
+      }
+
+      const updatedUser = await db.updateUser(targetUserId, {
+        isAffiliate: 1,
+        affiliateCode
+      });
+      res.json({ success: true, user: updatedUser });
+    } else {
+      const updatedUser = await db.updateUser(targetUserId, {
+        isAffiliate: 0
+      });
+      res.json({ success: true, user: updatedUser });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/commissions
+app.get('/api/admin/commissions', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const commissions = await db.getCommissions();
+    const users = await db.getUsers();
+    const userMap = new Map<string, any>();
+    for (const u of users) {
+      userMap.set(u.id, u);
+    }
+
+    const result = [];
+    for (const c of commissions) {
+      const affiliate = userMap.get(c.affiliateId);
+      const referred = userMap.get(c.referredUserId);
+      result.push({
+        id: c.id,
+        affiliateId: c.affiliateId,
+        affiliateName: affiliate ? affiliate.fullName : 'Unknown',
+        affiliateUsername: affiliate ? affiliate.username : 'Unknown',
+        referredUserId: c.referredUserId,
+        referredName: referred ? referred.fullName : 'Unknown',
+        referredUsername: referred ? referred.username : 'Unknown',
+        amount: Number(c.amount),
+        status: c.status,
+        createdAt: c.createdAt,
+        updatedAt: c.updatedAt
+      });
+    }
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/commissions/:id/status
+app.post('/api/admin/commissions/:id/status', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  const commissionId = req.params.id;
+  const { status } = req.body;
+  if (status !== 'Pending' && status !== 'Approved' && status !== 'Paid') {
+    return res.status(400).json({ error: 'Invalid commission status' });
+  }
+
+  try {
+    await db.updateCommissionStatus(commissionId, status);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- BACKGROUND EXPIRY JOB ---
@@ -690,6 +1323,11 @@ app.use((err: any, req: any, res: any, next: any) => {
 const startServer = async () => {
   // Initialize MySQL tables
   await initDb();
+
+  // Expose uploads directory statically so receipts can be served directly
+  app.use('/uploads', express.static(path.join(process.cwd(), 'dist', 'uploads')));
+  app.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
+  app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

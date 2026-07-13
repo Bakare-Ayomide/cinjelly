@@ -241,4 +241,14 @@ class JellyfinService {
             return null;
         }
     }
+
+    public function deleteUser($jellyfinUserId) {
+        try {
+            $this->request("/Users/{$jellyfinUserId}", 'DELETE', null, true);
+            return true;
+        } catch (Exception $e) {
+            error_log("Failed to delete Jellyfin user {$jellyfinUserId}: " . $e->getMessage());
+            return false;
+        }
+    }
 }

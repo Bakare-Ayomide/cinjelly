@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   PlayCircle, Tv, Film, Laptop, Sparkles, HelpCircle, ChevronDown, ChevronUp, 
   X, Lock, Mail, User, ShieldCheck, ArrowRight, Loader2, Info, Film as CinemaIcon,
@@ -32,6 +32,16 @@ export default function LandingPage({ currentUser, systemStatus, onLoginSuccess,
   const [regUsername, setRegUsername] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
+  const [regReferredBy, setRegReferredBy] = useState('');
+
+  // Capture referral code from URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const ref = params.get('ref') || params.get('referredBy');
+    if (ref) {
+      setRegReferredBy(ref.toUpperCase());
+    }
+  }, []);
 
   const toggleFaq = (index: number) => {
     setFaqOpen(faqOpen === index ? null : index);
@@ -75,7 +85,8 @@ export default function LandingPage({ currentUser, systemStatus, onLoginSuccess,
           fullName: regFullName,
           username: regUsername,
           email: regEmail,
-          password: regPassword
+          password: regPassword,
+          referredBy: regReferredBy
         })
       });
       const data = await response.json();
@@ -94,16 +105,16 @@ export default function LandingPage({ currentUser, systemStatus, onLoginSuccess,
 
   const faqs = [
     {
-      q: 'What is FluxPortal?',
+      q: 'What is Cinode?',
       a: 'We are a premium private streaming portal designed to offer instant, high-quality, ad-free access to curated films, series, and television. Our backend is integrated with a blazing-fast Jellyfin server, giving you a beautiful client experience.'
     },
     {
       q: 'How does the pricing and subscription work?',
-      a: 'We believe in keeping things simple and affordable. We have a single all-access premium tier costing exactly ₦500 per month. You can activate or renew your subscription instantly using our built-in payment simulator with one click.'
+      a: 'We believe in keeping things simple and affordable. We have a single all-access premium tier costing exactly ₦600 per month. You can activate or renew your subscription instantly using our built-in payment simulator with one click.'
     },
     {
       q: 'What happens when my subscription expires?',
-      a: 'If your plan expires, access is automatically locked. As soon as you renew for ₦500, your profile is instantly reactivated, and you can resume watching on any device immediately.'
+      a: 'If your plan expires, access is automatically locked. As soon as you renew for ₦600, your profile is instantly reactivated, and you can resume watching on any device immediately.'
     },
     {
       q: 'Is my personal account secure?',
@@ -157,7 +168,7 @@ export default function LandingPage({ currentUser, systemStatus, onLoginSuccess,
             <Tv className="w-4 h-4" />
           </div>
           <span className="font-display font-black text-2xl tracking-tight text-white">
-            Flux<span className="text-rose-500">Portal</span>
+            Cin<span className="text-rose-500">ode</span>
           </span>
         </div>
         <div className="flex items-center gap-6">
@@ -195,7 +206,7 @@ export default function LandingPage({ currentUser, systemStatus, onLoginSuccess,
         <h1 className="text-5xl md:text-[84px] leading-[0.9] font-display font-extrabold tracking-tight text-white mb-8">
           Unlimited Films.<br />
           No Buffering.<br />
-          <span className="text-transparent bg-clip-text bg-gradient-to-r from-rose-500 to-amber-500">₦500 / Month.</span>
+          <span className="text-transparent bg-clip-text bg-gradient-to-r from-rose-500 to-amber-500">₦600 / Month.</span>
         </h1>
         <p className="max-w-2xl mx-auto text-slate-400 text-base md:text-lg mb-10 leading-relaxed font-sans">
           The next generation of private media streaming. A premium, blazing-fast, and secure interface integrated with your private media server and automatic subscription sync.
@@ -219,7 +230,7 @@ export default function LandingPage({ currentUser, systemStatus, onLoginSuccess,
               </button>
               <div className="flex flex-col text-left border-l-2 border-rose-500 pl-5 shrink-0">
                 <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Streaming Fee</span>
-                <span className="text-2xl font-black text-white">₦500<span className="text-sm font-normal text-slate-500 ml-1">/ month</span></span>
+                <span className="text-2xl font-black text-white">₦600<span className="text-sm font-normal text-slate-500 ml-1">/ month</span></span>
               </div>
             </>
           )}
@@ -287,7 +298,7 @@ export default function LandingPage({ currentUser, systemStatus, onLoginSuccess,
           <h3 className="text-2xl font-display font-extrabold text-white mb-6">ALL-ACCESS SUBSCRIPTION</h3>
           
           <div className="flex items-baseline justify-center mb-6">
-            <span className="text-6xl font-display font-extrabold tracking-tight text-white">₦500</span>
+            <span className="text-6xl font-display font-extrabold tracking-tight text-white">₦600</span>
             <span className="text-slate-500 font-bold ml-2 text-sm uppercase">/ month</span>
           </div>
 
@@ -386,16 +397,16 @@ export default function LandingPage({ currentUser, systemStatus, onLoginSuccess,
                 Server Status: Operational
               </div>
               <div className="text-slate-600 text-[10px] uppercase font-bold tracking-wider">
-                &copy; 2026 FLUX MEDIA SYSTEMS
+                &copy; 2026 CINODE MEDIA SYSTEMS
               </div>
             </div>
           </div>
 
           <div className="border-t border-slate-900 pt-8 flex flex-col md:flex-row items-center justify-between gap-6 text-xs text-slate-500">
             <div className="flex items-center">
-              <div className="w-6 h-6 bg-rose-600 rounded-full mr-2 shrink-0 flex items-center justify-center text-white text-[10px] font-black">F</div>
+              <div className="w-6 h-6 bg-rose-600 rounded-full mr-2 shrink-0 flex items-center justify-center text-white text-[10px] font-black">C</div>
               <span className="font-display font-black text-sm tracking-tight text-white">
-                Flux<span className="text-rose-500">Portal</span>
+                Cin<span className="text-rose-500">ode</span>
               </span>
             </div>
             <p className="text-[11px] text-slate-500">
@@ -553,6 +564,17 @@ export default function LandingPage({ currentUser, systemStatus, onLoginSuccess,
                       className="w-full bg-[#090a0f] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:outline-none focus:border-rose-500 transition"
                       value={regPassword}
                       onChange={(e) => setRegPassword(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="block text-xs font-semibold text-slate-300">Referral Code (Optional)</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. DUWI123" 
+                      className="w-full bg-[#090a0f] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:outline-none focus:border-rose-500 transition uppercase"
+                      value={regReferredBy}
+                      onChange={(e) => setRegReferredBy(e.target.value.toUpperCase())}
                     />
                   </div>
 

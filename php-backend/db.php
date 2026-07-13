@@ -5,30 +5,48 @@
  */
 
 // Load database configuration from environment variables or use default cPanel credentials
-define('DB_HOST', getenv('DB_HOST') ?: '131.153.147.178');
-define('DB_PORT', getenv('DB_PORT') ?: '3306');
-define('DB_USER', getenv('DB_USER') ?: 'zerolord_cinjelly');
-define('DB_PASS', getenv('DB_PASSWORD') ?: '@f33rinimi');
-define('DB_NAME', getenv('DB_NAME') ?: 'zerolord_cinjelly');
+// Use correct cPanel credentials directly to avoid any cPanel environment variable pollution
+define('DB_HOST', '131.153.147.178');
+define('DB_PORT', '3306');
+define('DB_USER', 'zerolord_cinjelly');
+define('DB_PASS', '@f33rinimi');
+define('DB_NAME', 'zerolord_cinjelly');
 
 class DB {
     private static $pdo = null;
 
     public static function getConnection() {
         if (self::$pdo === null) {
-            try {
-                $dsn = "mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME . ";charset=utf8mb4";
-                $options = [
-                    PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                    PDO::ATTR_EMULATE_PREPARES   => false,
-                ];
-                self::$pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
-            } catch (PDOException $e) {
+            // Try local connection first (localhost, 127.0.0.1), then fall back to external IP
+            $hostsToTry = ['localhost', '127.0.0.1', DB_HOST];
+
+            $options = [
+                PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_EMULATE_PREPARES   => false,
+                PDO::ATTR_TIMEOUT            => 2, // 2 second timeout per attempt for fast fallback
+            ];
+
+            $lastException = null;
+            foreach ($hostsToTry as $host) {
+                try {
+                    $dsn = "mysql:host=" . $host . ";port=" . DB_PORT . ";dbname=" . DB_NAME . ";charset=utf8mb4";
+                    self::$pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
+                    break; // Connection succeeded!
+                } catch (PDOException $e) {
+                    $lastException = $e;
+                }
+            }
+
+            if (self::$pdo === null) {
+                // Log the exact error internally for debugging
+                $logMsg = date('[Y-m-d H:i:s] ') . "DB connection failed. Tried hosts: [" . implode(', ', $hostsToTry) . "]. Error: " . ($lastException ? $lastException->getMessage() : 'Unknown') . "\n";
+                @file_put_contents(__DIR__ . '/db_error_log.txt', $logMsg, FILE_APPEND);
+
                 // Return JSON error response if connection fails
                 header('Content-Type: application/json');
                 http_response_code(500);
-                echo json_encode(['error' => 'Database connection failed: ' . $e->getMessage()]);
+                echo json_encode(['error' => 'Database connection failed.']);
                 exit;
             }
         }
@@ -57,6 +75,38 @@ class DB {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ");
 
+        // Run ALTER TABLE columns internally to guarantee updates on existing setups
+        try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN isAffiliate TINYINT(1) NOT NULL DEFAULT 0");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN affiliateCode VARCHAR(100) NULL UNIQUE");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN referredBy VARCHAR(100) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN disabledAt VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN receiptUrl TEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN declineReason TEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN phone VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN transactionRef VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN lastPaymentTime VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN systemNotification TEXT NULL");
+        } catch (Exception $e) {}
+
         // Create system_config table
         $pdo->exec("
             CREATE TABLE IF NOT EXISTS system_config (
@@ -68,6 +118,40 @@ class DB {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ");
 
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN defaultCommission DECIMAL(10,2) NOT NULL DEFAULT 100.00");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN bankAccountNo VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN bankName VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN bankBeneficiary VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN bankInstructions TEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN chatbotInfo TEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN chatbotInstructions TEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN contactEmail VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN contactPhone VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN contactWhatsApp VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN contactOther TEXT NULL");
+        } catch (Exception $e) {}
+
         // Create persistent sessions table
         $pdo->exec("
             CREATE TABLE IF NOT EXISTS sessions (
@@ -78,13 +162,26 @@ class DB {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ");
 
+        // Create commissions table
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS commissions (
+                id VARCHAR(255) PRIMARY KEY,
+                affiliateId VARCHAR(255) NOT NULL,
+                referredUserId VARCHAR(255) NOT NULL,
+                amount DECIMAL(10,2) NOT NULL,
+                status VARCHAR(50) NOT NULL DEFAULT 'Pending',
+                createdAt VARCHAR(255) NOT NULL,
+                updatedAt VARCHAR(255) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
         // Seed default Jellyfin configurations if the system_config table is empty
         try {
             $count = $pdo->query("SELECT COUNT(*) FROM system_config")->fetchColumn();
             if ($count == 0) {
                 $stmt = $pdo->prepare("
-                    INSERT INTO system_config (id, serverUrl, adminUsername, adminPasswordFull, apiKey)
-                    VALUES ('main', ?, ?, ?, ?)
+                    INSERT INTO system_config (id, serverUrl, adminUsername, adminPasswordFull, apiKey, defaultCommission)
+                    VALUES ('main', ?, ?, ?, ?, 100.00)
                 ");
                 $stmt->execute([
                     'https://cinode.zerolord.com',
@@ -131,47 +228,88 @@ class DB {
         $envPassword = getenv('JELLYFIN_ADMIN_PASSWORD');
         $envApiKey = getenv('JELLYFIN_API_KEY');
 
+        // Priority 2: Database
+        $row = null;
+        try {
+            $pdo = self::getConnection();
+            $stmt = $pdo->prepare('SELECT * FROM system_config WHERE id = "main" LIMIT 1');
+            $stmt->execute();
+            $row = $stmt->fetch();
+        } catch (Exception $e) {
+            // Ignore if tables are not set up yet
+        }
+
+        if ($row) {
+            return [
+                'serverUrl' => $envUrl ?: $row['serverUrl'],
+                'adminUsername' => $envUsername ?: $row['adminUsername'],
+                'adminPasswordFull' => $envPassword ?: $row['adminPasswordFull'],
+                'apiKey' => $envApiKey ?: $row['apiKey'],
+                'defaultCommission' => isset($row['defaultCommission']) ? (float)$row['defaultCommission'] : 100.00,
+                'bankAccountNo' => $row['bankAccountNo'] ?? '',
+                'bankName' => $row['bankName'] ?? '',
+                'bankBeneficiary' => $row['bankBeneficiary'] ?? '',
+                'bankInstructions' => $row['bankInstructions'] ?? '',
+                'chatbotInfo' => $row['chatbotInfo'] ?? '',
+                'chatbotInstructions' => $row['chatbotInstructions'] ?? '',
+                'contactEmail' => $row['contactEmail'] ?? '',
+                'contactPhone' => $row['contactPhone'] ?? '',
+                'contactWhatsApp' => $row['contactWhatsApp'] ?? '',
+                'contactOther' => $row['contactOther'] ?? ''
+            ];
+        }
+
         if ($envUrl && $envUsername && $envApiKey) {
             return [
                 'serverUrl' => $envUrl,
                 'adminUsername' => $envUsername,
                 'adminPasswordFull' => $envPassword,
-                'apiKey' => $envApiKey
+                'apiKey' => $envApiKey,
+                'defaultCommission' => 100.00
             ];
         }
 
-        // Priority 2: Database
-        $pdo = self::getConnection();
-        $stmt = $pdo->prepare('SELECT * FROM system_config WHERE id = "main" LIMIT 1');
-        $stmt->execute();
-        $row = $stmt->fetch();
-        if ($row) {
-            return [
-                'serverUrl' => $row['serverUrl'],
-                'adminUsername' => $row['adminUsername'],
-                'adminPasswordFull' => $row['adminPasswordFull'],
-                'apiKey' => $row['apiKey']
-            ];
-        }
         return null;
     }
 
     public static function saveConfig($config) {
         $pdo = self::getConnection();
         $stmt = $pdo->prepare('
-            INSERT INTO system_config (id, serverUrl, adminUsername, adminPasswordFull, apiKey)
-            VALUES ("main", ?, ?, ?, ?)
+            INSERT INTO system_config (id, serverUrl, adminUsername, adminPasswordFull, apiKey, defaultCommission, bankAccountNo, bankName, bankBeneficiary, bankInstructions, chatbotInfo, chatbotInstructions, contactEmail, contactPhone, contactWhatsApp, contactOther)
+            VALUES ("main", ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON DUPLICATE KEY UPDATE
                 serverUrl = VALUES(serverUrl),
                 adminUsername = VALUES(adminUsername),
                 adminPasswordFull = VALUES(adminPasswordFull),
-                apiKey = VALUES(apiKey)
+                apiKey = VALUES(apiKey),
+                defaultCommission = VALUES(defaultCommission),
+                bankAccountNo = VALUES(bankAccountNo),
+                bankName = VALUES(bankName),
+                bankBeneficiary = VALUES(bankBeneficiary),
+                bankInstructions = VALUES(bankInstructions),
+                chatbotInfo = VALUES(chatbotInfo),
+                chatbotInstructions = VALUES(chatbotInstructions),
+                contactEmail = VALUES(contactEmail),
+                contactPhone = VALUES(contactPhone),
+                contactWhatsApp = VALUES(contactWhatsApp),
+                contactOther = VALUES(contactOther)
         ');
         $stmt->execute([
             $config['serverUrl'],
             $config['adminUsername'],
             $config['adminPasswordFull'] ?? null,
-            $config['apiKey']
+            $config['apiKey'],
+            isset($config['defaultCommission']) ? (float)$config['defaultCommission'] : 100.00,
+            $config['bankAccountNo'] ?? null,
+            $config['bankName'] ?? null,
+            $config['bankBeneficiary'] ?? null,
+            $config['bankInstructions'] ?? null,
+            $config['chatbotInfo'] ?? null,
+            $config['chatbotInstructions'] ?? null,
+            $config['contactEmail'] ?? null,
+            $config['contactPhone'] ?? null,
+            $config['contactWhatsApp'] ?? null,
+            $config['contactOther'] ?? null
         ]);
     }
 
@@ -216,8 +354,9 @@ class DB {
             INSERT INTO users (
                 id, fullName, username, email, passwordHash, jellyfinUserId, 
                 subscriptionStatus, paymentStatus, registrationDate, 
-                subscriptionStartDate, subscriptionExpiryDate, accountStatus, role
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                subscriptionStartDate, subscriptionExpiryDate, accountStatus, role,
+                isAffiliate, affiliateCode, referredBy, disabledAt
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ');
         
         $stmt->execute([
@@ -233,7 +372,11 @@ class DB {
             $user['subscriptionStartDate'] ?? null,
             $user['subscriptionExpiryDate'] ?? null,
             $user['accountStatus'] ?? 'Disabled',
-            $user['role'] ?? 'user'
+            $user['role'] ?? 'user',
+            $user['isAffiliate'] ?? 0,
+            $user['affiliateCode'] ?? null,
+            $user['referredBy'] ?? null,
+            $user['disabledAt'] ?? null
         ]);
 
         return array_merge($user, [
@@ -341,7 +484,8 @@ class DB {
                     
                     self::updateUser($user['id'], [
                         'subscriptionStatus' => 'Expired',
-                        'accountStatus' => 'Expired'
+                        'accountStatus' => 'Expired',
+                        'disabledAt' => date(DATE_ISO8601)
                     ]);
 
                     if (!empty($user['jellyfinUserId'])) {
@@ -357,5 +501,61 @@ class DB {
             }
         }
         return $expiredCount;
+    }
+
+    public static function getUserByAffiliateCode($code) {
+        $pdo = self::getConnection();
+        $stmt = $pdo->prepare('SELECT * FROM users WHERE LOWER(affiliateCode) = ? AND isAffiliate = 1');
+        $stmt->execute([strtolower(trim($code))]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    public static function createCommission($commission) {
+        $pdo = self::getConnection();
+        $id = self::generateUUID();
+        $now = date(DATE_ISO8601);
+        $stmt = $pdo->prepare('
+            INSERT INTO commissions (id, affiliateId, referredUserId, amount, status, createdAt, updatedAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ');
+        $stmt->execute([
+            $id,
+            $commission['affiliateId'],
+            $commission['referredUserId'],
+            $commission['amount'],
+            $commission['status'] ?? 'Pending',
+            $now,
+            $now
+        ]);
+        return [
+            'id' => $id,
+            'affiliateId' => $commission['affiliateId'],
+            'referredUserId' => $commission['referredUserId'],
+            'amount' => $commission['amount'],
+            'status' => $commission['status'] ?? 'Pending',
+            'createdAt' => $now,
+            'updatedAt' => $now
+        ];
+    }
+
+    public static function getCommissions() {
+        $pdo = self::getConnection();
+        $stmt = $pdo->query('SELECT * FROM commissions ORDER BY createdAt DESC');
+        return $stmt->fetchAll();
+    }
+
+    public static function getCommissionsByAffiliate($affiliateId) {
+        $pdo = self::getConnection();
+        $stmt = $pdo->prepare('SELECT * FROM commissions WHERE affiliateId = ? ORDER BY createdAt DESC');
+        $stmt->execute([$affiliateId]);
+        return $stmt->fetchAll();
+    }
+
+    public static function updateCommissionStatus($id, $status) {
+        $pdo = self::getConnection();
+        $now = date(DATE_ISO8601);
+        $stmt = $pdo->prepare('UPDATE commissions SET status = ?, updatedAt = ? WHERE id = ?');
+        $stmt->execute([$status, $now, $id]);
     }
 }

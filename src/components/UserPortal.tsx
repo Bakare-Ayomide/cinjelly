@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Tv, LogOut, CheckCircle, AlertTriangle, Play, ShieldAlert, CreditCard, 
-  Loader2, RefreshCw, Key, HelpCircle, ArrowLeft, ExternalLink, X, Info, UserCheck, Calendar
+  Loader2, RefreshCw, Key, HelpCircle, ArrowLeft, ExternalLink, X, Info, UserCheck, Calendar,
+  Users, DollarSign, Gift, Clock, Share2, Copy, Check, Percent, MessageSquare
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -18,10 +19,231 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   
+  // Affiliate stats state
+  const [affiliateStats, setAffiliateStats] = useState<any | null>(null);
+  const [loadingStats, setLoadingStats] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [joiningAffiliate, setJoiningAffiliate] = useState(false);
+
   // Credentials sync state
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [syncPassword, setSyncPassword] = useState('');
   const [syncLoading, setSyncLoading] = useState(false);
+
+  // Bank Info & manual payment state
+  const [bankInfo, setBankInfo] = useState<any>(null);
+  const [showManualPay, setShowManualPay] = useState(false);
+  const [userPhone, setUserPhone] = useState('');
+  const [transactionRef, setTransactionRef] = useState('');
+  const [receiptBase64, setReceiptBase64] = useState<string | null>(null);
+  const [receiptFileName, setReceiptFileName] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
+
+  // Notification states
+  const [showNotificationModal, setShowNotificationModal] = useState(false);
+  const [notificationType, setNotificationType] = useState<'accepted' | 'declined' | null>(null);
+  const [notificationDeclineReason, setNotificationDeclineReason] = useState<string>('');
+
+  const handleFile = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      setError('Please upload an image file (PNG, JPG, JPEG, etc.)');
+      return;
+    }
+    setReceiptFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => {
+      setReceiptBase64(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      handleFile(e.target.files[0]);
+    }
+  };
+
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  const fetchBankInfo = async () => {
+    try {
+      const response = await fetch('/api/payment/bank-info');
+      if (response.ok) {
+        const data = await response.json();
+        setBankInfo(data);
+      }
+    } catch (err) {
+      console.error('Error fetching bank info:', err);
+    }
+  };
+
+  const handleNotifyAdmin = async () => {
+    setError(null);
+    setSuccess(null);
+
+    if (!userPhone.trim()) {
+      setError('Please enter your phone number so we can link your transfer');
+      return;
+    }
+    if (!receiptBase64) {
+      setError('Please upload a screenshot of your transfer receipt');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch('/api/payment/upload-receipt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          base64Data: receiptBase64,
+          fileName: receiptFileName,
+          phone: userPhone,
+          transactionRef: transactionRef
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to submit receipt');
+      }
+
+      setSuccess('Payment receipt successfully uploaded! Opening WhatsApp to notify admin...');
+
+      const messageText = `Hello Admin, I have made a subscription payment. Here are my details:
+
+User's Full Name: ${user.fullName}
+Username: ${user.username}
+Registered Email: ${user.email}
+Subscription Plan: Premium 30 Days
+Amount Paid: ₦600.00 NGN
+Payment Date/Time: ${new Date().toLocaleString()}
+Transaction Reference: ${transactionRef || 'None'}
+
+Note: My payment receipt has been uploaded to the portal.`;
+
+      const encodedMessage = encodeURIComponent(messageText);
+      const whatsAppPhone = bankInfo?.contactWhatsApp || '';
+      const cleanWhatsAppPhone = whatsAppPhone.replace(/[^0-9]/g, '');
+      
+      const whatsAppUrl = cleanWhatsAppPhone 
+        ? `https://wa.me/${cleanWhatsAppPhone}?text=${encodedMessage}`
+        : `https://wa.me/?text=${encodedMessage}`;
+
+      setTimeout(() => {
+        window.open(whatsAppUrl, '_blank');
+        onReloadUser();
+      }, 1500);
+
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (user.isAffiliate) {
+      fetchAffiliateStats();
+    }
+    fetchBankInfo();
+  }, [user.isAffiliate, user.subscriptionStatus, user.role]);
+
+  // Listen for system notifications
+  useEffect(() => {
+    if (user.systemNotification) {
+      setNotificationType(user.systemNotification as 'accepted' | 'declined');
+      setNotificationDeclineReason(user.declineReason || '');
+      setShowNotificationModal(true);
+      
+      if (user.systemNotification === 'accepted') {
+        setShowManualPay(false);
+      }
+
+      // Clear notification on backend
+      fetch('/api/auth/clear-notification', { method: 'POST' })
+        .then(res => {
+          if (res.ok) {
+            onReloadUser();
+          }
+        })
+        .catch(err => console.error('Error clearing system notification:', err));
+    }
+  }, [user.systemNotification, user.declineReason, onReloadUser]);
+
+  // Poll for verification updates if status is Pending Verification
+  useEffect(() => {
+    let interval: any;
+    if (user.paymentStatus === 'Pending Verification') {
+      interval = setInterval(() => {
+        onReloadUser();
+      }, 5000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [user.paymentStatus, onReloadUser]);
+
+  const handleJoinAffiliate = async () => {
+    setJoiningAffiliate(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const response = await fetch('/api/affiliate/join', {
+        method: 'POST'
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to join affiliate program');
+      }
+      setSuccess('Congratulations! You are now a registered affiliate partner. Here is your referral dashboard!');
+      onReloadUser();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setJoiningAffiliate(false);
+    }
+  };
+
+  const fetchAffiliateStats = async () => {
+    setLoadingStats(true);
+    try {
+      const response = await fetch('/api/affiliate/stats');
+      if (response.ok) {
+        const data = await response.json();
+        setAffiliateStats(data);
+      }
+    } catch (err) {
+      console.error('Error fetching affiliate stats:', err);
+    } finally {
+      setLoadingStats(false);
+    }
+  };
+
+  const copyReferralLink = () => {
+    if (!affiliateStats?.affiliateCode && !user.affiliateCode) return;
+    const code = affiliateStats?.affiliateCode || user.affiliateCode;
+    const link = `${window.location.origin}?ref=${code}`;
+    navigator.clipboard.writeText(link);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   const isActive = user.role === 'admin' || user.subscriptionStatus === 'Active';
 
@@ -148,7 +370,7 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
               <Tv className="w-4.5 h-4.5" />
             </div>
             <span className="font-display font-extrabold text-xl sm:text-2xl tracking-tight text-white">
-              Flux<span className="text-rose-500">Portal</span>
+              Cin<span className="text-rose-500">ode</span>
             </span>
           </div>
         </div>
@@ -212,55 +434,245 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
 
         {/* Dynamic Card Area */}
         {!isActive ? (
-          /* Billing & Payment Panel */
-          <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-8 text-center max-w-xl mx-auto shadow-2xl relative">
-            <div className="absolute top-0 right-0 bg-rose-600 text-white font-extrabold text-[10px] uppercase tracking-wider py-1.5 px-4 rounded-bl-xl">
-              Access Suspended
-            </div>
-            
-            <ShieldAlert className="w-12 h-12 text-rose-500 mx-auto mb-4" />
-            
-            <h3 className="text-xl font-display font-extrabold text-white">Streaming Access Paused</h3>
-            <p className="text-slate-400 text-sm mt-2 leading-relaxed">
-              Your ₦500 monthly plan is expired. Please renew your access to instantly resume watching your movies and series.
-            </p>
+          user.paymentStatus === 'Pending Verification' ? (
+            /* Pending Verification Panel */
+            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-8 text-center max-w-xl mx-auto shadow-2xl relative">
+              <div className="absolute top-0 right-0 bg-amber-500 text-slate-950 font-extrabold text-[10px] uppercase tracking-wider py-1.5 px-4 rounded-bl-xl">
+                Pending Verification
+              </div>
+              
+              <Clock className="w-12 h-12 text-amber-500 mx-auto mb-4 animate-pulse" />
+              
+              <h3 className="text-xl font-display font-extrabold text-white">Payment Awaiting Verification</h3>
+              <p className="text-slate-400 text-sm mt-2 leading-relaxed">
+                Thank you! We have received your payment submission. An administrator has been notified to verify your bank transfer. Once confirmed, your full streaming access will be unlocked instantly.
+              </p>
 
-            <div className="bg-[#07080c] border border-slate-800/60 rounded-xl p-5 my-6 text-left text-xs space-y-3 max-w-sm mx-auto text-slate-300">
-              <div className="flex justify-between">
-                <span className="text-slate-400">Monthly Plan Subscription:</span>
-                <span className="text-white font-bold">₦500.00 NGN</span>
+              <div className="bg-[#07080c] border border-slate-800/60 rounded-xl p-5 my-6 text-left text-xs space-y-3 max-w-sm mx-auto text-slate-300">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Monthly Plan Subscription:</span>
+                  <span className="text-white font-bold">₦600.00 NGN</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Payment Status:</span>
+                  <span className="text-amber-400 font-bold flex items-center gap-1">
+                    <Loader2 className="w-3 h-3 animate-spin" /> Pending Approval
+                  </span>
+                </div>
+                <div className="flex justify-between border-t border-slate-800/80 pt-3">
+                  <span className="text-slate-400">Media Platform:</span>
+                  <span className="text-rose-400 font-bold">Private Secured Jellyfin</span>
+                </div>
               </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Duration:</span>
-                <span className="text-white font-bold">30 Days Unlimited Access</span>
+
+              <button
+                onClick={onReloadUser}
+                disabled={loading}
+                className="w-full bg-[#1b1e2e] hover:bg-[#252a41] text-white border border-slate-700 font-bold py-3.5 px-6 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer text-sm"
+                id="refresh-verification-button"
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Check Verification Status
+              </button>
+              
+              <p className="text-[11px] text-slate-500 mt-4 leading-relaxed">
+                If your payment isn't verified within 15 minutes, please contact support.
+              </p>
+            </div>
+          ) : showManualPay ? (
+            /* Manual Bank Transfer Instructions Panel */
+            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 text-left max-w-xl mx-auto shadow-2xl relative">
+              <div className="absolute top-0 right-0 bg-rose-600 text-white font-extrabold text-[10px] uppercase tracking-wider py-1.5 px-4 rounded-bl-xl">
+                Manual Transfer & Upload
               </div>
-              <div className="flex justify-between border-t border-slate-800/80 pt-3">
-                <span className="text-slate-400">Media Platform:</span>
-                <span className="text-rose-400 font-bold">Private Secured Jellyfin</span>
+
+              <h3 className="text-xl font-display font-extrabold text-white mb-2 text-center">Bank Payment Instructions</h3>
+              <p className="text-slate-400 text-xs text-center mb-6 leading-relaxed">
+                Please transfer exactly <strong className="text-rose-400 font-bold text-sm">₦600.00 NGN</strong> to the bank details below. Once completed, fill the form, upload your receipt screenshot, and click "I've Paid".
+              </p>
+
+              <div className="bg-[#07080c] border border-slate-800/80 rounded-xl p-4 mb-6 space-y-3.5 text-xs">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-500 uppercase block tracking-wider">Bank Name</span>
+                    <span className="text-white text-sm font-extrabold">{bankInfo?.bankName || 'Not Set (Contact Admin)'}</span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase block tracking-wider">Beneficiary Name</span>
+                    <span className="text-white text-sm font-extrabold">{bankInfo?.bankBeneficiary || 'Not Set (Contact Admin)'}</span>
+                  </div>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase block tracking-wider">Account Number</span>
+                  <span className="text-rose-500 text-base font-mono font-black tracking-widest block py-2 bg-slate-950 px-3 rounded mt-1 select-all border border-slate-800 text-center">
+                    {bankInfo?.bankAccountNo || 'Not Set (Contact Admin)'}
+                  </span>
+                </div>
+                {bankInfo?.bankInstructions && (
+                  <div className="border-t border-slate-800/80 pt-2.5">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase block tracking-wider mb-1">Additional Instructions</span>
+                    <p className="text-slate-300 leading-relaxed whitespace-pre-wrap">{bankInfo.bankInstructions}</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Form inputs for verification */}
+              <div className="space-y-4 mb-6">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                    Your Phone Number <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    placeholder="Enter your phone number (e.g., 08031234567)"
+                    value={userPhone}
+                    onChange={(e) => setUserPhone(e.target.value)}
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-xs transition"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                    Transaction Reference / Session ID <span className="text-slate-600">(Optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Enter transaction reference or session ID"
+                    value={transactionRef}
+                    onChange={(e) => setTransactionRef(e.target.value)}
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-xs transition"
+                  />
+                </div>
+
+                {/* File upload drag and drop area */}
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                    Upload Payment Receipt Screenshot <span className="text-rose-500">*</span>
+                  </label>
+                  
+                  <div
+                    onDragEnter={handleDrag}
+                    onDragOver={handleDrag}
+                    onDragLeave={handleDrag}
+                    onDrop={handleDrop}
+                    onClick={() => document.getElementById('receipt-file-input')?.click()}
+                    className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition ${
+                      dragActive 
+                        ? 'border-rose-500 bg-rose-500/5' 
+                        : receiptBase64 
+                          ? 'border-emerald-500/50 bg-emerald-500/5' 
+                          : 'border-slate-800 hover:border-slate-700 bg-[#07080c]'
+                    }`}
+                  >
+                    <input
+                      id="receipt-file-input"
+                      type="file"
+                      accept="image/*"
+                      onChange={handleFileChange}
+                      className="hidden"
+                    />
+
+                    {receiptBase64 ? (
+                      <div className="space-y-3">
+                        <div className="w-16 h-16 mx-auto rounded-lg overflow-hidden border border-emerald-500/30">
+                          <img src={receiptBase64} alt="Receipt Preview" className="w-full h-full object-cover" />
+                        </div>
+                        <div className="text-xs">
+                          <span className="text-emerald-400 font-bold block">Receipt Selected!</span>
+                          <span className="text-slate-500 text-[10px] block truncate max-w-xs mx-auto">{receiptFileName}</span>
+                        </div>
+                        <span className="inline-block text-[10px] bg-slate-800 text-slate-300 py-1 px-3 rounded-lg hover:bg-slate-700">
+                          Change screenshot
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="w-10 h-10 bg-slate-900 border border-slate-800 rounded-lg flex items-center justify-center mx-auto text-slate-400">
+                          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 002-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                        </div>
+                        <div className="text-xs">
+                          <span className="text-slate-300 font-medium">Drag & drop receipt screenshot here</span>
+                          <span className="text-slate-500 block text-[10px] mt-1">or click to choose image file</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowManualPay(false)}
+                  className="flex-1 bg-[#0c0d14] hover:bg-[#141622] border border-slate-800 text-slate-400 font-bold py-3 px-4 rounded-xl text-xs transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleNotifyAdmin}
+                  disabled={loading}
+                  className="flex-[2] bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white font-bold py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 text-xs shadow-lg shadow-rose-950/20"
+                  id="notify-admin-button"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" /> Submitting & Opening WhatsApp...
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" /> I've Paid
+                    </>
+                  )}
+                </button>
               </div>
             </div>
+          ) : (
+            /* Billing Options Selector Panel */
+            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-8 text-center max-w-xl mx-auto shadow-2xl relative">
+              <div className="absolute top-0 right-0 bg-rose-600 text-white font-extrabold text-[10px] uppercase tracking-wider py-1.5 px-4 rounded-bl-xl">
+                Access Suspended
+              </div>
+              
+              <ShieldAlert className="w-12 h-12 text-rose-500 mx-auto mb-4" />
+              
+              <h3 className="text-xl font-display font-extrabold text-white">Streaming Access Paused</h3>
+              <p className="text-slate-400 text-sm mt-2 leading-relaxed">
+                Your ₦600 monthly plan is expired. Please renew your access to continue watching unlimited premium movies instantly.
+              </p>
 
-            <button
-              onClick={handlePayment}
-              disabled={loading}
-              className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-4 px-6 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 text-sm shadow-lg shadow-rose-950/20"
-              id="payment-simulate-button"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" /> Completing Secure Payment...
-                </>
-              ) : (
-                <>
-                  <CreditCard className="w-4.5 h-4.5" /> Pay ₦500 & Start Streaming
-                </>
-              )}
-            </button>
-            
-            <p className="text-[11px] text-slate-500 mt-4 leading-relaxed">
-              Instant activation and automatic connection are provided securely. Cancel any time.
-            </p>
-          </div>
+              <div className="bg-[#07080c] border border-slate-800/60 rounded-xl p-5 my-6 text-left text-xs space-y-3 max-w-sm mx-auto text-slate-300">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Monthly Plan Subscription:</span>
+                  <span className="text-white font-bold">₦600.00 NGN</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Duration:</span>
+                  <span className="text-white font-bold">30 Days Unlimited Access</span>
+                </div>
+                <div className="flex justify-between border-t border-slate-800/80 pt-3">
+                  <span className="text-slate-400">Media Platform:</span>
+                  <span className="text-rose-400 font-bold">Private Secured Jellyfin</span>
+                </div>
+              </div>
+
+              <div className="max-w-sm mx-auto">
+                <button
+                  onClick={() => setShowManualPay(true)}
+                  className="w-full bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white font-bold py-3.5 px-6 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer text-xs shadow-lg shadow-rose-950/20"
+                  id="pay-manually-button"
+                >
+                  <CreditCard className="w-4 h-4 text-white" /> Renew Subscription
+                </button>
+              </div>
+              
+              <p className="text-[11px] text-slate-500 mt-4 leading-relaxed">
+                Unlock instant access manually via bank transfer securely. Cancel any time.
+              </p>
+            </div>
+          )
         ) : (
           /* Active Streaming Player Controls */
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -337,6 +749,292 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
 
           </div>
         )}
+
+        {/* Affiliate Referral Program Section */}
+        {user.isAffiliate && (
+          <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 mt-8 shadow-xl relative" id="affiliate-dashboard-section">
+            <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-emerald-500/20 via-transparent to-transparent"></div>
+            
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-800/60 pb-6 mb-6">
+              <div>
+                <span className="text-xs text-emerald-400 font-semibold uppercase tracking-wider">Affiliate Program</span>
+                <h3 className="text-2xl font-display font-extrabold text-white tracking-tight mt-1">Your Referral Partner Dashboard</h3>
+                <p className="text-slate-400 text-sm mt-1">Invite friends and earn commissions on active subscriptions!</p>
+              </div>
+              <button
+                onClick={fetchAffiliateStats}
+                disabled={loadingStats}
+                className="bg-[#07080c] hover:bg-[#121422] border border-slate-800 text-xs text-slate-300 font-bold py-2 px-4 rounded-xl flex items-center gap-2 transition cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${loadingStats ? 'animate-spin' : ''}`} /> Refresh Stats
+              </button>
+            </div>
+
+            {loadingStats && !affiliateStats ? (
+              <div className="flex flex-col items-center justify-center py-12">
+                <Loader2 className="w-8 h-8 text-emerald-400 animate-spin mb-2" />
+                <span className="text-sm text-slate-400">Loading your referral details...</span>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                
+                {/* Promo link / Referral Code card */}
+                <div className="bg-[#07080c] border border-slate-800 rounded-xl p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                  <div>
+                    <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Your Unique Code</span>
+                    <div className="text-xl font-mono font-black text-white mt-1">
+                      {affiliateStats?.affiliateCode || user.affiliateCode || 'PENDING'}
+                    </div>
+                  </div>
+                  <div className="flex-1 w-full md:max-w-md">
+                    <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Referral Partner Link</span>
+                    <div className="flex mt-1">
+                      <input
+                        type="text"
+                        readOnly
+                        value={`${window.location.origin}?ref=${affiliateStats?.affiliateCode || user.affiliateCode}`}
+                        className="w-full bg-[#11131e] border border-slate-800 border-r-0 rounded-l-xl py-2 px-3 text-xs text-slate-300 font-mono focus:outline-none"
+                      />
+                      <button
+                        onClick={copyReferralLink}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 rounded-r-xl transition flex items-center gap-1.5 shrink-0 cursor-pointer"
+                      >
+                        {copied ? (
+                          <>
+                            <Check className="w-3.5 h-3.5" /> Copied!
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" /> Copy
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Key Metrics Grid */}
+                <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+                  <div className="bg-[#090a0f] border border-slate-800/80 rounded-xl p-4.5">
+                    <div className="flex justify-between items-start mb-2">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Total Referrals</span>
+                      <Users className="w-4 h-4 text-emerald-400" />
+                    </div>
+                    <span className="text-2xl font-black text-white">{affiliateStats?.registeredCount ?? 0}</span>
+                    <span className="block text-[10px] text-slate-500 mt-1">Sign ups via your code</span>
+                  </div>
+
+                  <div className="bg-[#090a0f] border border-slate-800/80 rounded-xl p-4.5">
+                    <div className="flex justify-between items-start mb-2">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Paid Subscribers</span>
+                      <UserCheck className="w-4 h-4 text-emerald-400" />
+                    </div>
+                    <span className="text-2xl font-black text-white">{affiliateStats?.paidCount ?? 0}</span>
+                    <span className="block text-[10px] text-slate-500 mt-1">Completed payment (active)</span>
+                  </div>
+
+                  <div className="bg-[#090a0f] border border-slate-800/80 rounded-xl p-4.5">
+                    <div className="flex justify-between items-start mb-2">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Commission Rate</span>
+                      <Percent className="w-4 h-4 text-emerald-400" />
+                    </div>
+                    <span className="text-2xl font-black text-white">₦{Number(affiliateStats?.defaultCommission ?? 100.00).toFixed(2)}</span>
+                    <span className="block text-[10px] text-slate-500 mt-1">Per paid sub (Admin set)</span>
+                  </div>
+
+                  <div className="bg-[#090a0f] border border-slate-800/80 rounded-xl p-4.5">
+                    <div className="flex justify-between items-start mb-2">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Awaiting Payout</span>
+                      <Clock className="w-4 h-4 text-amber-400" />
+                    </div>
+                    <span className="text-2xl font-black text-amber-400">₦{Number((affiliateStats?.pendingCommission ?? 0) + (affiliateStats?.approvedCommission ?? 0)).toFixed(2)}</span>
+                    <span className="block text-[10px] text-slate-500 mt-1">Unpaid balance (Pending)</span>
+                  </div>
+
+                  <div className="bg-[#090a0f] border border-slate-800/80 rounded-xl p-4.5 col-span-2 sm:col-span-1">
+                    <div className="flex justify-between items-start mb-2">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Paid Payouts</span>
+                      <DollarSign className="w-4 h-4 text-emerald-400" />
+                    </div>
+                    <span className="text-2xl font-black text-emerald-400">₦{Number(affiliateStats?.paidCommission ?? 0).toFixed(2)}</span>
+                    <span className="block text-[10px] text-slate-500 mt-1">Total payout settled</span>
+                  </div>
+                </div>
+
+                {/* Secondary Rates & Potential Bento row */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                  <div className="bg-[#07080c] border border-slate-800/60 rounded-xl p-4 flex justify-between items-center text-xs">
+                    <div>
+                      <span className="text-slate-500 block">Total Cumulative Earnings</span>
+                      <span className="text-slate-400 font-semibold">Sum of all referral payouts (Paid + Unpaid)</span>
+                    </div>
+                    <span className="text-lg font-black text-white">₦{Number(affiliateStats?.totalCommission ?? 0).toFixed(2)}</span>
+                  </div>
+
+                  <div className="bg-[#07080c] border border-slate-800/60 rounded-xl p-4 flex justify-between items-center text-xs">
+                    <div>
+                      <span className="text-slate-500 block">Potential Future Earnings</span>
+                      <span className="text-slate-400 font-semibold">From {Math.max(0, (affiliateStats?.registeredCount ?? 0) - (affiliateStats?.paidCount ?? 0))} unpaid signups</span>
+                    </div>
+                    <span className="text-lg font-black text-emerald-500">₦{Number(Math.max(0, (affiliateStats?.registeredCount ?? 0) - (affiliateStats?.paidCount ?? 0)) * Number(affiliateStats?.defaultCommission ?? 100.00)).toFixed(2)}</span>
+                  </div>
+                </div>
+
+                {/* Referrals & Commissions detailed tables split */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-2">
+                  
+                  {/* Referred Users List */}
+                  <div className="bg-[#090a0f] border border-slate-800 rounded-xl p-5">
+                    <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider border-b border-slate-800 pb-3 mb-4 flex items-center gap-1.5">
+                      <Users className="w-4 h-4 text-emerald-500" /> Referred Users List
+                    </h4>
+                    {!affiliateStats?.referredUsers || affiliateStats.referredUsers.length === 0 ? (
+                      <p className="text-xs text-slate-500 text-center py-6">No users have signed up with your code yet.</p>
+                    ) : (
+                      <div className="space-y-3.5 max-h-60 overflow-y-auto pr-1">
+                        {affiliateStats.referredUsers.map((refUser: any) => {
+                          const isPaid = refUser.paymentStatus === 'Paid' || refUser.subscriptionStatus === 'Active';
+                          return (
+                            <div key={refUser.id} className="flex justify-between items-center text-xs p-2.5 bg-[#11131e]/50 border border-slate-800/40 rounded-lg">
+                              <div>
+                                <span className="block font-bold text-slate-300">{refUser.fullName}</span>
+                                <span className="block text-[10px] text-slate-500">Joined {new Date(refUser.registrationDate).toLocaleDateString()}</span>
+                              </div>
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${isPaid ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-slate-800 text-slate-400'}`}>
+                                {isPaid ? 'Paid Subscriber' : 'Signed Up'}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Commissions History */}
+                  <div className="bg-[#090a0f] border border-slate-800 rounded-xl p-5">
+                    <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider border-b border-slate-800 pb-3 mb-4 flex items-center gap-1.5">
+                      <DollarSign className="w-4 h-4 text-emerald-500" /> Commission Records
+                    </h4>
+                    {!affiliateStats?.commissions || affiliateStats.commissions.length === 0 ? (
+                      <p className="text-xs text-slate-500 text-center py-6">No commissions have been recorded yet.</p>
+                    ) : (
+                      <div className="space-y-3.5 max-h-60 overflow-y-auto pr-1">
+                        {affiliateStats.commissions.map((c: any) => (
+                          <div key={c.id} className="flex justify-between items-center text-xs p-2.5 bg-[#11131e]/50 border border-slate-800/40 rounded-lg">
+                            <div>
+                              <span className="block font-bold text-white">₦{parseFloat(c.amount).toFixed(2)}</span>
+                              <span className="block text-[10px] text-slate-500">Ref ID: {c.id.substring(0, 8)} • {new Date(c.createdAt).toLocaleDateString()}</span>
+                            </div>
+                            <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-widest ${
+                              c.status === 'Paid' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                              c.status === 'Approved' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
+                              'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                            }`}>
+                              {c.status}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                </div>
+
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Support & Contact Details Section */}
+        {bankInfo && (bankInfo.contactEmail || bankInfo.contactPhone || bankInfo.contactWhatsApp || bankInfo.contactOther || bankInfo.chatbotInfo) && (
+          <div className="bg-[#11131e]/50 border border-slate-800/60 rounded-2xl p-6 mt-8 shadow-lg relative" id="support-contact-section">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+              <div>
+                <span className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider block">Customer Support & Assistance</span>
+                <h4 className="text-lg font-display font-extrabold text-white mt-1">Need help or have questions?</h4>
+                <p className="text-slate-400 text-xs mt-0.5 leading-relaxed max-w-xl">
+                  Get in touch with an administrator or utilize our support helper chatbot. We are here to ensure your streaming setup remains fully operational.
+                </p>
+              </div>
+
+              {bankInfo.chatbotInfo && (
+                <a 
+                  href={bankInfo.chatbotInfo.startsWith('http') ? bankInfo.chatbotInfo : `https://t.me/${bankInfo.chatbotInfo.replace('@', '')}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-5 rounded-xl text-xs uppercase tracking-wider transition flex items-center justify-center gap-1.5 self-start md:self-auto shadow-md"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  <span>Support Chatbot</span>
+                </a>
+              )}
+            </div>
+
+            {/* Chatbot Instructions */}
+            {bankInfo.chatbotInfo && bankInfo.chatbotInstructions && (
+              <div className="bg-[#07080c] border border-indigo-950/20 p-3 rounded-xl mt-4 text-[11px] text-indigo-300/90 flex items-center gap-2">
+                <Info className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span><strong>Chatbot Instructions:</strong> {bankInfo.chatbotInstructions}</span>
+              </div>
+            )}
+
+            {/* Contact Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 mt-5 pt-5 border-t border-slate-800/40 text-xs text-slate-300">
+              {bankInfo.contactEmail && (
+                <div className="flex items-start gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-[#07080c] border border-slate-800/60 flex items-center justify-center text-slate-400 shrink-0">
+                    <Tv className="w-3.5 h-3.5 text-rose-500" />
+                  </div>
+                  <div>
+                    <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">Email Address</span>
+                    <a href={`mailto:${bankInfo.contactEmail}`} className="text-slate-300 hover:text-rose-400 font-medium transition-colors break-all">
+                      {bankInfo.contactEmail}
+                    </a>
+                  </div>
+                </div>
+              )}
+
+              {bankInfo.contactPhone && (
+                <div className="flex items-start gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-[#07080c] border border-slate-800/60 flex items-center justify-center text-slate-400 shrink-0">
+                    <CheckCircle className="w-3.5 h-3.5 text-emerald-500" />
+                  </div>
+                  <div>
+                    <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">Phone Line</span>
+                    <a href={`tel:${bankInfo.contactPhone}`} className="text-slate-300 hover:text-rose-400 font-medium transition-colors">
+                      {bankInfo.contactPhone}
+                    </a>
+                  </div>
+                </div>
+              )}
+
+              {bankInfo.contactWhatsApp && (
+                <div className="flex items-start gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-[#07080c] border border-slate-800/60 flex items-center justify-center text-slate-400 shrink-0">
+                    <ExternalLink className="w-3.5 h-3.5 text-emerald-400" />
+                  </div>
+                  <div>
+                    <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">WhatsApp</span>
+                    <a 
+                      href={bankInfo.contactWhatsApp.startsWith('http') ? bankInfo.contactWhatsApp : `https://wa.me/${bankInfo.contactWhatsApp.replace(/[^0-9]/g, '')}`} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="text-slate-300 hover:text-emerald-400 font-medium transition-colors truncate block max-w-[200px]"
+                    >
+                      Connect on WhatsApp
+                    </a>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {bankInfo.contactOther && (
+              <div className="mt-4 text-[10px] text-slate-500 font-medium bg-slate-950/20 py-2 px-3 rounded-lg border border-slate-800/30">
+                <strong>Notice:</strong> {bankInfo.contactOther}
+              </div>
+            )}
+          </div>
+        )}
       </main>
 
       {/* RE-SYNC SESSION CREDENTIALS MODAL */}
@@ -388,6 +1086,62 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
                 {syncLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Confirm & Sync'}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* SYSTEM NOTIFICATION MODAL (Payment Accepted/Declined) */}
+      {showNotificationModal && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-[#11131e] border border-slate-800 rounded-2xl p-6 shadow-2xl relative text-center">
+            {notificationType === 'accepted' ? (
+              <>
+                <div className="inline-flex items-center justify-center p-4 bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 rounded-full mb-4 animate-bounce">
+                  <CheckCircle className="w-10 h-10" />
+                </div>
+                <h3 className="text-2xl font-display font-black text-white tracking-tight mb-2">
+                  Congratulations, accepted!
+                </h3>
+                <p className="text-slate-300 text-sm leading-relaxed mb-6">
+                  Your subscription payment has been successfully verified by our system. Welcome back! Your unlimited premium streaming access is now fully restored.
+                </p>
+                <button
+                  onClick={() => {
+                    setShowNotificationModal(false);
+                    setShowManualPay(false);
+                  }}
+                  className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold py-3 px-6 rounded-xl transition cursor-pointer text-sm shadow-lg shadow-emerald-950/20"
+                >
+                  Go to Dashboard
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="inline-flex items-center justify-center p-4 bg-rose-500/10 text-rose-500 border border-rose-500/25 rounded-full mb-4">
+                  <AlertTriangle className="w-10 h-10" />
+                </div>
+                <h3 className="text-2xl font-display font-black text-white tracking-tight mb-2">
+                  Payment Request Declined
+                </h3>
+                <p className="text-slate-300 text-sm leading-relaxed mb-4">
+                  We are sorry, but your payment verification request was declined by the administrator.
+                </p>
+                <div className="bg-rose-500/5 border border-rose-500/15 rounded-xl p-4 mb-6 text-left">
+                  <span className="block text-slate-500 text-[10px] uppercase font-bold tracking-wider mb-1">Reason Provided by Admin:</span>
+                  <p className="text-rose-200 text-xs font-medium italic leading-relaxed">
+                    "{notificationDeclineReason || 'No details provided.'}"
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowNotificationModal(false);
+                  }}
+                  className="w-full bg-[#1b1d2a] hover:bg-[#25283a] text-white border border-slate-700 font-bold py-3 px-6 rounded-xl transition cursor-pointer text-sm"
+                >
+                  Acknowledge & Retry
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}

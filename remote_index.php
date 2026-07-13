@@ -552,29 +552,10 @@ if ($method === 'GET' && $path === '/api/auth/me') {
             'role' => $currentUser['role'],
             'isAffiliate' => isset($currentUser['isAffiliate']) ? (bool)$currentUser['isAffiliate'] : false,
             'affiliateCode' => $currentUser['affiliateCode'] ?? null,
-            'referredBy' => $currentUser['referredBy'] ?? null,
-            'declineReason' => $currentUser['declineReason'] ?? null,
-            'systemNotification' => $currentUser['systemNotification'] ?? null
+            'referredBy' => $currentUser['referredBy'] ?? null
         ],
         'jellyfinToken' => $jellyfinAuthToken
     ]);
-    exit;
-}
-
-// POST /api/auth/clear-notification
-if ($method === 'POST' && $path === '/api/auth/clear-notification') {
-    if (!$currentUser) {
-        http_response_code(401);
-        echo json_encode(['error' => 'Unauthorized']);
-        exit;
-    }
-    try {
-        DB::updateUser($currentUser['id'], ['systemNotification' => null]);
-        echo json_encode(['success' => true]);
-    } catch (Exception $e) {
-        http_response_code(500);
-        echo json_encode(['error' => $e->getMessage()]);
-    }
     exit;
 }
 
@@ -754,12 +735,7 @@ if ($method === 'POST' && $path === '/api/payment/upload-receipt') {
             mkdir($uploadDir, 0755, true);
         }
 
-        if (strpos($base64Data, ';base64,') !== false) {
-            $parts = explode(';base64,', $base64Data);
-            $base64Image = end($parts);
-        } else {
-            $base64Image = $base64Data;
-        }
+        $base64Image = preg_replace('/^data:image\/\w+;base64,/, '', $base64Data);
         $decodedData = base64_decode($base64Image);
 
         $fileExt = pathinfo($fileName, PATHINFO_EXTENSION);
@@ -1314,8 +1290,7 @@ if ($method === 'POST' && $path === '/api/admin/payments/verify') {
                 'accountStatus' => 'Active',
                 'paymentStatus' => 'Paid',
                 'subscriptionExpiryDate' => $newExpiryDate,
-                'declineReason' => null,
-                'systemNotification' => 'accepted'
+                'declineReason' => null
             ]);
 
             // Generate affiliate commission if user has a valid referral
@@ -1337,8 +1312,7 @@ if ($method === 'POST' && $path === '/api/admin/payments/verify') {
         } elseif ($action === 'decline') {
             $updatedUser = DB::updateUser($userId, [
                 'paymentStatus' => 'Unpaid',
-                'declineReason' => !empty($declineReason) ? $declineReason : 'Payment verification failed',
-                'systemNotification' => 'declined'
+                'declineReason' => !empty($declineReason) ? $declineReason : 'Payment verification failed'
             ]);
 
             echo json_encode(['success' => true, 'user' => $updatedUser]);
