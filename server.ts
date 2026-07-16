@@ -1249,6 +1249,257 @@ app.post('/api/admin/commissions/:id/status', async (req: any, res) => {
   }
 });
 
+// GET /api/admin/affiliates
+app.get('/api/admin/affiliates', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const allUsers = await db.getUsers();
+    const affiliates = allUsers.filter(u => u.isAffiliate === 1);
+    const result = [];
+
+    for (const affiliate of affiliates) {
+      const commissions = await db.getCommissionsByAffiliate(affiliate.id);
+      const referredUsers = [];
+      let registeredCount = 0;
+      let paidCount = 0;
+
+      for (const u of allUsers) {
+        if (u.referredBy && u.referredBy.toUpperCase() === (affiliate.affiliateCode || '').toUpperCase()) {
+          registeredCount++;
+          const isPaid = u.paymentStatus === 'Paid' || u.subscriptionStatus === 'Active';
+          if (isPaid) {
+            paidCount++;
+          }
+          referredUsers.push({
+            id: u.id,
+            fullName: u.fullName,
+            username: u.username,
+            email: u.email,
+            registrationDate: u.registrationDate,
+            paymentStatus: u.paymentStatus,
+            subscriptionStatus: u.subscriptionStatus
+          });
+        }
+      }
+
+      let pendingCommission = 0.0;
+      let approvedCommission = 0.0;
+      let paidCommission = 0.0;
+      let totalCommission = 0.0;
+
+      for (const c of commissions) {
+        const amt = Number(c.amount);
+        totalCommission += amt;
+        if (c.status === 'Pending') {
+          pendingCommission += amt;
+        } else if (c.status === 'Approved') {
+          approvedCommission += amt;
+        } else if (c.status === 'Paid') {
+          paidCommission += amt;
+        }
+      }
+
+      result.push({
+        id: affiliate.id,
+        fullName: affiliate.fullName,
+        username: affiliate.username,
+        email: affiliate.email,
+        affiliateCode: affiliate.affiliateCode,
+        registrationDate: affiliate.registrationDate,
+        registeredCount,
+        paidCount,
+        pendingCommission,
+        approvedCommission,
+        paidCommission,
+        totalCommission,
+        referredUsers,
+        commissions
+      });
+    }
+
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/media/requests
+app.post('/api/media/requests', async (req: any, res) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const { type, title, releaseYear, season, episode } = req.body;
+  if (!type || !title) {
+    return res.status(400).json({ error: 'Type and Title are required' });
+  }
+
+  try {
+    const record = await db.createMediaRequest({
+      userId: req.user.id,
+      username: req.user.username,
+      type,
+      title,
+      releaseYear: releaseYear || null,
+      season: season || null,
+      episode: episode || null
+    });
+    res.json({ success: true, request: record });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/media/requests
+app.get('/api/media/requests', async (req: any, res) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    if (req.user.role === 'admin') {
+      const requests = await db.getMediaRequests();
+      res.json(requests);
+    } else {
+      const requests = await db.getMediaRequests();
+      const filtered = requests.filter(r => r.userId === req.user.id);
+      res.json(filtered);
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/admin/media/requests/:id
+app.put('/api/admin/media/requests/:id', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  const { status } = req.body;
+  if (status !== 'Pending' && status !== 'Approved' && status !== 'Declined') {
+    return res.status(400).json({ error: 'Invalid status' });
+  }
+
+  try {
+    await db.updateMediaRequestStatus(req.params.id, status);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/notifications/broadcast
+app.post('/api/admin/notifications/broadcast', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  const { title, message, imageUrl, targetType, targetUserId } = req.body;
+  if (!title || !message || !targetType) {
+    return res.status(400).json({ error: 'Title, message, and targetType are required' });
+  }
+
+  try {
+    const record = await db.createBroadcastNotification({
+      title,
+      message,
+      imageUrl: imageUrl || null,
+      targetType,
+      targetUserId: targetType === 'user' ? (targetUserId || null) : null
+    });
+    res.json({ success: true, notification: record });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/notifications/all
+app.get('/api/admin/notifications/all', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const allNotifs = await db.getBroadcastNotifications();
+    res.json(allNotifs);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/notifications/upload
+app.post('/api/admin/notifications/upload', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const { base64Data, fileName } = req.body;
+    if (!base64Data || !fileName) {
+      return res.status(400).json({ error: 'Missing base64Data or fileName' });
+    }
+
+    const uploadDir = path.join('uploads', 'notifications');
+    const distDirPath = path.join(process.cwd(), 'dist', uploadDir);
+    const publicDirPath = path.join(process.cwd(), 'public', uploadDir);
+
+    if (!fs.existsSync(distDirPath)) {
+      fs.mkdirSync(distDirPath, { recursive: true });
+    }
+    try {
+      if (!fs.existsSync(publicDirPath)) {
+        fs.mkdirSync(publicDirPath, { recursive: true });
+      }
+    } catch (e) {}
+
+    const base64Image = base64Data.replace(/^data:image\/\w+;base64,/, '');
+    const buffer = Buffer.from(base64Image, 'base64');
+    const fileExt = path.extname(fileName) || '.png';
+    const cleanFileName = `notif_${Date.now()}${fileExt}`;
+
+    const distFilePath = path.join(distDirPath, cleanFileName);
+    fs.writeFileSync(distFilePath, buffer);
+
+    try {
+      const publicFilePath = path.join(publicDirPath, cleanFileName);
+      fs.writeFileSync(publicFilePath, buffer);
+    } catch (e) {}
+
+    // Expose correct URL path
+    const relativeUrl = `/uploads/notifications/${cleanFileName}`;
+    res.json({ success: true, url: relativeUrl });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/notifications/broadcast
+app.get('/api/notifications/broadcast', async (req: any, res) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const allNotifs = await db.getBroadcastNotifications();
+    const user = req.user;
+    const filtered = allNotifs.filter(n => {
+      if (n.targetType === 'all') return true;
+      if (n.targetType === 'affiliate' && user.isAffiliate) return true;
+      if (n.targetType === 'paid' && user.subscriptionStatus === 'Active') return true;
+      if (n.targetType === 'free' && user.subscriptionStatus !== 'Active') return true;
+      if (n.targetType === 'user' && n.targetUserId === user.id) return true;
+      return false;
+    });
+    res.json(filtered);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- BACKGROUND EXPIRY JOB ---
 
 async function checkSubscriptionExpiries(): Promise<number> {

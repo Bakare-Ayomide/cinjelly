@@ -1270,6 +1270,325 @@ if ($method === 'POST' && preg_match('#^/api/admin/commissions/([^/]+)/status$#'
     exit;
 }
 
+// GET /api/admin/affiliates
+if ($method === 'GET' && $path === '/api/admin/affiliates') {
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+
+    try {
+        $allUsers = DB::getUsers();
+        $affiliates = [];
+        foreach ($allUsers as $u) {
+            if (!empty($u['isAffiliate']) && $u['isAffiliate'] == 1) {
+                $affiliates[] = $u;
+            }
+        }
+
+        $result = [];
+        foreach ($affiliates as $affiliate) {
+            $commissions = DB::getCommissionsByAffiliate($affiliate['id']);
+            $referredUsers = [];
+            $registeredCount = 0;
+            $paidCount = 0;
+
+            foreach ($allUsers as $u) {
+                if (!empty($u['referredBy']) && strtolower(trim($u['referredBy'])) === strtolower(trim($affiliate['affiliateCode'] ?? ''))) {
+                    $registeredCount++;
+                    $isPaid = ($u['paymentStatus'] === 'Paid' || $u['subscriptionStatus'] === 'Active');
+                    if ($isPaid) {
+                        $paidCount++;
+                    }
+                    $referredUsers[] = [
+                        'id' => $u['id'],
+                        'fullName' => $u['fullName'],
+                        'username' => $u['username'],
+                        'email' => $u['email'],
+                        'registrationDate' => $u['registrationDate'],
+                        'paymentStatus' => $u['paymentStatus'],
+                        'subscriptionStatus' => $u['subscriptionStatus']
+                    ];
+                }
+            }
+
+            $pendingCommission = 0.0;
+            $approvedCommission = 0.0;
+            $paidCommission = 0.0;
+            $totalCommission = 0.0;
+
+            foreach ($commissions as $c) {
+                $amt = (float)$c['amount'];
+                $totalCommission += $amt;
+                if ($c['status'] === 'Pending') {
+                    $pendingCommission += $amt;
+                } else if ($c['status'] === 'Approved') {
+                    $approvedCommission += $amt;
+                } else if ($c['status'] === 'Paid') {
+                    $paidCommission += $amt;
+                }
+            }
+
+            $result[] = [
+                'id' => $affiliate['id'],
+                'fullName' => $affiliate['fullName'],
+                'username' => $affiliate['username'],
+                'email' => $affiliate['email'],
+                'affiliateCode' => $affiliate['affiliateCode'],
+                'registrationDate' => $affiliate['registrationDate'],
+                'registeredCount' => $registeredCount,
+                'paidCount' => $paidCount,
+                'pendingCommission' => $pendingCommission,
+                'approvedCommission' => $approvedCommission,
+                'paidCommission' => $paidCommission,
+                'totalCommission' => $totalCommission,
+                'referredUsers' => $referredUsers,
+                'commissions' => $commissions
+            ];
+        }
+
+        echo json_encode($result);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// POST /api/media/requests
+if ($method === 'POST' && $path === '/api/media/requests') {
+    if (!$currentUser) {
+        http_response_code(401);
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+
+    $type = $input['type'] ?? '';
+    $title = $input['title'] ?? '';
+    $releaseYear = $input['releaseYear'] ?? null;
+    $season = $input['season'] ?? null;
+    $episode = $input['episode'] ?? null;
+
+    if (empty($type) || empty($title)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Type and Title are required']);
+        exit;
+    }
+
+    try {
+        $record = DB::createMediaRequest([
+            'userId' => $currentUser['id'],
+            'username' => $currentUser['username'],
+            'type' => $type,
+            'title' => $title,
+            'releaseYear' => $releaseYear,
+            'season' => $season,
+            'episode' => $episode
+        ]);
+        echo json_encode(['success' => true, 'request' => $record]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// GET /api/media/requests
+if ($method === 'GET' && $path === '/api/media/requests') {
+    if (!$currentUser) {
+        http_response_code(401);
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+
+    try {
+        $requests = DB::getMediaRequests();
+        if ($currentUser['role'] === 'admin') {
+            echo json_encode($requests);
+        } else {
+            $filtered = [];
+            foreach ($requests as $r) {
+                if ($r['userId'] === $currentUser['id']) {
+                    $filtered[] = $r;
+                }
+            }
+            echo json_encode($filtered);
+        }
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// PUT /api/admin/media/requests/{id}
+if ($method === 'PUT' && preg_match('#^/api/admin/media/requests/([^/]+)$#', $path, $matches)) {
+    $requestId = $matches[1];
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+
+    $status = $input['status'] ?? '';
+    if ($status !== 'Pending' && $status !== 'Approved' && $status !== 'Declined') {
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid status']);
+        exit;
+    }
+
+    try {
+        DB::updateMediaRequestStatus($requestId, $status);
+        echo json_encode(['success' => true]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// POST /api/admin/notifications/broadcast
+if ($method === 'POST' && $path === '/api/admin/notifications/broadcast') {
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+
+    $title = $input['title'] ?? '';
+    $message = $input['message'] ?? '';
+    $imageUrl = $input['imageUrl'] ?? null;
+    $targetType = $input['targetType'] ?? 'all';
+    $targetUserId = $input['targetUserId'] ?? null;
+
+    if (empty($title) || empty($message) || empty($targetType)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Title, message, and targetType are required']);
+        exit;
+    }
+
+    try {
+        $record = DB::createBroadcastNotification([
+            'title' => $title,
+            'message' => $message,
+            'imageUrl' => $imageUrl,
+            'targetType' => $targetType,
+            'targetUserId' => $targetType === 'user' ? $targetUserId : null
+        ]);
+        echo json_encode(['success' => true, 'notification' => $record]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// GET /api/admin/notifications/all
+if ($method === 'GET' && $path === '/api/admin/notifications/all') {
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+    try {
+        $allNotifs = DB::getBroadcastNotifications();
+        echo json_encode($allNotifs);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// POST /api/admin/notifications/upload
+if ($method === 'POST' && $path === '/api/admin/notifications/upload') {
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+
+    $base64Data = $input['base64Data'] ?? '';
+    $fileName = $input['fileName'] ?? '';
+
+    if (empty($base64Data) || empty($fileName)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Missing base64Data or fileName']);
+        exit;
+    }
+
+    try {
+        $uploadDir = dirname(__DIR__) . '/uploads/notifications';
+        if (!file_exists($uploadDir)) {
+            mkdir($uploadDir, 0755, true);
+        }
+
+        if (strpos($base64Data, ';base64,') !== false) {
+            $parts = explode(';base64,', $base64Data);
+            $base64Image = end($parts);
+        } else {
+            $base64Image = $base64Data;
+        }
+        $decodedData = base64_decode($base64Image);
+
+        $fileExt = pathinfo($fileName, PATHINFO_EXTENSION);
+        if (empty($fileExt)) {
+            $fileExt = 'png';
+        }
+        $cleanFileName = 'notif_' . time() . '.' . $fileExt;
+        $filePath = $uploadDir . '/' . $cleanFileName;
+
+        file_put_contents($filePath, $decodedData);
+        $relativeUrl = '/uploads/notifications/' . $cleanFileName;
+
+        echo json_encode(['success' => true, 'url' => $relativeUrl]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// GET /api/notifications/broadcast
+if ($method === 'GET' && $path === '/api/notifications/broadcast') {
+    if (!$currentUser) {
+        http_response_code(401);
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+
+    try {
+        $allNotifs = DB::getBroadcastNotifications();
+        $filtered = [];
+
+        foreach ($allNotifs as $n) {
+            $isTarget = false;
+            if ($n['targetType'] === 'all') {
+                $isTarget = true;
+            } else if ($n['targetType'] === 'affiliate' && !empty($currentUser['isAffiliate']) && $currentUser['isAffiliate'] == 1) {
+                $isTarget = true;
+            } else if ($n['targetType'] === 'paid' && $currentUser['subscriptionStatus'] === 'Active') {
+                $isTarget = true;
+            } else if ($n['targetType'] === 'free' && $currentUser['subscriptionStatus'] !== 'Active') {
+                $isTarget = true;
+            } else if ($n['targetType'] === 'user' && !empty($n['targetUserId']) && $n['targetUserId'] === $currentUser['id']) {
+                $isTarget = true;
+            }
+
+            if ($isTarget) {
+                $filtered[] = $n;
+            }
+        }
+
+        echo json_encode($filtered);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
 // POST /api/admin/payments/verify
 if ($method === 'POST' && $path === '/api/admin/payments/verify') {
     if (!$currentUser || $currentUser['role'] !== 'admin') {
@@ -1317,6 +1636,15 @@ if ($method === 'POST' && $path === '/api/admin/payments/verify') {
                 'declineReason' => null,
                 'systemNotification' => 'accepted'
             ]);
+
+            if (!empty($userToVerify['jellyfinUserId']) && $config) {
+                try {
+                    $jellyfin = new JellyfinService($config);
+                    $jellyfin->setUserDisabledStatus($userToVerify['jellyfinUserId'], false);
+                } catch (Exception $e) {
+                    // Ignore or log
+                }
+            }
 
             // Generate affiliate commission if user has a valid referral
             if (!empty($userToVerify['referredBy'])) {

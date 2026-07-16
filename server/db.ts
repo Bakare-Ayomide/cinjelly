@@ -56,6 +56,29 @@ export interface CommissionRecord {
   updatedAt: string;
 }
 
+export interface MediaRequestRecord {
+  id: string;
+  userId: string;
+  username: string;
+  type: 'movie' | 'show';
+  title: string;
+  releaseYear?: string;
+  season?: string;
+  episode?: string;
+  status: 'Pending' | 'Approved' | 'Declined';
+  createdAt: string;
+}
+
+export interface BroadcastNotificationRecord {
+  id: string;
+  title: string;
+  message: string;
+  imageUrl?: string;
+  targetType: 'all' | 'affiliate' | 'paid' | 'free' | 'user';
+  targetUserId?: string;
+  createdAt: string;
+}
+
 export let mysqlAvailable = false;
 export let mysqlErrorMsg: string | null = null;
 
@@ -70,6 +93,8 @@ const memoryConfig: JellyfinConfig = {
 export let localSystemConfig: JellyfinConfig | null = memoryConfig;
 export const localUsers: UserRecord[] = [];
 export const localCommissions: CommissionRecord[] = [];
+export const localMediaRequests: MediaRequestRecord[] = [];
+export const localBroadcastNotifications: BroadcastNotificationRecord[] = [];
 export const localSessions = new Map<string, { userId: string; expiresAt: number; jellyfinToken: string }>();
 
 // Create connection pool to the user's MySQL database
@@ -170,6 +195,36 @@ export async function initDb() {
         updatedAt VARCHAR(255) NOT NULL
       )
     `);
+
+    // Create media_requests table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS media_requests (
+        id VARCHAR(255) PRIMARY KEY,
+        userId VARCHAR(255) NOT NULL,
+        username VARCHAR(255) NOT NULL,
+        type VARCHAR(50) NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        releaseYear VARCHAR(50) NULL,
+        season VARCHAR(50) NULL,
+        episode VARCHAR(50) NULL,
+        status VARCHAR(50) NOT NULL DEFAULT 'Pending',
+        createdAt VARCHAR(255) NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Create broadcast_notifications table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS broadcast_notifications (
+        id VARCHAR(255) PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        message TEXT NOT NULL,
+        imageUrl TEXT NULL,
+        targetType VARCHAR(50) NOT NULL DEFAULT 'all',
+        createdAt VARCHAR(255) NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    try { await pool.query("ALTER TABLE broadcast_notifications ADD COLUMN targetUserId VARCHAR(255) NULL"); } catch (e) {}
     
     console.log('[MySQL] Database tables checked and ready.');
     mysqlAvailable = true;
@@ -594,5 +649,77 @@ export const db = {
     } catch (err) {
       console.error('Error cleaning up sessions:', err);
     }
+  },
+
+  async createMediaRequest(req: Omit<MediaRequestRecord, 'id' | 'createdAt' | 'status'>): Promise<MediaRequestRecord> {
+    const id = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
+    const record: MediaRequestRecord = {
+      ...req,
+      id,
+      status: 'Pending',
+      createdAt
+    };
+
+    if (!mysqlAvailable) {
+      localMediaRequests.push(record);
+      return record;
+    }
+
+    await pool.query(`
+      INSERT INTO media_requests (id, userId, username, type, title, releaseYear, season, episode, status, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?)
+    `, [id, record.userId, record.username, record.type, record.title, record.releaseYear || null, record.season || null, record.episode || null, createdAt]);
+
+    return record;
+  },
+
+  async getMediaRequests(): Promise<MediaRequestRecord[]> {
+    if (!mysqlAvailable) {
+      return localMediaRequests;
+    }
+    const [rows]: any = await pool.query('SELECT * FROM media_requests ORDER BY createdAt DESC');
+    return rows;
+  },
+
+  async updateMediaRequestStatus(id: string, status: 'Pending' | 'Approved' | 'Declined'): Promise<void> {
+    if (!mysqlAvailable) {
+      const idx = localMediaRequests.findIndex(r => r.id === id);
+      if (idx !== -1) {
+        localMediaRequests[idx].status = status;
+      }
+      return;
+    }
+    await pool.query('UPDATE media_requests SET status = ? WHERE id = ?', [status, id]);
+  },
+
+  async createBroadcastNotification(notif: Omit<BroadcastNotificationRecord, 'id' | 'createdAt'>): Promise<BroadcastNotificationRecord> {
+    const id = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
+    const record: BroadcastNotificationRecord = {
+      ...notif,
+      id,
+      createdAt
+    };
+
+    if (!mysqlAvailable) {
+      localBroadcastNotifications.push(record);
+      return record;
+    }
+
+    await pool.query(`
+      INSERT INTO broadcast_notifications (id, title, message, imageUrl, targetType, targetUserId, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [id, record.title, record.message, record.imageUrl || null, record.targetType, record.targetUserId || null, createdAt]);
+
+    return record;
+  },
+
+  async getBroadcastNotifications(): Promise<BroadcastNotificationRecord[]> {
+    if (!mysqlAvailable) {
+      return localBroadcastNotifications;
+    }
+    const [rows]: any = await pool.query('SELECT * FROM broadcast_notifications ORDER BY createdAt DESC');
+    return rows;
   }
 };

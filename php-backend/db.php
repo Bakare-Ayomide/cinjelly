@@ -175,6 +175,38 @@ class DB {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ");
 
+        // Create media_requests table
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS media_requests (
+                id VARCHAR(255) PRIMARY KEY,
+                userId VARCHAR(255) NOT NULL,
+                username VARCHAR(255) NOT NULL,
+                type VARCHAR(50) NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                releaseYear VARCHAR(50) NULL,
+                season VARCHAR(50) NULL,
+                episode VARCHAR(50) NULL,
+                status VARCHAR(50) NOT NULL DEFAULT 'Pending',
+                createdAt VARCHAR(255) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        // Create broadcast_notifications table
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS broadcast_notifications (
+                id VARCHAR(255) PRIMARY KEY,
+                title VARCHAR(255) NOT NULL,
+                message TEXT NOT NULL,
+                imageUrl TEXT NULL,
+                targetType VARCHAR(50) NOT NULL DEFAULT 'all',
+                createdAt VARCHAR(255) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        try {
+            $pdo->exec("ALTER TABLE broadcast_notifications ADD COLUMN targetUserId VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+
         // Seed default Jellyfin configurations if the system_config table is empty
         try {
             $count = $pdo->query("SELECT COUNT(*) FROM system_config")->fetchColumn();
@@ -557,5 +589,72 @@ class DB {
         $now = date(DATE_ISO8601);
         $stmt = $pdo->prepare('UPDATE commissions SET status = ?, updatedAt = ? WHERE id = ?');
         $stmt->execute([$status, $now, $id]);
+    }
+
+    public static function createMediaRequest($req) {
+        $pdo = self::getConnection();
+        $id = self::generateUUID();
+        $now = date(DATE_ISO8601);
+        $stmt = $pdo->prepare('
+            INSERT INTO media_requests (id, userId, username, type, title, releaseYear, season, episode, status, createdAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, "Pending", ?)
+        ');
+        $stmt->execute([
+            $id,
+            $req['userId'],
+            $req['username'],
+            $req['type'],
+            $req['title'],
+            $req['releaseYear'] ?? null,
+            $req['season'] ?? null,
+            $req['episode'] ?? null,
+            $now
+        ]);
+        return array_merge($req, [
+            'id' => $id,
+            'status' => 'Pending',
+            'createdAt' => $now
+        ]);
+    }
+
+    public static function getMediaRequests() {
+        $pdo = self::getConnection();
+        $stmt = $pdo->query('SELECT * FROM media_requests ORDER BY createdAt DESC');
+        return $stmt->fetchAll();
+    }
+
+    public static function updateMediaRequestStatus($id, $status) {
+        $pdo = self::getConnection();
+        $stmt = $pdo->prepare('UPDATE media_requests SET status = ? WHERE id = ?');
+        $stmt->execute([$status, $id]);
+    }
+
+    public static function createBroadcastNotification($notif) {
+        $pdo = self::getConnection();
+        $id = self::generateUUID();
+        $now = date(DATE_ISO8601);
+        $stmt = $pdo->prepare('
+            INSERT INTO broadcast_notifications (id, title, message, imageUrl, targetType, targetUserId, createdAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ');
+        $stmt->execute([
+            $id,
+            $notif['title'],
+            $notif['message'],
+            $notif['imageUrl'] ?? null,
+            $notif['targetType'],
+            $notif['targetUserId'] ?? null,
+            $now
+        ]);
+        return array_merge($notif, [
+            'id' => $id,
+            'createdAt' => $now
+        ]);
+    }
+
+    public static function getBroadcastNotifications() {
+        $pdo = self::getConnection();
+        $stmt = $pdo->query('SELECT * FROM broadcast_notifications ORDER BY createdAt DESC');
+        return $stmt->fetchAll();
     }
 }

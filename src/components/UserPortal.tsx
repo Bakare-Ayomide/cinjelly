@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Tv, LogOut, CheckCircle, AlertTriangle, Play, ShieldAlert, CreditCard, 
   Loader2, RefreshCw, Key, HelpCircle, ArrowLeft, ExternalLink, X, Info, UserCheck, Calendar,
-  Users, DollarSign, Gift, Clock, Share2, Copy, Check, Percent, MessageSquare
+  Users, DollarSign, Gift, Clock, Share2, Copy, Check, Percent, MessageSquare, PlusCircle, Bell
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -43,6 +43,91 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
   const [showNotificationModal, setShowNotificationModal] = useState(false);
   const [notificationType, setNotificationType] = useState<'accepted' | 'declined' | null>(null);
   const [notificationDeclineReason, setNotificationDeclineReason] = useState<string>('');
+  const [redirectCountdown, setRedirectCountdown] = useState<number | null>(null);
+
+  // Broadcast & media request states
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [loadingNotifs, setLoadingNotifs] = useState(false);
+  const [showRequestModal, setShowRequestModal] = useState(false);
+  const [showHeaderNotifs, setShowHeaderNotifs] = useState(false);
+  const [selectedModalNotif, setSelectedModalNotif] = useState<any | null>(null);
+  
+  const [requestTitle, setRequestTitle] = useState('');
+  const [requestType, setRequestType] = useState<'movie' | 'show'>('movie');
+  const [requestYear, setRequestYear] = useState('');
+  const [requestSeason, setRequestSeason] = useState('');
+  const [requestEpisode, setRequestEpisode] = useState('');
+  const [requestIsFullSeason, setRequestIsFullSeason] = useState(true);
+  const [submittingRequest, setSubmittingRequest] = useState(false);
+  
+  const [userRequests, setUserRequests] = useState<any[]>([]);
+  const [loadingUserRequests, setLoadingUserRequests] = useState(false);
+
+  const fetchNotifications = async () => {
+    setLoadingNotifs(true);
+    try {
+      const res = await fetch('/api/notifications/broadcast');
+      if (res.ok) {
+        const data = await res.json();
+        setNotifications(data);
+      }
+    } catch (e) {
+      console.error('Error loading notifications:', e);
+    } finally {
+      setLoadingNotifs(false);
+    }
+  };
+
+  const fetchUserRequests = async () => {
+    setLoadingUserRequests(true);
+    try {
+      const res = await fetch('/api/media/requests');
+      if (res.ok) {
+        const data = await res.json();
+        setUserRequests(data);
+      }
+    } catch (e) {
+      console.error('Error loading user requests:', e);
+    } finally {
+      setLoadingUserRequests(false);
+    }
+  };
+
+  const handleMediaRequestSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmittingRequest(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const payload = {
+        type: requestType,
+        title: requestTitle,
+        releaseYear: requestType === 'movie' ? requestYear : null,
+        season: requestType === 'show' ? requestSeason : null,
+        episode: (requestType === 'show' && !requestIsFullSeason) ? requestEpisode : null
+      };
+      const res = await fetch('/api/media/requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to submit request');
+      }
+      setSuccess(`Media request for "${requestTitle}" submitted successfully!`);
+      setShowRequestModal(false);
+      setRequestTitle('');
+      setRequestYear('');
+      setRequestSeason('');
+      setRequestEpisode('');
+      fetchUserRequests();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSubmittingRequest(false);
+    }
+  };
 
   const handleFile = (file: File) => {
     if (!file.type.startsWith('image/')) {
@@ -163,6 +248,8 @@ Note: My payment receipt has been uploaded to the portal.`;
       fetchAffiliateStats();
     }
     fetchBankInfo();
+    fetchNotifications();
+    fetchUserRequests();
   }, [user.isAffiliate, user.subscriptionStatus, user.role]);
 
   // Listen for system notifications
@@ -174,6 +261,9 @@ Note: My payment receipt has been uploaded to the portal.`;
       
       if (user.systemNotification === 'accepted') {
         setShowManualPay(false);
+        setRedirectCountdown(5);
+      } else {
+        setRedirectCountdown(null);
       }
 
       // Clear notification on backend
@@ -186,6 +276,21 @@ Note: My payment receipt has been uploaded to the portal.`;
         .catch(err => console.error('Error clearing system notification:', err));
     }
   }, [user.systemNotification, user.declineReason, onReloadUser]);
+
+  // Countdown for automatic redirect when accepted
+  useEffect(() => {
+    if (redirectCountdown === null) return;
+    if (redirectCountdown <= 0) {
+      setShowNotificationModal(false);
+      setShowManualPay(false);
+      setRedirectCountdown(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setRedirectCountdown(prev => (prev !== null ? prev - 1 : null));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [redirectCountdown]);
 
   // Poll for verification updates if status is Pending Verification
   useEffect(() => {
@@ -375,6 +480,61 @@ Note: My payment receipt has been uploaded to the portal.`;
           </div>
         </div>
         <div className="flex items-center gap-4 sm:gap-6">
+          {/* Notification bell and dropdown list */}
+          <div className="relative">
+            <button
+              onClick={() => setShowHeaderNotifs(!showHeaderNotifs)}
+              className="relative p-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-white transition cursor-pointer flex items-center justify-center shadow-md hover:shadow-lg"
+              title="View notifications"
+            >
+              <Bell className="w-4 h-4 text-rose-400" />
+              {notifications.length > 0 && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-600 text-[9px] font-extrabold text-white rounded-full flex items-center justify-center animate-pulse">
+                  {notifications.length}
+                </span>
+              )}
+            </button>
+            {showHeaderNotifs && (
+              <>
+                <div 
+                  className="fixed inset-0 z-40" 
+                  onClick={() => setShowHeaderNotifs(false)} 
+                />
+                <div className="absolute right-0 mt-2 w-80 bg-[#11131e] border border-slate-800 rounded-2xl shadow-2xl z-50 overflow-hidden text-left py-2 animate-in fade-in slide-in-from-top-3 duration-200">
+                  <div className="px-4 py-2.5 border-b border-slate-800/80 flex items-center justify-between bg-slate-950/20">
+                    <span className="font-extrabold text-xs text-white uppercase tracking-wider font-display">Notifications</span>
+                    <span className="text-[10px] bg-rose-500/10 text-rose-400 px-2 py-0.5 rounded-full font-bold">{notifications.length} unread</span>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto divide-y divide-slate-800/50">
+                    {notifications.map((notif, idx) => (
+                      <button
+                        key={notif.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedModalNotif(notif);
+                          setShowHeaderNotifs(false);
+                        }}
+                        className="w-full px-4 py-3 text-left hover:bg-slate-900/60 transition block cursor-pointer group"
+                      >
+                        <span className="text-rose-400 text-[9px] font-extrabold block mb-0.5 uppercase tracking-wide">
+                          Notification {idx + 1}
+                        </span>
+                        <span className="font-bold text-xs text-white block truncate group-hover:text-rose-400 transition">{notif.title}</span>
+                        <span className="text-[10px] text-slate-400 block truncate mt-0.5">{notif.message}</span>
+                        <span className="text-[9px] text-slate-500 block mt-1 font-mono">{new Date(notif.createdAt).toLocaleDateString()}</span>
+                      </button>
+                    ))}
+                    {notifications.length === 0 && (
+                      <div className="py-8 text-center text-xs text-slate-500 font-medium">
+                        No announcements available.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
           {user.role === 'admin' && (
             <button 
               onClick={() => { window.location.href = '#admin'; }}
@@ -750,6 +910,270 @@ Note: My payment receipt has been uploaded to the portal.`;
           </div>
         )}
 
+        {/* Community Announcements Feed & Media Requests Section */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-8">
+          
+          {/* Targeted Broadcast Notifications Feed */}
+          <div className="lg:col-span-2 bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 shadow-xl relative">
+            <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-sky-500/20 via-transparent to-transparent"></div>
+            
+            <div className="flex items-center justify-between border-b border-slate-800/60 pb-4 mb-5">
+              <div className="flex items-center gap-2">
+                <MessageSquare className="w-5 h-5 text-sky-400" />
+                <h3 className="text-lg font-display font-extrabold text-white">Broadcast Announcements</h3>
+              </div>
+              <button
+                onClick={fetchNotifications}
+                disabled={loadingNotifs}
+                className="text-slate-500 hover:text-slate-300 transition text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5"
+              >
+                <RefreshCw className={`w-3 h-3 ${loadingNotifs ? 'animate-spin' : ''}`} /> Refresh
+              </button>
+            </div>
+
+            {loadingNotifs && notifications.length === 0 ? (
+              <div className="py-12 text-center text-slate-500">
+                <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-sky-400" />
+                <span className="text-xs">Checking for announcements...</span>
+              </div>
+            ) : notifications.length === 0 ? (
+              <div className="text-center py-12 bg-[#07080c] rounded-2xl border border-slate-800/40">
+                <Info className="w-10 h-10 text-slate-700 mx-auto mb-2" />
+                <h4 className="text-slate-300 font-semibold text-xs">No active broadcasts</h4>
+                <p className="text-slate-500 text-[10px] mt-1">Announcements or system updates will appear here when pushed by administrators.</p>
+              </div>
+            ) : (
+              <div className="space-y-4 max-h-[500px] overflow-y-auto pr-1">
+                {notifications.map((notif) => {
+                  const isVideo = notif.imageUrl && (
+                    notif.imageUrl.endsWith('.mp4') || 
+                    notif.imageUrl.endsWith('.webm') || 
+                    notif.imageUrl.endsWith('.ogg') || 
+                    notif.imageUrl.endsWith('.mov') ||
+                    notif.imageUrl.includes('/video/')
+                  );
+
+                  return (
+                    <div 
+                      key={notif.id} 
+                      onClick={() => setSelectedModalNotif(notif)}
+                      className="bg-[#07080c] border border-slate-800/80 rounded-xl p-5 hover:border-sky-500/40 transition text-left cursor-pointer hover:bg-slate-900/10 group"
+                    >
+                      <div className="flex justify-between items-start gap-4 mb-2">
+                        <h4 className="text-white font-bold text-sm group-hover:text-sky-400 transition">{notif.title}</h4>
+                        <span className="text-[9px] text-slate-500 font-mono shrink-0">{new Date(notif.createdAt).toLocaleDateString()}</span>
+                      </div>
+                      <p className="text-slate-300 text-xs leading-relaxed whitespace-pre-wrap">{notif.message}</p>
+                      
+                      {notif.imageUrl && (
+                        <div className="mt-3.5 rounded-lg overflow-hidden border border-slate-800 bg-slate-950/40 w-fit max-w-full">
+                          {isVideo ? (
+                            <video 
+                              src={notif.imageUrl} 
+                              controls 
+                              onClick={(e) => e.stopPropagation()} // don't open modal when clicking video controls
+                              className="max-w-full h-auto rounded-lg block" 
+                            />
+                          ) : (
+                            <img 
+                              src={notif.imageUrl} 
+                              alt={notif.title} 
+                              referrerPolicy="no-referrer" 
+                              className="max-w-full h-auto rounded-lg block" 
+                            />
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* User Movie/Show Request Console */}
+          <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 shadow-xl relative">
+            <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-cyan-500/20 via-transparent to-transparent"></div>
+            
+            <div className="flex items-center justify-between border-b border-slate-800/60 pb-4 mb-5">
+              <div className="flex items-center gap-2">
+                <Tv className="w-5 h-5 text-cyan-400" />
+                <h3 className="text-lg font-display font-extrabold text-white">Movie/Show Request</h3>
+              </div>
+            </div>
+
+            <p className="text-slate-400 text-xs mb-5 leading-relaxed text-left">
+              Can't find your favorite movie or TV show? Submit a request and our admin team will source and add it to our server!
+            </p>
+
+            <button
+              onClick={() => setShowRequestModal(true)}
+              className="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-3 px-4 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shadow-lg shadow-cyan-950/20 mb-6"
+            >
+              <PlusCircle className="w-4 h-4" /> Request Movie or Show
+            </button>
+
+            {/* List User's own previous requests */}
+            <div className="space-y-3 text-left">
+              <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Your Request History ({userRequests.length})</h4>
+              
+              {loadingUserRequests && userRequests.length === 0 ? (
+                <div className="py-4 text-center text-slate-600">
+                  <Loader2 className="w-4 h-4 animate-spin mx-auto text-cyan-400" />
+                </div>
+              ) : userRequests.length === 0 ? (
+                <p className="text-slate-600 text-[11px] italic">You have not requested any content yet.</p>
+              ) : (
+                <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                  {userRequests.map((req) => (
+                    <div key={req.id} className="bg-[#07080c] border border-slate-800 p-3 rounded-xl flex items-center justify-between gap-3 text-xs">
+                      <div className="min-w-0">
+                        <span className="font-semibold text-white truncate block">{req.title}</span>
+                        <span className="text-[10px] text-slate-500 block">
+                          {req.type === 'movie' ? `Movie (${req.releaseYear || 'N/A'})` : `Show (S:${req.season || 'All'} E:${req.episode || 'All'})`}
+                        </span>
+                      </div>
+                      <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${req.status === 'Approved' ? 'bg-emerald-500/10 text-emerald-400' : req.status === 'Declined' ? 'bg-rose-500/10 text-rose-400' : 'bg-cyan-500/10 text-cyan-400'}`}>
+                        {req.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+        </div>
+
+        {/* Custom Movie/Show Request Modal Form */}
+        {showRequestModal && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl w-full max-w-md p-6 sm:p-8 shadow-2xl relative">
+              <button
+                onClick={() => setShowRequestModal(false)}
+                className="absolute top-4 right-4 text-slate-400 hover:text-white transition cursor-pointer bg-transparent border-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="mb-6 text-left">
+                <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
+                  <PlusCircle className="w-5 h-5 text-cyan-400" />
+                  <span>Request Content</span>
+                </h3>
+                <p className="text-slate-400 text-xs mt-1">Submit the movie or TV show you want to watch on Jellyfin.</p>
+              </div>
+
+              <form onSubmit={handleMediaRequestSubmit} className="space-y-4 text-left">
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-slate-300">Content Type</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setRequestType('movie')}
+                      className={`py-2 px-4 rounded-xl text-xs font-bold border transition cursor-pointer ${requestType === 'movie' ? 'bg-cyan-500/10 border-cyan-500 text-cyan-400' : 'bg-[#07080c] border-slate-800 text-slate-400 hover:border-slate-700'}`}
+                    >
+                      Movie
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRequestType('show')}
+                      className={`py-2 px-4 rounded-xl text-xs font-bold border transition cursor-pointer ${requestType === 'show' ? 'bg-cyan-500/10 border-cyan-500 text-cyan-400' : 'bg-[#07080c] border-slate-800 text-slate-400 hover:border-slate-700'}`}
+                    >
+                      TV Show
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-slate-300">Title</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Enter full title of movie or show"
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-cyan-500 transition"
+                    value={requestTitle}
+                    onChange={(e) => setRequestTitle(e.target.value)}
+                  />
+                </div>
+
+                {requestType === 'movie' ? (
+                  <div className="space-y-1">
+                    <label className="block text-xs font-bold text-slate-300">Release Year (Optional)</label>
+                    <input
+                      type="number"
+                      placeholder="e.g. 2026"
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-cyan-500 transition"
+                      value={requestYear}
+                      onChange={(e) => setRequestYear(e.target.value)}
+                    />
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 py-1">
+                      <input
+                        type="checkbox"
+                        id="fullSeasonCheckbox"
+                        className="rounded border-slate-800 text-cyan-500 focus:ring-cyan-500"
+                        checked={requestIsFullSeason}
+                        onChange={(e) => setRequestIsFullSeason(e.target.checked)}
+                      />
+                      <label htmlFor="fullSeasonCheckbox" className="text-xs text-slate-300 font-semibold cursor-pointer select-none">
+                        Complete Season (All Episodes)
+                      </label>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase">Season Number</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="e.g. 1"
+                          className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-cyan-500 transition"
+                          value={requestSeason}
+                          onChange={(e) => setRequestSeason(e.target.value)}
+                        />
+                      </div>
+                      {!requestIsFullSeason && (
+                        <div className="space-y-1">
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase">Episode Number</label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="e.g. 4"
+                            className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-cyan-500 transition"
+                            value={requestEpisode}
+                            onChange={(e) => setRequestEpisode(e.target.value)}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-3 pt-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowRequestModal(false)}
+                    className="bg-[#07080c] border border-slate-800 text-slate-400 font-bold py-2.5 px-4 rounded-xl text-xs hover:text-white transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submittingRequest}
+                    className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2.5 px-6 rounded-xl text-xs transition cursor-pointer flex items-center gap-2"
+                  >
+                    {submittingRequest ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                    Submit Request
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
         {/* Affiliate Referral Program Section */}
         {user.isAffiliate && (
           <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 mt-8 shadow-xl relative" id="affiliate-dashboard-section">
@@ -1109,10 +1533,11 @@ Note: My payment receipt has been uploaded to the portal.`;
                   onClick={() => {
                     setShowNotificationModal(false);
                     setShowManualPay(false);
+                    setRedirectCountdown(null);
                   }}
                   className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold py-3 px-6 rounded-xl transition cursor-pointer text-sm shadow-lg shadow-emerald-950/20"
                 >
-                  Go to Dashboard
+                  Go to Dashboard {redirectCountdown !== null ? `(${redirectCountdown}s)` : ''}
                 </button>
               </>
             ) : (
@@ -1142,6 +1567,68 @@ Note: My payment receipt has been uploaded to the portal.`;
                 </button>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* COMPLETE FULL NOTIFICATION MODAL */}
+      {selectedModalNotif && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-[110]">
+          <div className="bg-[#11131e] border border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl relative overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-150">
+            <div className="absolute top-0 left-0 right-0 h-[4px] bg-gradient-to-r from-sky-500 via-indigo-500 to-rose-500"></div>
+            
+            <div className="p-6 border-b border-slate-800/60 flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-base font-display font-extrabold text-white">{selectedModalNotif.title}</h3>
+                <span className="text-[10px] text-slate-500 font-mono block mt-1">
+                  Sent: {new Date(selectedModalNotif.createdAt).toLocaleString()}
+                </span>
+              </div>
+              <button 
+                onClick={() => setSelectedModalNotif(null)}
+                className="text-slate-400 hover:text-white p-1.5 rounded-lg bg-slate-900 border border-slate-800/80 hover:border-slate-700 transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-4 overflow-y-auto max-h-[60vh] text-left">
+              <p className="text-slate-300 text-xs leading-relaxed whitespace-pre-wrap">
+                {selectedModalNotif.message}
+              </p>
+              
+              {selectedModalNotif.imageUrl && (
+                <div className="rounded-lg overflow-hidden border border-slate-800 bg-slate-950/40 w-fit max-w-full mt-2">
+                  {selectedModalNotif.imageUrl.endsWith('.mp4') || 
+                   selectedModalNotif.imageUrl.endsWith('.webm') || 
+                   selectedModalNotif.imageUrl.endsWith('.ogg') || 
+                   selectedModalNotif.imageUrl.endsWith('.mov') ||
+                   selectedModalNotif.imageUrl.includes('/video/') ? (
+                    <video 
+                      src={selectedModalNotif.imageUrl} 
+                      controls 
+                      className="max-w-full h-auto rounded-lg block" 
+                    />
+                  ) : (
+                    <img 
+                      src={selectedModalNotif.imageUrl} 
+                      alt={selectedModalNotif.title} 
+                      referrerPolicy="no-referrer" 
+                      className="max-w-full h-auto rounded-lg block" 
+                    />
+                  )}
+                </div>
+              )}
+            </div>
+            
+            <div className="p-4 bg-slate-950/40 border-t border-slate-800/50 flex justify-end">
+              <button 
+                onClick={() => setSelectedModalNotif(null)}
+                className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2 px-5 rounded-xl text-xs transition cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

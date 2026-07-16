@@ -34,7 +34,153 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   const [configSuccess, setConfigSuccess] = useState<string | null>(null);
 
   // Tab navigation state
-  const [activeTab, setActiveTab] = useState<'subscriptions' | 'affiliates' | 'commissions' | 'reports' | 'payments'>('subscriptions');
+  const [activeTab, setActiveTab] = useState<'subscriptions' | 'affiliates' | 'commissions' | 'reports' | 'payments' | 'affiliates_dashboard' | 'media_requests' | 'notifications'>('subscriptions');
+
+  // Affiliate Dashboard tab state
+  const [affiliates, setAffiliates] = useState<any[]>([]);
+  const [affiliatesLoading, setAffiliatesLoading] = useState(false);
+  const [selectedAffiliate, setSelectedAffiliate] = useState<any | null>(null);
+
+  // Media requests tab state
+  const [mediaRequests, setMediaRequests] = useState<any[]>([]);
+  const [requestsLoading, setRequestsLoading] = useState(false);
+
+  // Rich broadcast notification tab state
+  const [notifTitle, setNotifTitle] = useState('');
+  const [notifMessage, setNotifMessage] = useState('');
+  const [notifImageUrl, setNotifImageUrl] = useState('');
+  const [notifTargetType, setNotifTargetType] = useState<'all' | 'affiliate' | 'paid' | 'free' | 'user'>('all');
+  const [notifTargetUserId, setNotifTargetUserId] = useState('');
+  const [notifUserSearchQuery, setNotifUserSearchQuery] = useState('');
+  const [notifImageFile, setNotifImageFile] = useState<File | null>(null);
+  const [broadcastLoading, setBroadcastLoading] = useState(false);
+  const [sentNotifications, setSentNotifications] = useState<any[]>([]);
+  const [loadingSentNotifications, setLoadingSentNotifications] = useState(false);
+
+  const fetchSentNotifications = async () => {
+    setLoadingSentNotifications(true);
+    try {
+      const res = await fetch('/api/admin/notifications/all');
+      if (res.ok) {
+        const data = await res.json();
+        setSentNotifications(data);
+      }
+    } catch (err) {
+      console.error('Error fetching sent notifications:', err);
+    } finally {
+      setLoadingSentNotifications(false);
+    }
+  };
+
+  const fetchAffiliates = async () => {
+    setAffiliatesLoading(true);
+    try {
+      const res = await fetch('/api/admin/affiliates');
+      if (res.ok) {
+        const data = await res.json();
+        setAffiliates(data);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setAffiliatesLoading(false);
+    }
+  };
+
+  const fetchMediaRequests = async () => {
+    setRequestsLoading(true);
+    try {
+      const res = await fetch('/api/media/requests');
+      if (res.ok) {
+        const data = await res.json();
+        setMediaRequests(data);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setRequestsLoading(false);
+    }
+  };
+
+  const handleUpdateRequestStatus = async (id: string, status: 'Approved' | 'Declined') => {
+    try {
+      const res = await fetch(`/api/admin/media/requests/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+      });
+      if (res.ok) {
+        setMediaRequests(prev => prev.map(r => r.id === id ? { ...r, status } : r));
+        setSuccess(`Media request status updated to ${status}.`);
+      } else {
+        const data = await res.json();
+        setError(data.error || 'Failed to update request status');
+      }
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const handleSendBroadcast = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBroadcastLoading(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      let finalImageUrl = notifImageUrl;
+
+      if (notifImageFile) {
+        const reader = new FileReader();
+        const base64Promise = new Promise<string>((resolve, reject) => {
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+        });
+        reader.readAsDataURL(notifImageFile);
+        const base64Data = await base64Promise;
+
+        const uploadRes = await fetch('/api/admin/notifications/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ base64Data, fileName: notifImageFile.name })
+        });
+        if (!uploadRes.ok) {
+          throw new Error('Image upload failed');
+        }
+        const uploadData = await uploadRes.json();
+        finalImageUrl = uploadData.url;
+      }
+
+      const res = await fetch('/api/admin/notifications/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: notifTitle,
+          message: notifMessage,
+          imageUrl: finalImageUrl || null,
+          targetType: notifTargetType,
+          targetUserId: notifTargetType === 'user' ? notifTargetUserId : null
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to send notification');
+      }
+
+      setSuccess('Broadcast notification sent successfully!');
+      setNotifTitle('');
+      setNotifMessage('');
+      setNotifImageUrl('');
+      setNotifTargetUserId('');
+      setNotifUserSearchQuery('');
+      setNotifImageFile(null);
+      fetchSentNotifications();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setBroadcastLoading(false);
+    }
+  };
 
   // Verify Payments tab state
   const [verificationLoadingUserId, setVerificationLoadingUserId] = useState<string | null>(null);
@@ -218,6 +364,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   useEffect(() => {
     if (activeTab === 'commissions' || activeTab === 'reports') {
       fetchCommissions();
+    } else if (activeTab === 'affiliates_dashboard') {
+      fetchAffiliates();
+    } else if (activeTab === 'media_requests') {
+      fetchMediaRequests();
+    } else if (activeTab === 'notifications') {
+      fetchSentNotifications();
     }
   }, [activeTab]);
 
@@ -692,6 +844,29 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 {users.filter(u => u.paymentStatus === 'Pending Verification').length}
               </span>
             )}
+          </button>
+          <button
+            onClick={() => setActiveTab('affiliates_dashboard')}
+            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'affiliates_dashboard' ? 'border-indigo-500 text-indigo-400 bg-indigo-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
+          >
+            <Award className="w-4 h-4" /> Affiliate Partners
+          </button>
+          <button
+            onClick={() => setActiveTab('media_requests')}
+            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'media_requests' ? 'border-cyan-500 text-cyan-400 bg-cyan-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
+          >
+            <PlusCircle className="w-4 h-4" /> Content Requests
+            {mediaRequests.filter(r => r.status === 'Pending').length > 0 && (
+              <span className="bg-cyan-600 text-white font-extrabold text-[10px] px-1.5 py-0.5 rounded-full min-w-4 text-center ml-1 animate-pulse">
+                {mediaRequests.filter(r => r.status === 'Pending').length}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setActiveTab('notifications')}
+            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'notifications' ? 'border-sky-500 text-sky-400 bg-sky-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
+          >
+            <MessageSquare className="w-4 h-4" /> Send Broadcasts
           </button>
         </div>        {/* TAB 1: SUBSCRIPTION CONTROL */}
         {activeTab === 'subscriptions' && (
@@ -1723,6 +1898,545 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                         </div>
                       </div>
                     ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB: AFFILIATE PARTNERS MANAGEMENT */}
+        {activeTab === 'affiliates_dashboard' && (
+          <div className="space-y-6">
+            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 shadow-xl">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-6 mb-6">
+                <div>
+                  <h3 className="text-xl font-display font-extrabold text-white flex items-center gap-2">
+                    <Award className="w-6 h-6 text-indigo-400" />
+                    <span>Affiliate Partner Directory</span>
+                  </h3>
+                  <p className="text-slate-400 text-xs mt-1">
+                    See real-time performance tracking for all registered affiliates. Track referred registrations, active subscriptions, and pending commission settlements.
+                  </p>
+                </div>
+                <div className="bg-[#07080c] px-4 py-2 border border-slate-800 rounded-xl shrink-0">
+                  <span className="text-[10px] font-bold text-slate-500 block uppercase tracking-wider">Active Affiliates</span>
+                  <span className="text-xl font-extrabold text-indigo-400">{affiliates.length} Partners</span>
+                </div>
+              </div>
+
+              {affiliatesLoading ? (
+                <div className="py-12 text-center text-slate-500">
+                  <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-indigo-400" />
+                  <span className="text-xs">Loading partner data...</span>
+                </div>
+              ) : affiliates.length === 0 ? (
+                <div className="text-center py-12 bg-[#07080c] rounded-2xl border border-slate-800/40">
+                  <Award className="w-12 h-12 text-indigo-500/20 mx-auto mb-3" />
+                  <h4 className="text-white font-bold text-sm">No affiliate accounts yet</h4>
+                  <p className="text-slate-500 text-xs mt-1">Mark a user as an affiliate to allow them to refer new members and earn rewards.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {/* Left Column: List of Affiliates */}
+                  <div className="lg:col-span-1 space-y-3 max-h-[600px] overflow-y-auto pr-1">
+                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Select a Partner</h4>
+                    {affiliates.map((partner) => (
+                      <div
+                        key={partner.id}
+                        onClick={() => setSelectedAffiliate(partner)}
+                        className={`p-4 rounded-xl border transition cursor-pointer text-left ${selectedAffiliate?.id === partner.id ? 'bg-indigo-500/10 border-indigo-500' : 'bg-[#07080c] border-slate-800/80 hover:border-slate-700'}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <span className="font-extrabold text-xs text-white block">{partner.fullName}</span>
+                            <span className="text-slate-400 text-[10px] block">@{partner.username}</span>
+                          </div>
+                          <span className="bg-indigo-500/20 text-indigo-300 font-mono text-[10px] px-2 py-0.5 rounded-md font-bold uppercase">
+                            {partner.affiliateCode || 'NONE'}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-slate-800/60 text-[10px]">
+                          <div>
+                            <span className="text-slate-500 block">Referred</span>
+                            <span className="text-slate-200 font-bold">{partner.registeredCount} members</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 block">Total Earnings</span>
+                            <span className="text-emerald-400 font-bold">₦{Number(partner.totalCommission).toLocaleString()}</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Right Column: Detailed Partner Dashboard View */}
+                  <div className="lg:col-span-2">
+                    {selectedAffiliate ? (
+                      <div className="bg-[#07080c] border border-slate-800 rounded-2xl p-6 space-y-6">
+                        {/* Header info */}
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-5">
+                          <div>
+                            <h4 className="text-lg font-extrabold text-white">{selectedAffiliate.fullName}</h4>
+                            <p className="text-slate-400 text-xs mt-0.5">Partner Email: {selectedAffiliate.email} | ID: {selectedAffiliate.id}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-slate-500 text-xs">Affiliate Code:</span>
+                            <span className="bg-indigo-500 text-white font-mono font-extrabold text-xs px-3 py-1 rounded-lg uppercase">
+                              {selectedAffiliate.affiliateCode}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Earnings breakdown bento widgets */}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                          <div className="bg-[#11131e] border border-slate-800/80 p-4 rounded-xl">
+                            <span className="text-[9px] font-bold text-slate-500 uppercase block tracking-wider">Total Commission</span>
+                            <span className="text-lg font-black text-slate-100">₦{Number(selectedAffiliate.totalCommission).toLocaleString()}</span>
+                          </div>
+                          <div className="bg-[#11131e] border border-slate-800/80 p-4 rounded-xl">
+                            <span className="text-[9px] font-bold text-amber-500 uppercase block tracking-wider">Pending (Verify)</span>
+                            <span className="text-lg font-black text-amber-400">₦{Number(selectedAffiliate.pendingCommission).toLocaleString()}</span>
+                          </div>
+                          <div className="bg-[#11131e] border border-slate-800/80 p-4 rounded-xl">
+                            <span className="text-[9px] font-bold text-emerald-500 uppercase block tracking-wider">Approved (Unpaid)</span>
+                            <span className="text-lg font-black text-emerald-400">₦{Number(selectedAffiliate.approvedCommission).toLocaleString()}</span>
+                          </div>
+                          <div className="bg-[#11131e] border border-slate-800/80 p-4 rounded-xl">
+                            <span className="text-[9px] font-bold text-indigo-500 uppercase block tracking-wider">Total Paid Out</span>
+                            <span className="text-lg font-black text-indigo-400">₦{Number(selectedAffiliate.paidCommission).toLocaleString()}</span>
+                          </div>
+                        </div>
+
+                        {/* Referred Users lists */}
+                        <div className="space-y-3">
+                          <h5 className="text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-1">Referred Members ({selectedAffiliate.referredUsers.length})</h5>
+                          {selectedAffiliate.referredUsers.length === 0 ? (
+                            <p className="text-slate-500 text-xs">No users referred by this partner yet.</p>
+                          ) : (
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-left text-xs">
+                                <thead>
+                                  <tr className="border-b border-slate-800 text-slate-500 font-bold">
+                                    <th className="pb-2">Name</th>
+                                    <th className="pb-2">Username</th>
+                                    <th className="pb-2">Subscription</th>
+                                    <th className="pb-2">Payment Status</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-800/50">
+                                  {selectedAffiliate.referredUsers.map((u: any) => (
+                                    <tr key={u.id} className="hover:bg-slate-900/10">
+                                      <td className="py-2 text-white font-semibold">{u.fullName}</td>
+                                      <td className="py-2 text-slate-400 font-mono">@{u.username}</td>
+                                      <td className="py-2">
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${u.subscriptionStatus === 'Active' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-400'}`}>
+                                          {u.subscriptionStatus}
+                                        </span>
+                                      </td>
+                                      <td className="py-2">
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${u.paymentStatus === 'Paid' ? 'bg-emerald-500/10 text-emerald-400' : u.paymentStatus === 'Pending Verification' ? 'bg-amber-500/10 text-amber-400' : 'bg-slate-800 text-slate-400'}`}>
+                                          {u.paymentStatus}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Commissions ledger for this affiliate */}
+                        <div className="space-y-3 pt-4 border-t border-slate-800">
+                          <h5 className="text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-1">Commissions History</h5>
+                          {selectedAffiliate.commissions.length === 0 ? (
+                            <p className="text-slate-500 text-xs">No recorded commissions ledger entries.</p>
+                          ) : (
+                            <div className="space-y-2 max-h-[250px] overflow-y-auto">
+                              {selectedAffiliate.commissions.map((comm: any) => (
+                                <div key={comm.id} className="flex justify-between items-center p-2.5 bg-[#11131e] border border-slate-800/80 rounded-lg text-xs">
+                                  <div>
+                                    <span className="text-slate-400 block text-[10px]">{new Date(comm.createdAt).toLocaleString()}</span>
+                                    <span className="text-white font-semibold">₦{Number(comm.amount).toLocaleString()}</span>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${comm.status === 'Paid' ? 'bg-indigo-500/10 text-indigo-400' : comm.status === 'Approved' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}`}>
+                                      {comm.status}
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                      </div>
+                    ) : (
+                      <div className="bg-[#07080c] border border-slate-800 rounded-2xl p-12 text-center text-slate-500">
+                        <Info className="w-10 h-10 text-slate-700 mx-auto mb-2" />
+                        <p className="text-xs">Click any partner on the left directory to view their complete earnings dashboard, payouts, and referred members.</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB: CONTENT REQUESTS (MOVIES & SHOWS) */}
+        {activeTab === 'media_requests' && (
+          <div className="space-y-6">
+            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 shadow-xl">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-6 mb-6">
+                <div>
+                  <h3 className="text-xl font-display font-extrabold text-white flex items-center gap-2">
+                    <PlusCircle className="w-6 h-6 text-cyan-400" />
+                    <span>User Content Requests</span>
+                  </h3>
+                  <p className="text-slate-400 text-xs mt-1">
+                    Manage requests submitted by members for movies or TV shows they wish to see on your Jellyfin server.
+                  </p>
+                </div>
+                <div className="bg-[#07080c] px-4 py-2 border border-slate-800 rounded-xl shrink-0">
+                  <span className="text-[10px] font-bold text-slate-500 block uppercase tracking-wider">Pending Requests</span>
+                  <span className="text-xl font-extrabold text-cyan-400">
+                    {mediaRequests.filter(r => r.status === 'Pending').length} Pending
+                  </span>
+                </div>
+              </div>
+
+              {requestsLoading ? (
+                <div className="py-12 text-center text-slate-500">
+                  <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-cyan-400" />
+                  <span className="text-xs">Loading movie/show requests...</span>
+                </div>
+              ) : mediaRequests.length === 0 ? (
+                <div className="text-center py-12 bg-[#07080c] rounded-2xl border border-slate-800/40">
+                  <Tv className="w-12 h-12 text-cyan-500/20 mx-auto mb-3" />
+                  <h4 className="text-white font-bold text-sm">No media requests yet</h4>
+                  <p className="text-slate-500 text-xs mt-1">Requests sent by users from their portals will appear here instantly.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                        <th className="pb-3 pl-2">User</th>
+                        <th className="pb-3">Type</th>
+                        <th className="pb-3">Title</th>
+                        <th className="pb-3">Details / Season</th>
+                        <th className="pb-3">Date Submitted</th>
+                        <th className="pb-3">Status</th>
+                        <th className="pb-3 text-right pr-2">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/50">
+                      {mediaRequests.map((req) => (
+                        <tr key={req.id} className="hover:bg-slate-900/10">
+                          <td className="py-4 pl-2 font-semibold text-white">
+                            <span>{req.username}</span>
+                          </td>
+                          <td className="py-4">
+                            <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold ${req.type === 'show' ? 'bg-violet-500/10 text-violet-400' : 'bg-amber-500/10 text-amber-400'}`}>
+                              {req.type.toUpperCase()}
+                            </span>
+                          </td>
+                          <td className="py-4 font-bold text-slate-100">{req.title}</td>
+                          <td className="py-4 text-slate-400">
+                            {req.type === 'movie' ? (
+                              <span>Released: {req.releaseYear || 'Unknown'}</span>
+                            ) : (
+                              <span>
+                                {req.season ? `Season: ${req.season}` : ''} 
+                                {req.episode ? ` | Episode: ${req.episode}` : ' (Full Season)'}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-4 text-slate-500 font-mono">
+                            {new Date(req.createdAt).toLocaleString()}
+                          </td>
+                          <td className="py-4">
+                            <span className={`px-2.5 py-1 rounded-md text-[10px] font-bold ${req.status === 'Approved' ? 'bg-emerald-500/10 text-emerald-400' : req.status === 'Declined' ? 'bg-rose-500/10 text-rose-400' : 'bg-cyan-500/10 text-cyan-400'}`}>
+                              {req.status}
+                            </span>
+                          </td>
+                          <td className="py-4 text-right pr-2">
+                            {req.status === 'Pending' ? (
+                              <div className="flex gap-2 justify-end">
+                                <button
+                                  onClick={() => handleUpdateRequestStatus(req.id, 'Approved')}
+                                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-1 px-3 rounded-lg text-[10px] transition cursor-pointer"
+                                >
+                                  Approve
+                                </button>
+                                <button
+                                  onClick={() => handleUpdateRequestStatus(req.id, 'Declined')}
+                                  className="bg-rose-600 hover:bg-rose-700 text-white font-bold py-1 px-3 rounded-lg text-[10px] transition cursor-pointer"
+                                >
+                                  Decline
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="text-slate-500 text-[10px]">Settled</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB: SEND BROADCASTS */}
+        {activeTab === 'notifications' && (
+          <div className="space-y-6">
+            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 shadow-xl">
+              <div className="border-b border-slate-800/60 pb-6 mb-6">
+                <h3 className="text-xl font-display font-extrabold text-white flex items-center gap-2">
+                  <MessageSquare className="w-6 h-6 text-sky-400" />
+                  <span>Send Broadcast & Target Notifications</span>
+                </h3>
+                <p className="text-slate-400 text-xs mt-1">
+                  Draft rich announcements featuring customizable body text and images. Push to specific target categories or a single selected member.
+                </p>
+              </div>
+
+              <form onSubmit={handleSendBroadcast} className="space-y-5 max-w-2xl">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="block text-xs font-bold text-slate-300">Notification Title</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. New Movies Added this Weekend!"
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition"
+                      value={notifTitle}
+                      onChange={(e) => setNotifTitle(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-xs font-bold text-slate-300">Target Audience</label>
+                    <select
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition"
+                      value={notifTargetType}
+                      onChange={(e: any) => {
+                        setNotifTargetType(e.target.value);
+                        setNotifTargetUserId('');
+                        setNotifUserSearchQuery('');
+                      }}
+                    >
+                      <option value="all">Everyone (All registered users)</option>
+                      <option value="paid">Paid Users Only (Active subscription)</option>
+                      <option value="free">Free Users Only (Unpaid or Expired)</option>
+                      <option value="affiliate">Affiliates Only (Partners)</option>
+                      <option value="user">Specific Registered User (Search single user)</option>
+                    </select>
+                  </div>
+                </div>
+
+                {notifTargetType === 'user' && (
+                  <div className="bg-[#07080c] p-4 border border-slate-800 rounded-xl space-y-3">
+                    <label className="block text-xs font-bold text-slate-300">Search & Select Target User</label>
+                    <div className="relative">
+                      <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                      <input
+                        type="text"
+                        placeholder="Type name, email or username to search..."
+                        className="w-full bg-[#11131e] border border-slate-800 rounded-xl py-2 pl-9 pr-3 text-white text-xs focus:outline-none focus:border-sky-500 transition"
+                        value={notifUserSearchQuery}
+                        onChange={(e) => setNotifUserSearchQuery(e.target.value)}
+                      />
+                    </div>
+                    
+                    <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
+                      {users
+                        .filter(u => 
+                          u.fullName.toLowerCase().includes(notifUserSearchQuery.toLowerCase()) ||
+                          u.username.toLowerCase().includes(notifUserSearchQuery.toLowerCase()) ||
+                          u.email.toLowerCase().includes(notifUserSearchQuery.toLowerCase())
+                        )
+                        .slice(0, 15)
+                        .map(u => (
+                          <div
+                            key={u.id}
+                            type="button"
+                            onClick={() => {
+                              setNotifTargetUserId(u.id);
+                              setNotifUserSearchQuery(u.fullName + ` (@${u.username})`);
+                            }}
+                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition text-xs ${notifTargetUserId === u.id ? 'bg-sky-500/10 border border-sky-500/50 text-sky-300' : 'bg-[#11131e]/50 hover:bg-[#11131e] border border-slate-800/80 text-slate-300'}`}
+                          >
+                            <div>
+                              <span className="font-bold block">{u.fullName}</span>
+                              <span className="text-[10px] text-slate-500">@{u.username} | {u.email}</span>
+                            </div>
+                            {notifTargetUserId === u.id && (
+                              <span className="bg-sky-500/20 text-sky-400 text-[10px] px-2 py-0.5 rounded font-bold uppercase">Selected</span>
+                            )}
+                          </div>
+                        ))
+                      }
+                      {users.filter(u => 
+                        u.fullName.toLowerCase().includes(notifUserSearchQuery.toLowerCase()) ||
+                        u.username.toLowerCase().includes(notifUserSearchQuery.toLowerCase()) ||
+                        u.email.toLowerCase().includes(notifUserSearchQuery.toLowerCase())
+                      ).length === 0 && (
+                        <span className="text-xs text-slate-500 block text-center py-2">No users found.</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-slate-300">Notification Content</label>
+                  <textarea
+                    rows={4}
+                    required
+                    placeholder="Write the notification details here. Users will see this instantly in their dashboard notifications feed."
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition resize-none"
+                    value={notifMessage}
+                    onChange={(e) => setNotifMessage(e.target.value)}
+                  />
+                </div>
+
+                <div className="bg-[#07080c] border border-slate-800/80 p-4 rounded-xl space-y-4">
+                  <span className="text-xs font-bold text-slate-400 block">Rich Media Attachment (Image)</span>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Image Web URL</label>
+                      <input
+                        type="url"
+                        placeholder="e.g. https://example.com/banner.jpg"
+                        className="w-full bg-[#11131e] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition"
+                        value={notifImageUrl}
+                        onChange={(e) => {
+                          setNotifImageUrl(e.target.value);
+                          if (e.target.value) setNotifImageFile(null);
+                        }}
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Or Upload from computer</label>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="w-full text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-slate-800 file:text-slate-200 hover:file:bg-slate-700 text-xs"
+                        onChange={(e) => {
+                          if (e.target.files && e.target.files[0]) {
+                            setNotifImageFile(e.target.files[0]);
+                            setNotifImageUrl('');
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="submit"
+                    disabled={broadcastLoading || (notifTargetType === 'user' && !notifTargetUserId)}
+                    className="bg-sky-600 hover:bg-sky-700 text-white font-bold py-2.5 px-6 rounded-xl text-xs transition cursor-pointer flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {broadcastLoading ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        Sending...
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        Send Notification Now
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* Notification History Panel */}
+            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 shadow-xl">
+              <div className="border-b border-slate-800/60 pb-4 mb-4">
+                <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
+                  <MessageSquare className="w-5 h-5 text-indigo-400" />
+                  <span>Notification History ({sentNotifications.length})</span>
+                </h3>
+                <p className="text-slate-400 text-xs mt-0.5">
+                  View and verify all announcements and targeted direct alerts sent to date.
+                </p>
+              </div>
+
+              {loadingSentNotifications ? (
+                <div className="py-12 text-center text-slate-500">
+                  <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-400" />
+                  <span className="text-xs">Loading history logs...</span>
+                </div>
+              ) : sentNotifications.length === 0 ? (
+                <div className="text-center py-12 bg-[#07080c] rounded-2xl border border-slate-800/40 text-slate-500 text-xs">
+                  No notifications found in the database.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                        <th className="pb-3 pl-2">Sent Date</th>
+                        <th className="pb-3">Title</th>
+                        <th className="pb-3">Target Audience</th>
+                        <th className="pb-3">Message Snippet</th>
+                        <th className="pb-3 pr-2">Attachment</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/50">
+                      {sentNotifications.map((notif) => {
+                        let audienceLabel = 'All Users';
+                        if (notif.targetType === 'affiliate') audienceLabel = 'Affiliates Only';
+                        if (notif.targetType === 'paid') audienceLabel = 'Paid Subscribers';
+                        if (notif.targetType === 'free') audienceLabel = 'Free Users';
+                        if (notif.targetType === 'user') {
+                          const matchedUser = users.find(u => u.id === notif.targetUserId);
+                          audienceLabel = matchedUser ? `User: ${matchedUser.fullName} (@${matchedUser.username})` : `User ID: ${notif.targetUserId}`;
+                        }
+
+                        return (
+                          <tr key={notif.id} className="hover:bg-slate-900/10">
+                            <td className="py-3 pl-2 text-slate-500 font-mono">
+                              {new Date(notif.createdAt).toLocaleString()}
+                            </td>
+                            <td className="py-3 font-bold text-white">{notif.title}</td>
+                            <td className="py-3">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${notif.targetType === 'user' ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20' : 'bg-slate-800 text-slate-400'}`}>
+                                {audienceLabel}
+                              </span>
+                            </td>
+                            <td className="py-3 text-slate-400 max-w-xs truncate" title={notif.message}>
+                              {notif.message}
+                            </td>
+                            <td className="py-3 pr-2">
+                              {notif.imageUrl ? (
+                                <a 
+                                  href={notif.imageUrl} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer" 
+                                  className="text-sky-400 hover:underline font-bold"
+                                >
+                                  View Media
+                                </a>
+                              ) : (
+                                <span className="text-slate-600">None</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
