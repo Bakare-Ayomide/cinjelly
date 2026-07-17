@@ -151,6 +151,12 @@ class DB {
         try {
             $pdo->exec("ALTER TABLE system_config ADD COLUMN contactOther TEXT NULL");
         } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN iosDownloadUrl TEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN androidDownloadUrl TEXT NULL");
+        } catch (Exception $e) {}
 
         // Create persistent sessions table
         $pdo->exec("
@@ -287,7 +293,9 @@ class DB {
                 'contactEmail' => $row['contactEmail'] ?? '',
                 'contactPhone' => $row['contactPhone'] ?? '',
                 'contactWhatsApp' => $row['contactWhatsApp'] ?? '',
-                'contactOther' => $row['contactOther'] ?? ''
+                'contactOther' => $row['contactOther'] ?? '',
+                'iosDownloadUrl' => $row['iosDownloadUrl'] ?? '',
+                'androidDownloadUrl' => $row['androidDownloadUrl'] ?? ''
             ];
         }
 
@@ -307,8 +315,8 @@ class DB {
     public static function saveConfig($config) {
         $pdo = self::getConnection();
         $stmt = $pdo->prepare('
-            INSERT INTO system_config (id, serverUrl, adminUsername, adminPasswordFull, apiKey, defaultCommission, bankAccountNo, bankName, bankBeneficiary, bankInstructions, chatbotInfo, chatbotInstructions, contactEmail, contactPhone, contactWhatsApp, contactOther)
-            VALUES ("main", ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO system_config (id, serverUrl, adminUsername, adminPasswordFull, apiKey, defaultCommission, bankAccountNo, bankName, bankBeneficiary, bankInstructions, chatbotInfo, chatbotInstructions, contactEmail, contactPhone, contactWhatsApp, contactOther, iosDownloadUrl, androidDownloadUrl)
+            VALUES ("main", ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON DUPLICATE KEY UPDATE
                 serverUrl = VALUES(serverUrl),
                 adminUsername = VALUES(adminUsername),
@@ -324,7 +332,9 @@ class DB {
                 contactEmail = VALUES(contactEmail),
                 contactPhone = VALUES(contactPhone),
                 contactWhatsApp = VALUES(contactWhatsApp),
-                contactOther = VALUES(contactOther)
+                contactOther = VALUES(contactOther),
+                iosDownloadUrl = VALUES(iosDownloadUrl),
+                androidDownloadUrl = VALUES(androidDownloadUrl)
         ');
         $stmt->execute([
             $config['serverUrl'],
@@ -341,7 +351,9 @@ class DB {
             $config['contactEmail'] ?? null,
             $config['contactPhone'] ?? null,
             $config['contactWhatsApp'] ?? null,
-            $config['contactOther'] ?? null
+            $config['contactOther'] ?? null,
+            $config['iosDownloadUrl'] ?? null,
+            $config['androidDownloadUrl'] ?? null
         ]);
     }
 

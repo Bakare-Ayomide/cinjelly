@@ -27,6 +27,8 @@ export interface SystemStatus {
   mysqlAvailable?: boolean;
   mysqlError?: string | null;
   defaultCommission?: number;
+  iosDownloadUrl?: string;
+  androidDownloadUrl?: string;
 }
 
 export interface JellyfinConfigDetails {
@@ -34,6 +36,8 @@ export interface JellyfinConfigDetails {
   adminUsername: string;
   apiKey: string;
   defaultCommission?: number;
+  iosDownloadUrl?: string;
+  androidDownloadUrl?: string;
 }
 
 export interface Commission {

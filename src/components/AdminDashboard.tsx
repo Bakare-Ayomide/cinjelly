@@ -4,7 +4,7 @@ import {
   ArrowLeft, Loader2, Ban, PlusCircle, Activity, UserCheck, Tv,
   TrendingUp, DollarSign, Percent, Settings, Award, ShieldAlert, Edit, Check, Calendar, ArrowRight,
   Trash2, ChevronLeft, ChevronRight, UserPlus, Info, CalendarDays, MessageSquare, Phone,
-  CreditCard, X
+  CreditCard, X, Smartphone, Download
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -32,6 +32,22 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   const [configSaving, setConfigSaving] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
   const [configSuccess, setConfigSuccess] = useState<string | null>(null);
+
+  // Floating Toast notification state
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+  };
+
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => {
+        setToast(null);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
 
   // Tab navigation state
   const [activeTab, setActiveTab] = useState<'subscriptions' | 'affiliates' | 'commissions' | 'reports' | 'payments' | 'affiliates_dashboard' | 'media_requests' | 'notifications'>('subscriptions');
@@ -112,12 +128,15 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       if (res.ok) {
         setMediaRequests(prev => prev.map(r => r.id === id ? { ...r, status } : r));
         setSuccess(`Media request status updated to ${status}.`);
+        showToast(`Media request ${status} successfully!`, 'success');
       } else {
         const data = await res.json();
         setError(data.error || 'Failed to update request status');
+        showToast(data.error || 'Failed to update request status', 'error');
       }
     } catch (err: any) {
       setError(err.message);
+      showToast(err.message || 'Error updating status', 'error');
     }
   };
 
@@ -168,6 +187,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       }
 
       setSuccess('Broadcast notification sent successfully!');
+      showToast('Broadcast notification sent successfully!', 'success');
       setNotifTitle('');
       setNotifMessage('');
       setNotifImageUrl('');
@@ -177,6 +197,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       fetchSentNotifications();
     } catch (err: any) {
       setError(err.message);
+      showToast(err.message || 'Failed to send broadcast', 'error');
     } finally {
       setBroadcastLoading(false);
     }
@@ -207,10 +228,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       
       setUsers(prev => prev.map(u => u.id === userId ? { ...u, ...data.user } : u));
       setSuccess(`Payment verification ${action === 'accept' ? 'APPROVED' : 'DECLINED'} successfully.`);
+      showToast(`Payment successfully ${action === 'accept' ? 'approved' : 'declined'}!`, 'success');
       setDeclineTargetUser(null);
       setDeclineReasonText('');
     } catch (err: any) {
       setError(err.message);
+      showToast(err.message || 'Payment verification failed', 'error');
     } finally {
       setVerificationLoadingUserId(null);
     }
@@ -274,6 +297,8 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   const [contactPhone, setContactPhone] = useState('');
   const [contactWhatsApp, setContactWhatsApp] = useState('');
   const [contactOther, setContactOther] = useState('');
+  const [iosDownloadUrl, setIosDownloadUrl] = useState('');
+  const [androidDownloadUrl, setAndroidDownloadUrl] = useState('');
 
   // Birds-eye View & User Management Modal state
   const [selectedUserForView, setSelectedUserForView] = useState<User | null>(null);
@@ -333,6 +358,8 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
         setContactPhone(data.contactPhone || '');
         setContactWhatsApp(data.contactWhatsApp || '');
         setContactOther(data.contactOther || '');
+        setIosDownloadUrl(data.iosDownloadUrl || '');
+        setAndroidDownloadUrl(data.androidDownloadUrl || '');
       }
     } catch (err: any) {
       setConfigError('Could not load active Jellyfin server settings.');
@@ -397,7 +424,9 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
           contactEmail,
           contactPhone,
           contactWhatsApp,
-          contactOther
+          contactOther,
+          iosDownloadUrl,
+          androidDownloadUrl
         })
       });
       const data = await response.json();
@@ -405,9 +434,11 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
         throw new Error(data.error || 'Failed to save configuration');
       }
       setConfigSuccess('Server configuration and commission rates updated successfully!');
+      showToast('Configuration settings saved successfully!', 'success');
       fetchUsers();
     } catch (err: any) {
       setConfigError(err.message || 'Verification failed.');
+      showToast(err.message || 'Failed to save configuration.', 'error');
     } finally {
       setConfigSaving(false);
     }
@@ -429,9 +460,11 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       }
 
       setSuccess(`User subscription status successfully updated to "${action.toUpperCase()}".`);
+      showToast(`Subscription status updated to ${action.toUpperCase()}!`, 'success');
       fetchUsers();
     } catch (err: any) {
       setError(err.message);
+      showToast(err.message || 'Operation failed', 'error');
     }
   };
 
@@ -446,9 +479,11 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       if (!response.ok) throw new Error(data.error || 'Audit check failed');
 
       setSuccess(`Subscription expiry audit complete. Suspended and deactivated ${data.expiredCount} expired accounts.`);
+      showToast(`Audit complete! Suspended ${data.expiredCount} expired accounts.`, 'success');
       fetchUsers();
     } catch (err: any) {
       setError(err.message);
+      showToast(err.message || 'Audit check failed', 'error');
     } finally {
       setAuditLoading(false);
     }
@@ -474,10 +509,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       if (!response.ok) throw new Error(data.error || 'Failed to update affiliate configuration');
       
       setSuccess(`Successfully updated referral configurations for ${editingAffiliateUser.fullName}.`);
+      showToast(`Affiliate settings updated for ${editingAffiliateUser.fullName}!`, 'success');
       setEditingAffiliateUser(null);
       fetchUsers();
     } catch (err: any) {
       setError(err.message);
+      showToast(err.message || 'Failed to update affiliate configuration', 'error');
     } finally {
       setAffSaving(false);
     }
@@ -497,9 +534,11 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       if (!response.ok) throw new Error(data.error || 'Failed to update commission');
 
       setSuccess(`Commission payout successfully transitioned to status "${newStatus}".`);
+      showToast(`Commission status updated to ${newStatus}!`, 'success');
       fetchCommissions();
     } catch (err: any) {
       setError(err.message);
+      showToast(err.message || 'Failed to update commission', 'error');
     }
   };
 
@@ -581,10 +620,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       }
 
       setSuccess(`Subscriber account ${formFullName} was successfully created.`);
+      showToast(`Subscriber ${formFullName} created!`, 'success');
       setIsAddModalOpen(false);
       fetchUsers();
     } catch (err: any) {
       setCrudError(err.message);
+      showToast(err.message || 'Failed to create user', 'error');
     } finally {
       setCrudLoading(false);
     }
@@ -622,10 +663,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       }
 
       setSuccess(`Subscriber account ${formFullName} was successfully updated.`);
+      showToast(`Subscriber ${formFullName} updated!`, 'success');
       setIsEditModalOpen(false);
       fetchUsers();
     } catch (err: any) {
       setCrudError(err.message);
+      showToast(err.message || 'Failed to update user', 'error');
     } finally {
       setCrudLoading(false);
     }
@@ -647,11 +690,13 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       }
 
       setSuccess(`Subscriber account ${targetUser.fullName} was deleted successfully.`);
+      showToast(`Subscriber ${targetUser.fullName} deleted!`, 'success');
       setIsDeleteModalOpen(false);
       setTargetUser(null);
       fetchUsers();
     } catch (err: any) {
       setCrudError(err.message);
+      showToast(err.message || 'Failed to delete user', 'error');
     } finally {
       setCrudLoading(false);
     }
@@ -717,7 +762,32 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   const sortedTopAffiliates = Object.values(affiliateRecordsMap).sort((a, b) => b.total - a.total);
 
   return (
-    <div className="min-h-screen bg-[#090a0f] py-4 sm:py-8 px-3 sm:px-6 lg:px-8 selection:bg-rose-600 selection:text-white" id="admin-dashboard-root">
+    <div className="min-h-screen bg-[#090a0f] py-4 sm:py-8 px-3 sm:px-6 lg:px-8 selection:bg-rose-600 selection:text-white relative" id="admin-dashboard-root">
+      
+      {/* Floating Toast Notification */}
+      {toast && (
+        <div className={`fixed top-6 right-6 z-[100] max-w-sm w-full bg-[#11131e]/95 backdrop-blur-md border-l-4 ${toast.type === 'success' ? 'border-emerald-500' : 'border-rose-500'} rounded-xl shadow-2xl p-4 flex items-start gap-3 animate-in fade-in slide-in-from-top-4 duration-300`}>
+          <div className="mt-0.5 shrink-0">
+            {toast.type === 'success' ? (
+              <CheckCircle className="w-5 h-5 text-emerald-400" />
+            ) : (
+              <AlertTriangle className="w-5 h-5 text-rose-500" />
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <h4 className="text-xs font-bold text-white uppercase tracking-wider font-display">
+              {toast.type === 'success' ? 'Action Successful' : 'Action Failed'}
+            </h4>
+            <p className="text-[11px] text-slate-300 mt-1 leading-normal">{toast.message}</p>
+          </div>
+          <button 
+            onClick={() => setToast(null)}
+            className="text-slate-500 hover:text-white transition font-bold text-xs p-1 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
       
       {/* Top Header Controls bar */}
       <nav className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6 border-b border-slate-800/60 pb-6">
@@ -1461,6 +1531,50 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-5 rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 h-[36px]"
                 >
                   <Check className="w-3.5 h-3.5" /> Save Contact & Chatbot Info
+                </button>
+              </div>
+            </div>
+
+            {/* Mobile App Download Configuration */}
+            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-[3px] bg-rose-500"></div>
+              <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
+                <Smartphone className="w-4.5 h-4.5 text-rose-400" />
+                <span>Mobile Client Download Configuration (iOS & Android)</span>
+              </h3>
+              <p className="text-slate-400 text-xs mt-1 leading-relaxed max-w-2xl">
+                Specify the custom download or install URLs for the iOS and Android mobile applications advertised on the landing page and portal.
+              </p>
+              
+              <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-bold text-rose-300 uppercase tracking-wider">iOS App Store / TestFlight / IPA Link</label>
+                  <input 
+                    type="text" 
+                    placeholder="e.g. https://apps.apple.com/app/cinode..." 
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    value={iosDownloadUrl}
+                    onChange={(e) => setIosDownloadUrl(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-bold text-rose-300 uppercase tracking-wider">Android Google Play / APK Download Link</label>
+                  <input 
+                    type="text" 
+                    placeholder="e.g. https://play.google.com/store/apps/details..." 
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    value={androidDownloadUrl}
+                    onChange={(e) => setAndroidDownloadUrl(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="mt-4 flex justify-end">
+                <button
+                  onClick={handleSaveConfig}
+                  className="bg-rose-600 hover:bg-rose-700 text-white font-bold py-2 px-5 rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 h-[36px]"
+                >
+                  <Check className="w-3.5 h-3.5" /> Save Mobile Download Links
                 </button>
               </div>
             </div>

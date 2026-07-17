@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   PlayCircle, Tv, Film, Laptop, Sparkles, HelpCircle, ChevronDown, ChevronUp, 
   X, Lock, Mail, User, ShieldCheck, ArrowRight, Loader2, Info, Film as CinemaIcon,
-  AlertTriangle, Database
+  AlertTriangle, Database, Smartphone, Download
 } from 'lucide-react';
 import { User as UserType, SystemStatus } from '../types';
 
@@ -340,6 +340,140 @@ export default function LandingPage({ currentUser, systemStatus, onLoginSuccess,
               Get Started Now
             </button>
           )}
+        </div>
+      </section>
+
+      {/* Mobile App Client Downloads Section */}
+      <section className="bg-gradient-to-b from-[#111320] to-[#090a0f] border-t border-slate-900 py-24 px-6" id="mobile-apps">
+        <div className="max-w-5xl mx-auto flex flex-col md:flex-row items-center gap-12">
+          
+          {/* Left side: content */}
+          <div className="flex-1 space-y-6 text-center md:text-left">
+            <div className="inline-flex items-center gap-1.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 font-semibold text-xs px-4 py-1.5 rounded-full">
+              <Smartphone className="w-3.5 h-3.5" /> Mobile Experience
+            </div>
+            
+            <h2 className="text-3xl md:text-5xl font-display font-black text-white tracking-tight leading-none">
+              Offline Watch On <br className="hidden md:block"/>
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-rose-500 to-amber-500">Your Mobile Phone</span>
+            </h2>
+            
+            <p className="text-slate-400 text-sm md:text-base leading-relaxed max-w-xl">
+              Don't let slow networks interrupt your entertainment. Download our mobile client apps for **iOS** and **Android** to save blockbusters, documentaries, and full series directly onto your mobile devices. Watch offline, anywhere, anytime.
+            </p>
+
+            <div className="flex flex-col sm:flex-row items-center gap-4 pt-4 justify-center md:justify-start">
+              {systemStatus?.iosDownloadUrl ? (
+                <a 
+                  href={systemStatus.iosDownloadUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 border border-slate-800 text-white font-bold py-3 px-6 rounded-2xl text-xs flex items-center justify-center gap-3 transition-all duration-250 cursor-pointer shadow-lg"
+                >
+                  <svg className="w-5 h-5 fill-white" viewBox="0 0 24 24">
+                    <path d="M18.71,19.5C17.88,20.74 17,21.95 15.66,21.97C14.32,22 13.89,21.18 12.37,21.18C10.84,21.18 10.37,21.95 9.1,22C7.79,22.05 6.8,20.68 5.96,19.47C4.25,17 2.94,12.45 4.7,9.39C5.57,7.87 7.13,6.91 8.82,6.88C10.1,6.86 11.32,7.75 12.11,7.75C12.89,7.75 14.37,6.68 15.92,6.84C16.57,6.87 18.39,7.1 19.56,8.82C19.47,8.88 17.39,10.1 17.41,12.63C17.44,15.65 20.06,16.66 20.1,16.67C20.08,16.74 19.67,18.11 18.71,19.5M15.97,4.17C16.63,3.37 17.07,2.28 16.95,1C16,1.04 14.9,1.6 14.24,2.38C13.68,3.04 13.19,4.14 13.34,5.39C14.39,5.47 15.4,4.88 15.97,4.17Z" />
+                  </svg>
+                  <div className="text-left leading-tight">
+                    <span className="block text-[9px] text-slate-500 font-medium uppercase">Download on the</span>
+                    <span className="text-sm font-black font-display tracking-tight">App Store</span>
+                  </div>
+                </a>
+              ) : (
+                <button 
+                  onClick={() => alert("iOS Client App download link is currently being configured by the admin. Please check back shortly!")}
+                  className="w-full sm:w-auto bg-slate-900/50 opacity-60 border border-slate-800 text-white font-bold py-3 px-6 rounded-2xl text-xs flex items-center justify-center gap-3 transition cursor-not-allowed"
+                >
+                  <svg className="w-5 h-5 fill-white" viewBox="0 0 24 24">
+                    <path d="M18.71,19.5C17.88,20.74 17,21.95 15.66,21.97C14.32,22 13.89,21.18 12.37,21.18C10.84,21.18 10.37,21.95 9.1,22C7.79,22.05 6.8,20.68 5.96,19.47C4.25,17 2.94,12.45 4.7,9.39C5.57,7.87 7.13,6.91 8.82,6.88C10.1,6.86 11.32,7.75 12.11,7.75C12.89,7.75 14.37,6.68 15.92,6.84C16.57,6.87 18.39,7.1 19.56,8.82C19.47,8.88 17.39,10.1 17.41,12.63C17.44,15.65 20.06,16.66 20.1,16.67C20.08,16.74 19.67,18.11 18.71,19.5M15.97,4.17C16.63,3.37 17.07,2.28 16.95,1C16,1.04 14.9,1.6 14.24,2.38C13.68,3.04 13.19,4.14 13.34,5.39C14.39,5.47 15.4,4.88 15.97,4.17Z" />
+                  </svg>
+                  <div className="text-left leading-tight">
+                    <span className="block text-[9px] text-slate-500 font-medium uppercase">App Store App</span>
+                    <span className="text-sm font-black font-display tracking-tight">Coming Soon</span>
+                  </div>
+                </button>
+              )}
+
+              {systemStatus?.androidDownloadUrl ? (
+                <a 
+                  href={systemStatus.androidDownloadUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 border border-slate-800 text-white font-bold py-3 px-6 rounded-2xl text-xs flex items-center justify-center gap-3 transition-all duration-250 cursor-pointer shadow-lg"
+                >
+                  <svg className="w-5 h-5 fill-white" viewBox="0 0 24 24">
+                    <path d="M3,5.27V18.73L16.55,12L3,5.27M17.87,11.33L19.43,12.11L17.87,12.89L16.67,12L17.87,11.33M3,3.41L15.67,9.7L18.11,8.47L3,3.41M3,20.59L18.11,15.53L15.67,14.3L3,20.59Z" />
+                  </svg>
+                  <div className="text-left leading-tight">
+                    <span className="block text-[9px] text-slate-500 font-medium uppercase">Get it on</span>
+                    <span className="text-sm font-black font-display tracking-tight">Google Play</span>
+                  </div>
+                </a>
+              ) : (
+                <button 
+                  onClick={() => alert("Android Client App download link is currently being configured by the admin. Please check back shortly!")}
+                  className="w-full sm:w-auto bg-slate-900/50 opacity-60 border border-slate-800 text-white font-bold py-3 px-6 rounded-2xl text-xs flex items-center justify-center gap-3 transition cursor-not-allowed"
+                >
+                  <svg className="w-5 h-5 fill-white" viewBox="0 0 24 24">
+                    <path d="M3,5.27V18.73L16.55,12L3,5.27M17.87,11.33L19.43,12.11L17.87,12.89L16.67,12L17.87,11.33M3,3.41L15.67,9.7L18.11,8.47L3,3.41M3,20.59L18.11,15.53L15.67,14.3L3,20.59Z" />
+                  </svg>
+                  <div className="text-left leading-tight">
+                    <span className="block text-[9px] text-slate-500 font-medium uppercase">Google Play App</span>
+                    <span className="text-sm font-black font-display tracking-tight">Coming Soon</span>
+                  </div>
+                </button>
+              )}
+            </div>
+          </div>
+          
+          {/* Right side: Mockups / Visual Device Presentation */}
+          <div className="flex-1 flex justify-center relative">
+            <div className="absolute w-72 h-72 bg-rose-500/10 blur-[80px] rounded-full top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none"></div>
+            
+            <div className="relative border border-slate-800/80 rounded-3xl bg-[#111320] p-6 shadow-2xl max-w-xs overflow-hidden group hover:border-rose-500/30 transition duration-300">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-4 mb-4">
+                <span className="text-xs text-rose-500 font-bold uppercase tracking-widest flex items-center gap-1">
+                  <PlayCircle className="w-3.5 h-3.5" /> Mobile App Player
+                </span>
+                <span className="text-[10px] bg-emerald-500/10 text-emerald-400 font-bold px-2 py-0.5 rounded-full">Offline Mode</span>
+              </div>
+              
+              <div className="space-y-4">
+                <div className="aspect-video bg-slate-950 rounded-xl relative overflow-hidden group-hover:scale-[1.02] transition duration-300">
+                  <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/20 to-transparent flex flex-col justify-end p-3">
+                    <span className="text-[9px] text-rose-400 font-bold uppercase tracking-wider">Now Downloading</span>
+                    <h4 className="text-xs font-bold text-white tracking-tight truncate">Interstellar (2014)</h4>
+                  </div>
+                  <div className="absolute top-2 right-2 bg-slate-900/80 backdrop-blur-md rounded-lg p-1.5 flex items-center justify-center">
+                    <Download className="w-3.5 h-3.5 text-rose-500 animate-bounce" />
+                  </div>
+                </div>
+                
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[10px] text-slate-400">
+                    <span>Downloading standard HD...</span>
+                    <span>74%</span>
+                  </div>
+                  <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden">
+                    <div className="bg-gradient-to-r from-rose-500 to-amber-500 h-full rounded-full" style={{ width: '74%' }}></div>
+                  </div>
+                </div>
+
+                <div className="border-t border-slate-800/60 pt-3 flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-rose-500/10 flex items-center justify-center text-rose-400 font-bold text-xs shrink-0">
+                    🍿
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h5 className="text-[11px] font-bold text-white truncate">The Dark Knight</h5>
+                    <p className="text-[9px] text-emerald-400">Ready to watch offline</p>
+                  </div>
+                  <button className="bg-rose-600 hover:bg-rose-700 p-1.5 rounded-lg text-white font-bold text-xs transition">
+                    ▶
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
         </div>
       </section>
 

@@ -18,6 +18,8 @@ export interface JellyfinConfig {
   contactPhone?: string;
   contactWhatsApp?: string;
   contactOther?: string;
+  iosDownloadUrl?: string;
+  androidDownloadUrl?: string;
 }
 
 export interface UserRecord {
@@ -172,6 +174,8 @@ export async function initDb() {
     try { await pool.query("ALTER TABLE system_config ADD COLUMN contactPhone VARCHAR(255) NULL"); } catch (e) {}
     try { await pool.query("ALTER TABLE system_config ADD COLUMN contactWhatsApp VARCHAR(255) NULL"); } catch (e) {}
     try { await pool.query("ALTER TABLE system_config ADD COLUMN contactOther TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN iosDownloadUrl TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN androidDownloadUrl TEXT NULL"); } catch (e) {}
 
     // Create persistent sessions table to keep user logins intact across server restarts/compiles
     await pool.query(`
@@ -301,7 +305,9 @@ export const db = {
             contactEmail: rows[0].contactEmail || '',
             contactPhone: rows[0].contactPhone || '',
             contactWhatsApp: rows[0].contactWhatsApp || '',
-            contactOther: rows[0].contactOther || ''
+            contactOther: rows[0].contactOther || '',
+            iosDownloadUrl: rows[0].iosDownloadUrl || '',
+            androidDownloadUrl: rows[0].androidDownloadUrl || ''
           };
         }
       } catch (err) {
@@ -341,8 +347,8 @@ export const db = {
     }
 
     await pool.query(`
-      INSERT INTO system_config (id, serverUrl, adminUsername, adminPasswordFull, apiKey, defaultCommission, bankAccountNo, bankName, bankBeneficiary, bankInstructions, chatbotInfo, chatbotInstructions, contactEmail, contactPhone, contactWhatsApp, contactOther)
-      VALUES ('main', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO system_config (id, serverUrl, adminUsername, adminPasswordFull, apiKey, defaultCommission, bankAccountNo, bankName, bankBeneficiary, bankInstructions, chatbotInfo, chatbotInstructions, contactEmail, contactPhone, contactWhatsApp, contactOther, iosDownloadUrl, androidDownloadUrl)
+      VALUES ('main', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         serverUrl = VALUES(serverUrl),
         adminUsername = VALUES(adminUsername),
@@ -358,7 +364,9 @@ export const db = {
         contactEmail = VALUES(contactEmail),
         contactPhone = VALUES(contactPhone),
         contactWhatsApp = VALUES(contactWhatsApp),
-        contactOther = VALUES(contactOther)
+        contactOther = VALUES(contactOther),
+        iosDownloadUrl = VALUES(iosDownloadUrl),
+        androidDownloadUrl = VALUES(androidDownloadUrl)
     `, [
       config.serverUrl, 
       config.adminUsername, 
@@ -374,7 +382,9 @@ export const db = {
       config.contactEmail || null,
       config.contactPhone || null,
       config.contactWhatsApp || null,
-      config.contactOther || null
+      config.contactOther || null,
+      config.iosDownloadUrl || null,
+      config.androidDownloadUrl || null
     ]);
   },
 

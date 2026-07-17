@@ -178,7 +178,9 @@ if ($method === 'GET' && $path === '/api/status') {
         'serverUrl' => $config ? $config['serverUrl'] : '',
         'adminUsername' => $config ? $config['adminUsername'] : '',
         'mysqlAvailable' => true,
-        'mysqlError' => null
+        'mysqlError' => null,
+        'iosDownloadUrl' => $config ? ($config['iosDownloadUrl'] ?? '') : '',
+        'androidDownloadUrl' => $config ? ($config['androidDownloadUrl'] ?? '') : ''
     ]);
     exit;
 }
@@ -301,6 +303,8 @@ if ($path === '/api/admin/config') {
         $contactPhone = $input['contactPhone'] ?? '';
         $contactWhatsApp = $input['contactWhatsApp'] ?? '';
         $contactOther = $input['contactOther'] ?? '';
+        $iosDownloadUrl = $input['iosDownloadUrl'] ?? '';
+        $androidDownloadUrl = $input['androidDownloadUrl'] ?? '';
         
         if (empty($serverUrl) || empty($adminUsername) || empty($apiKey)) {
             http_response_code(400);
@@ -323,7 +327,9 @@ if ($path === '/api/admin/config') {
             'contactEmail' => $contactEmail,
             'contactPhone' => $contactPhone,
             'contactWhatsApp' => $contactWhatsApp,
-            'contactOther' => $contactOther
+            'contactOther' => $contactOther,
+            'iosDownloadUrl' => $iosDownloadUrl,
+            'androidDownloadUrl' => $androidDownloadUrl
         ];
         
         $jellyfin = new JellyfinService($newConfig);

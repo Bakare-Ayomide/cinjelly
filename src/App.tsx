@@ -193,6 +193,7 @@ export default function App() {
       setJellyfinToken={setJellyfinToken}
       onLogout={handleLogout}
       onReloadUser={reloadUserProfile}
+      systemStatus={systemStatus}
     />
   );
 }

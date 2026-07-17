@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { 
   Tv, LogOut, CheckCircle, AlertTriangle, Play, ShieldAlert, CreditCard, 
   Loader2, RefreshCw, Key, HelpCircle, ArrowLeft, ExternalLink, X, Info, UserCheck, Calendar,
-  Users, DollarSign, Gift, Clock, Share2, Copy, Check, Percent, MessageSquare, PlusCircle, Bell
+  Users, DollarSign, Gift, Clock, Share2, Copy, Check, Percent, MessageSquare, PlusCircle, Bell,
+  Smartphone, Download
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -12,9 +13,10 @@ interface UserPortalProps {
   onLogout: () => void;
   onReloadUser: () => void;
   setJellyfinToken: (token: string) => void;
+  systemStatus?: any;
 }
 
-export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser, setJellyfinToken }: UserPortalProps) {
+export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser, setJellyfinToken, systemStatus }: UserPortalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -47,10 +49,42 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
 
   // Broadcast & media request states
   const [notifications, setNotifications] = useState<any[]>([]);
+  const [readNotifIds, setReadNotifIds] = useState<string[]>([]);
   const [loadingNotifs, setLoadingNotifs] = useState(false);
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [showHeaderNotifs, setShowHeaderNotifs] = useState(false);
   const [selectedModalNotif, setSelectedModalNotif] = useState<any | null>(null);
+
+  // Load read notification IDs from localStorage
+  useEffect(() => {
+    if (user && user.id) {
+      try {
+        const stored = localStorage.getItem(`read_notifications_${user.id}`);
+        if (stored) {
+          setReadNotifIds(JSON.parse(stored));
+        } else {
+          setReadNotifIds([]);
+        }
+      } catch (e) {
+        console.error('Error loading read notifications', e);
+      }
+    }
+  }, [user]);
+
+  const handleOpenNotification = (notif: any) => {
+    setSelectedModalNotif(notif);
+    if (user && user.id && !readNotifIds.includes(notif.id)) {
+      const updated = [...readNotifIds, notif.id];
+      setReadNotifIds(updated);
+      try {
+        localStorage.setItem(`read_notifications_${user.id}`, JSON.stringify(updated));
+      } catch (e) {
+        console.error('Error saving read notification ID', e);
+      }
+    }
+  };
+
+  const unreadCount = notifications.filter(n => !readNotifIds.includes(n.id)).length;
   
   const [requestTitle, setRequestTitle] = useState('');
   const [requestType, setRequestType] = useState<'movie' | 'show'>('movie');
@@ -488,9 +522,9 @@ Note: My payment receipt has been uploaded to the portal.`;
               title="View notifications"
             >
               <Bell className="w-4 h-4 text-rose-400" />
-              {notifications.length > 0 && (
+              {unreadCount > 0 && (
                 <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-600 text-[9px] font-extrabold text-white rounded-full flex items-center justify-center animate-pulse">
-                  {notifications.length}
+                  {unreadCount}
                 </span>
               )}
             </button>
@@ -503,27 +537,35 @@ Note: My payment receipt has been uploaded to the portal.`;
                 <div className="absolute right-0 mt-2 w-80 bg-[#11131e] border border-slate-800 rounded-2xl shadow-2xl z-50 overflow-hidden text-left py-2 animate-in fade-in slide-in-from-top-3 duration-200">
                   <div className="px-4 py-2.5 border-b border-slate-800/80 flex items-center justify-between bg-slate-950/20">
                     <span className="font-extrabold text-xs text-white uppercase tracking-wider font-display">Notifications</span>
-                    <span className="text-[10px] bg-rose-500/10 text-rose-400 px-2 py-0.5 rounded-full font-bold">{notifications.length} unread</span>
+                    <span className="text-[10px] bg-rose-500/10 text-rose-400 px-2 py-0.5 rounded-full font-bold">{unreadCount} unread</span>
                   </div>
                   <div className="max-h-64 overflow-y-auto divide-y divide-slate-800/50">
-                    {notifications.map((notif, idx) => (
-                      <button
-                        key={notif.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedModalNotif(notif);
-                          setShowHeaderNotifs(false);
-                        }}
-                        className="w-full px-4 py-3 text-left hover:bg-slate-900/60 transition block cursor-pointer group"
-                      >
-                        <span className="text-rose-400 text-[9px] font-extrabold block mb-0.5 uppercase tracking-wide">
-                          Notification {idx + 1}
-                        </span>
-                        <span className="font-bold text-xs text-white block truncate group-hover:text-rose-400 transition">{notif.title}</span>
-                        <span className="text-[10px] text-slate-400 block truncate mt-0.5">{notif.message}</span>
-                        <span className="text-[9px] text-slate-500 block mt-1 font-mono">{new Date(notif.createdAt).toLocaleDateString()}</span>
-                      </button>
-                    ))}
+                    {notifications.map((notif, idx) => {
+                      const isUnread = !readNotifIds.includes(notif.id);
+                      return (
+                        <button
+                          key={notif.id}
+                          type="button"
+                          onClick={() => {
+                            handleOpenNotification(notif);
+                            setShowHeaderNotifs(false);
+                          }}
+                          className={`w-full px-4 py-3 text-left hover:bg-slate-900/60 transition block cursor-pointer group ${isUnread ? 'bg-rose-500/5 border-l-2 border-rose-500' : ''}`}
+                        >
+                          <div className="flex items-center justify-between gap-2 mb-0.5">
+                            <span className="text-rose-400 text-[9px] font-extrabold block uppercase tracking-wide">
+                              Notification {idx + 1}
+                            </span>
+                            {isUnread && (
+                              <span className="text-[8px] bg-rose-600 text-white font-extrabold px-1 rounded uppercase tracking-wider">New</span>
+                            )}
+                          </div>
+                          <span className="font-bold text-xs text-white block truncate group-hover:text-rose-400 transition">{notif.title}</span>
+                          <span className="text-[10px] text-slate-400 block truncate mt-0.5">{notif.message}</span>
+                          <span className="text-[9px] text-slate-500 block mt-1 font-mono">{new Date(notif.createdAt).toLocaleDateString()}</span>
+                        </button>
+                      );
+                    })}
                     {notifications.length === 0 && (
                       <div className="py-8 text-center text-xs text-slate-500 font-medium">
                         No announcements available.
@@ -910,6 +952,72 @@ Note: My payment receipt has been uploaded to the portal.`;
           </div>
         )}
 
+        {/* Mobile App Download Advertisement Banner */}
+        <div className="bg-gradient-to-r from-[#11131e] via-[#1a1325] to-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden mb-8">
+          <div className="absolute top-0 left-0 w-[4px] h-full bg-rose-500"></div>
+          <div className="flex flex-col md:flex-row items-center justify-between gap-6 relative z-10">
+            <div className="space-y-2 text-center md:text-left">
+              <span className="inline-flex items-center gap-1 bg-rose-500/10 text-rose-400 font-bold text-[9px] uppercase tracking-wider px-2.5 py-1 rounded-full border border-rose-500/20">
+                <Smartphone className="w-3 h-3" /> Offline watch available
+              </span>
+              <h3 className="text-lg font-display font-black text-white">Stream & Save Content Directly on Mobile Clients</h3>
+              <p className="text-slate-400 text-xs max-w-xl leading-relaxed">
+                Watch seamlessly on the move without buffering or using mobile data! Download our dedicated client apps for your iPhone, iPad, or Android smartphone/tablet.
+              </p>
+            </div>
+            
+            <div className="flex flex-wrap items-center gap-3 justify-center shrink-0">
+              {systemStatus?.iosDownloadUrl ? (
+                <a 
+                  href={systemStatus.iosDownloadUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="bg-slate-950 hover:bg-slate-900 text-white font-bold py-2.5 px-4 rounded-xl text-xs flex items-center gap-2 border border-slate-800 hover:border-slate-700 transition cursor-pointer"
+                >
+                  <svg className="w-4 h-4 fill-white" viewBox="0 0 24 24">
+                    <path d="M18.71,19.5C17.88,20.74 17,21.95 15.66,21.97C14.32,22 13.89,21.18 12.37,21.18C10.84,21.18 10.37,21.95 9.1,22C7.79,22.05 6.8,20.68 5.96,19.47C4.25,17 2.94,12.45 4.7,9.39C5.57,7.87 7.13,6.91 8.82,6.88C10.1,6.86 11.32,7.75 12.11,7.75C12.89,7.75 14.37,6.68 15.92,6.84C16.57,6.87 18.39,7.1 19.56,8.82C19.47,8.88 17.39,10.1 17.41,12.63C17.44,15.65 20.06,16.66 20.1,16.67C20.08,16.74 19.67,18.11 18.71,19.5M15.97,4.17C16.63,3.37 17.07,2.28 16.95,1C16,1.04 14.9,1.6 14.24,2.38C13.68,3.04 13.19,4.14 13.34,5.39C14.39,5.47 15.4,4.88 15.97,4.17Z" />
+                  </svg>
+                  <span>Download iOS App</span>
+                </a>
+              ) : (
+                <button 
+                  onClick={() => alert("iOS app download URL is currently being set up by our admins. Check back soon!")}
+                  className="bg-slate-950/40 text-slate-500 font-bold py-2.5 px-4 rounded-xl text-xs flex items-center gap-2 border border-slate-900 transition cursor-not-allowed"
+                >
+                  <svg className="w-4 h-4 fill-slate-500" viewBox="0 0 24 24">
+                    <path d="M18.71,19.5C17.88,20.74 17,21.95 15.66,21.97C14.32,22 13.89,21.18 12.37,21.18C10.84,21.18 10.37,21.95 9.1,22C7.79,22.05 6.8,20.68 5.96,19.47C4.25,17 2.94,12.45 4.7,9.39C5.57,7.87 7.13,6.91 8.82,6.88C10.1,6.86 11.32,7.75 12.11,7.75C12.89,7.75 14.37,6.68 15.92,6.84C16.57,6.87 18.39,7.1 19.56,8.82C19.47,8.88 17.39,10.1 17.41,12.63C17.44,15.65 20.06,16.66 20.1,16.67C20.08,16.74 19.67,18.11 18.71,19.5M15.97,4.17C16.63,3.37 17.07,2.28 16.95,1C16,1.04 14.9,1.6 14.24,2.38C13.68,3.04 13.19,4.14 13.34,5.39C14.39,5.47 15.4,4.88 15.97,4.17Z" />
+                  </svg>
+                  <span>iOS App (Pending)</span>
+                </button>
+              )}
+
+              {systemStatus?.androidDownloadUrl ? (
+                <a 
+                  href={systemStatus.androidDownloadUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="bg-slate-950 hover:bg-slate-900 text-white font-bold py-2.5 px-4 rounded-xl text-xs flex items-center gap-2 border border-slate-800 hover:border-slate-700 transition cursor-pointer"
+                >
+                  <svg className="w-4 h-4 fill-white" viewBox="0 0 24 24">
+                    <path d="M3,5.27V18.73L16.55,12L3,5.27M17.87,11.33L19.43,12.11L17.87,12.89L16.67,12L17.87,11.33M3,3.41L15.67,9.7L18.11,8.47L3,3.41M3,20.59L18.11,15.53L15.67,14.3L3,20.59Z" />
+                  </svg>
+                  <span>Download Android App</span>
+                </a>
+              ) : (
+                <button 
+                  onClick={() => alert("Android app download URL is currently being set up by our admins. Check back soon!")}
+                  className="bg-slate-950/40 text-slate-500 font-bold py-2.5 px-4 rounded-xl text-xs flex items-center gap-2 border border-slate-900 transition cursor-not-allowed"
+                >
+                  <svg className="w-4 h-4 fill-slate-500" viewBox="0 0 24 24">
+                    <path d="M3,5.27V18.73L16.55,12L3,5.27M17.87,11.33L19.43,12.11L17.87,12.89L16.67,12L17.87,11.33M3,3.41L15.67,9.7L18.11,8.47L3,3.41M3,20.59L18.11,15.53L15.67,14.3L3,20.59Z" />
+                  </svg>
+                  <span>Android App (Pending)</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
         {/* Community Announcements Feed & Media Requests Section */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-8">
           
@@ -953,14 +1061,21 @@ Note: My payment receipt has been uploaded to the portal.`;
                     notif.imageUrl.includes('/video/')
                   );
 
+                  const isUnread = !readNotifIds.includes(notif.id);
+
                   return (
                     <div 
                       key={notif.id} 
-                      onClick={() => setSelectedModalNotif(notif)}
-                      className="bg-[#07080c] border border-slate-800/80 rounded-xl p-5 hover:border-sky-500/40 transition text-left cursor-pointer hover:bg-slate-900/10 group"
+                      onClick={() => handleOpenNotification(notif)}
+                      className={`border rounded-xl p-5 hover:border-sky-500/40 transition text-left cursor-pointer hover:bg-slate-900/10 group relative ${isUnread ? 'bg-rose-500/5 border-rose-500/30' : 'bg-[#07080c] border-slate-800/80'}`}
                     >
                       <div className="flex justify-between items-start gap-4 mb-2">
-                        <h4 className="text-white font-bold text-sm group-hover:text-sky-400 transition">{notif.title}</h4>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-white font-bold text-sm group-hover:text-sky-400 transition">{notif.title}</h4>
+                          {isUnread && (
+                            <span className="bg-rose-600 text-white text-[8px] font-extrabold px-1.5 py-0.5 rounded uppercase tracking-wider">New</span>
+                          )}
+                        </div>
                         <span className="text-[9px] text-slate-500 font-mono shrink-0">{new Date(notif.createdAt).toLocaleDateString()}</span>
                       </div>
                       <p className="text-slate-300 text-xs leading-relaxed whitespace-pre-wrap">{notif.message}</p>

@@ -119,7 +119,9 @@ app.get('/api/status', async (req, res) => {
       serverUrl: config?.serverUrl || '',
       adminUsername: config?.adminUsername || '',
       mysqlAvailable: mysqlAvailable,
-      mysqlError: mysqlAvailable ? null : (mysqlErrorMsg || 'Sandbox Memory Fallback Mode active')
+      mysqlError: mysqlAvailable ? null : (mysqlErrorMsg || 'Sandbox Memory Fallback Mode active'),
+      iosDownloadUrl: config?.iosDownloadUrl || '',
+      androidDownloadUrl: config?.androidDownloadUrl || ''
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -233,7 +235,9 @@ app.post('/api/admin/config', async (req: any, res) => {
     contactEmail,
     contactPhone,
     contactWhatsApp,
-    contactOther
+    contactOther,
+    iosDownloadUrl,
+    androidDownloadUrl
   } = req.body;
   if (!serverUrl || !adminUsername || !apiKey) {
     return res.status(400).json({ error: 'Server URL, Admin Username, and API Key are required.' });
@@ -254,7 +258,9 @@ app.post('/api/admin/config', async (req: any, res) => {
     contactEmail: contactEmail || '',
     contactPhone: contactPhone || '',
     contactWhatsApp: contactWhatsApp || '',
-    contactOther: contactOther || ''
+    contactOther: contactOther || '',
+    iosDownloadUrl: iosDownloadUrl || '',
+    androidDownloadUrl: androidDownloadUrl || ''
   };
   
   const jellyfin = new JellyfinService(newConfig);
@@ -1599,6 +1605,10 @@ const startServer = async () => {
   });
 };
 
-startServer().catch((err) => {
-  console.error('Failed to start full-stack server:', err);
-});
+if (!process.env.VERCEL) {
+  startServer().catch((err) => {
+    console.error('Failed to start full-stack server:', err);
+  });
+}
+
+export default app;
