@@ -1,4 +1,4 @@
-import { JellyfinConfig } from './db';
+import { JellyfinConfig } from './db.js';
 
 // Generates the standard Authorization header required by Jellyfin
 function getAuthHeader(token?: string) {

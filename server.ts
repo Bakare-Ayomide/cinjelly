@@ -4,8 +4,8 @@ import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import crypto from 'crypto';
-import { db, hashPassword, verifyPassword, UserRecord, initDb, mysqlAvailable, mysqlErrorMsg } from './server/db';
-import { JellyfinService } from './server/jellyfin';
+import { db, hashPassword, verifyPassword, UserRecord, initDb, mysqlAvailable, mysqlErrorMsg } from './server/db.js';
+import { JellyfinService } from './server/jellyfin.js';
 
 const app = express();
 const PORT = 3000;
