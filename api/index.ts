@@ -1,5 +1,5 @@
-import app from '../server';
-import { initDb } from '../server/db';
+import app from '../server.js';
+import { initDb } from '../server/db.js';
 
 let isInitialized = false;
 

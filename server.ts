@@ -128,6 +128,45 @@ app.get('/api/status', async (req, res) => {
   }
 });
 
+// MySQL connection diagnostic test endpoint for Vercel
+app.get('/api/db-test', async (req, res) => {
+  const host = process.env.DB_HOST || '131.153.147.178';
+  const port = process.env.DB_PORT || '3306';
+  const user = process.env.DB_USER || 'zerolord_cinjelly';
+  const database = process.env.DB_NAME || 'zerolord_cinjelly';
+  
+  try {
+    await initDb();
+    if (mysqlAvailable) {
+      return res.json({
+        success: true,
+        message: 'Successfully connected to MySQL database!',
+        connectionDetails: { host, port, user, database }
+      });
+    } else {
+      return res.status(500).json({
+        success: false,
+        message: 'MySQL connection failed.',
+        error: mysqlErrorMsg,
+        connectionDetails: { host, port, user, database },
+        possibleCauses: [
+          'cPanel Remote MySQL is blocking Vercel IP addresses. Ensure "%" is added under cPanel -> Remote MySQL.',
+          'Port 3306 firewall block on cPanel server.',
+          'Database credentials mismatch in Vercel environment variables.'
+        ]
+      });
+    }
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to execute MySQL test.',
+      error: err.message,
+      code: err.code || 'UNKNOWN',
+      connectionDetails: { host, port, user, database }
+    });
+  }
+});
+
 // Initial Setup Wizard: create the system administrator using backend environment configurations
 app.post('/api/setup', async (req, res) => {
   try {
