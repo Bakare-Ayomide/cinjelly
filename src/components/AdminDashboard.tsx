@@ -4,9 +4,17 @@ import {
   ArrowLeft, Loader2, Ban, PlusCircle, Activity, UserCheck, Tv,
   TrendingUp, DollarSign, Percent, Settings, Award, ShieldAlert, Edit, Check, Calendar, ArrowRight,
   Trash2, ChevronLeft, ChevronRight, UserPlus, Info, CalendarDays, MessageSquare, Phone,
-  CreditCard, X, Smartphone, Download
+  CreditCard, X, Smartphone, Download, Mail, Send, Code, FileText, Lock, Eye, RotateCcw, Layout, Maximize2, Monitor, HelpCircle, Copy
 } from 'lucide-react';
 import { User } from '../types';
+import { 
+  DEFAULT_VERIFICATION_SUBJECT, 
+  DEFAULT_VERIFICATION_TEMPLATE,
+  DEFAULT_WELCOME_SUBJECT,
+  DEFAULT_WELCOME_TEMPLATE,
+  DEFAULT_NOTIFICATION_SUBJECT,
+  DEFAULT_NOTIFICATION_TEMPLATE
+} from '../lib/templates';
 
 interface AdminDashboardProps {
   currentUser: User;
@@ -33,6 +41,125 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   const [configError, setConfigError] = useState<string | null>(null);
   const [configSuccess, setConfigSuccess] = useState<string | null>(null);
 
+  // SMTP & Email Verification Config State
+  const [smtpEnabled, setSmtpEnabled] = useState(false);
+  const [smtpHost, setSmtpHost] = useState('');
+  const [smtpPort, setSmtpPort] = useState(587);
+  const [smtpSecure, setSmtpSecure] = useState(false);
+  const [smtpUser, setSmtpUser] = useState('');
+  const [smtpPass, setSmtpPass] = useState('');
+  const [smtpFromName, setSmtpFromName] = useState('CINJELLY Stream');
+  const [smtpFromEmail, setSmtpFromEmail] = useState('');
+
+  // Email verification & templates state
+  const [emailVerificationEnabled, setEmailVerificationEnabled] = useState(false);
+  const [emailVerificationSubject, setEmailVerificationSubject] = useState('');
+  const [emailVerificationTemplate, setEmailVerificationTemplate] = useState('');
+  const [welcomeEmailSubject, setWelcomeEmailSubject] = useState('');
+  const [welcomeEmailTemplate, setWelcomeEmailTemplate] = useState('');
+  const [notificationEmailSubject, setNotificationEmailSubject] = useState('');
+  const [notificationEmailTemplate, setNotificationEmailTemplate] = useState('');
+
+  // Email Template editor/preview view modes ('edit' | 'preview' | 'split')
+  const [verifViewMode, setVerifViewMode] = useState<'edit' | 'preview' | 'split'>('split');
+  const [welcomeViewMode, setWelcomeViewMode] = useState<'edit' | 'preview' | 'split'>('split');
+  const [verifDevice, setVerifDevice] = useState<'desktop' | 'mobile'>('desktop');
+  const [welcomeDevice, setWelcomeDevice] = useState<'desktop' | 'mobile'>('desktop');
+  const [testingTemplate, setTestingTemplate] = useState<'verif' | 'welcome' | null>(null);
+
+  const handleSendTestTemplate = async (type: 'verif' | 'welcome') => {
+    if (!smtpTestEmail) {
+      showToast('Please enter a target recipient email address in the SMTP Test section above.', 'error');
+      return;
+    }
+
+    setTestingTemplate(type);
+    try {
+      const isVerif = type === 'verif';
+      const response = await fetch('/api/admin/smtp-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          smtpHost,
+          smtpPort: Number(smtpPort),
+          smtpSecure,
+          smtpUser,
+          smtpPass,
+          smtpFromName,
+          smtpFromEmail,
+          testEmail: smtpTestEmail,
+          customSubject: isVerif ? emailVerificationSubject : welcomeEmailSubject,
+          customHtml: isVerif ? emailVerificationTemplate : welcomeEmailTemplate
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || data.error || 'Failed to send test email');
+      }
+
+      showToast(`Success! Test template email delivered to ${smtpTestEmail}`, 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Error sending test email', 'error');
+    } finally {
+      setTestingTemplate(null);
+    }
+  };
+
+  // Fullscreen Email Preview Modal state
+  const [emailModal, setEmailModal] = useState<{
+    title: string;
+    subject: string;
+    html: string;
+  } | null>(null);
+  const [modalDevice, setModalDevice] = useState<'desktop' | 'mobile'>('desktop');
+
+  // Helper to render live sample HTML with dynamic tags
+  const renderSampleEmailHtml = (template: string, customVars?: Record<string, string>) => {
+    const sampleVars: Record<string, string> = {
+      username: 'alex_streamer',
+      fullName: 'Alex Morgan',
+      email: 'alex.morgan@example.com',
+      app_name: 'CINJELLY Stream',
+      login_url: typeof window !== 'undefined' ? window.location.origin : 'https://zerolord.com',
+      support_email: contactEmail || smtpFromEmail || 'support@zerolord.com',
+      website_url: serverUrl || (typeof window !== 'undefined' ? window.location.origin : 'https://zerolord.com'),
+      current_year: new Date().getFullYear().toString(),
+      verification_code: '849201',
+      verification_link: typeof window !== 'undefined' ? `${window.location.origin}/api/auth/verify-email?token=sample_token_abc123` : 'https://zerolord.com/api/auth/verify-email?token=sample_token_abc123',
+      ios_app_link: iosDownloadUrl || 'https://apps.apple.com/app/jellyfin/id1601583420',
+      android_app_link: androidDownloadUrl || 'https://play.google.com/store/apps/details?id=org.jellyfin.mobile',
+      notification_message: 'Your 30-day premium 4K pass has been renewed. Thank you for subscribing!',
+      ...(customVars || {})
+    };
+
+    let rendered = template || '';
+    Object.keys(sampleVars).forEach((key) => {
+      rendered = rendered.replace(new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}|\\{${key}\\}`, 'g'), sampleVars[key]);
+    });
+    return rendered;
+  };
+
+  const handleResetVerifTemplate = () => {
+    if (window.confirm('Reset Verification Email Subject and HTML Template to factory default?')) {
+      setEmailVerificationSubject(DEFAULT_VERIFICATION_SUBJECT);
+      setEmailVerificationTemplate(DEFAULT_VERIFICATION_TEMPLATE);
+      showToast('Verification email template reset to default!', 'success');
+    }
+  };
+
+  const handleResetWelcomeTemplate = () => {
+    if (window.confirm('Reset Welcome Email Subject and HTML Template to factory default?')) {
+      setWelcomeEmailSubject(DEFAULT_WELCOME_SUBJECT);
+      setWelcomeEmailTemplate(DEFAULT_WELCOME_TEMPLATE);
+      showToast('Welcome email template reset to default!', 'success');
+    }
+  };
+
+  // SMTP Test state
+  const [smtpTestEmail, setSmtpTestEmail] = useState('');
+  const [smtpTesting, setSmtpTesting] = useState(false);
+
   // Floating Toast notification state
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
@@ -49,8 +176,31 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
     }
   }, [toast]);
 
+  // Helper to check if user registered within the last 2 days (48 hours)
+  const isNewUser = (registrationDate?: string): boolean => {
+    if (!registrationDate) return false;
+    const regTime = new Date(registrationDate).getTime();
+    if (isNaN(regTime)) return false;
+    const diffMs = Date.now() - regTime;
+    const fortyEightHoursMs = 2 * 24 * 60 * 60 * 1000;
+    return diffMs >= 0 && diffMs <= fortyEightHoursMs;
+  };
+
+  // Helper to format signup date and day of week
+  const formatSignupDateAndDay = (registrationDate?: string): string => {
+    if (!registrationDate) return 'N/A';
+    const d = new Date(registrationDate);
+    if (isNaN(d.getTime())) return registrationDate;
+
+    const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
+    const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const timeStr = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+
+    return `${dayName}, ${dateStr} (${timeStr})`;
+  };
+
   // Tab navigation state
-  const [activeTab, setActiveTab] = useState<'subscriptions' | 'affiliates' | 'commissions' | 'reports' | 'payments' | 'affiliates_dashboard' | 'media_requests' | 'notifications'>('subscriptions');
+  const [activeTab, setActiveTab] = useState<'subscriptions' | 'payment_settings' | 'support_config' | 'mobile_app' | 'affiliates' | 'commissions' | 'reports' | 'payments' | 'affiliates_dashboard' | 'media_requests' | 'notifications' | 'smtp_email'>('subscriptions');
 
   // Affiliate Dashboard tab state
   const [affiliates, setAffiliates] = useState<any[]>([]);
@@ -72,6 +222,28 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   const [broadcastLoading, setBroadcastLoading] = useState(false);
   const [sentNotifications, setSentNotifications] = useState<any[]>([]);
   const [loadingSentNotifications, setLoadingSentNotifications] = useState(false);
+
+  const [copiedWebhook, setCopiedWebhook] = useState(false);
+
+  const getFullWebhookUrl = () => {
+    let base = typeof window !== 'undefined' ? window.location.origin : '';
+    // If window.location.origin is present, use it directly so it matches the current domain (e.g., https://cinjelly.zerolord.com)
+    if (typeof window !== 'undefined' && window.location && window.location.origin) {
+      base = window.location.origin;
+    } else if (serverUrl && serverUrl.startsWith('http')) {
+      base = serverUrl.replace(/\/$/, '');
+    }
+    return `${base}/api/payment/monnify-webhook`;
+  };
+
+  const handleCopyWebhook = () => {
+    const url = getFullWebhookUrl();
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(url);
+      setCopiedWebhook(true);
+      setTimeout(() => setCopiedWebhook(false), 2500);
+    }
+  };
 
   const fetchSentNotifications = async () => {
     setLoadingSentNotifications(true);
@@ -290,6 +462,14 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   const [bankBeneficiary, setBankBeneficiary] = useState('');
   const [bankInstructions, setBankInstructions] = useState('');
 
+  // Monnify Payment Gateway config states
+  const [monnifyEnabled, setMonnifyEnabled] = useState(false);
+  const [monnifyApiKey, setMonnifyApiKey] = useState('');
+  const [monnifyContractCode, setMonnifyContractCode] = useState('');
+  const [monnifySecretKey, setMonnifySecretKey] = useState('');
+  const [monnifyMode, setMonnifyMode] = useState<'live' | 'test'>('live');
+  const [subscriptionAmount, setSubscriptionAmount] = useState('600.00');
+
   // Chatbot & Contact config states
   const [chatbotInfo, setChatbotInfo] = useState('');
   const [chatbotInstructions, setChatbotInstructions] = useState('');
@@ -360,6 +540,33 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
         setContactOther(data.contactOther || '');
         setIosDownloadUrl(data.iosDownloadUrl || '');
         setAndroidDownloadUrl(data.androidDownloadUrl || '');
+
+        // SMTP settings
+        setSmtpEnabled(!!data.smtpEnabled);
+        setSmtpHost(data.smtpHost || '');
+        setSmtpPort(data.smtpPort || 587);
+        setSmtpSecure(!!data.smtpSecure);
+        setSmtpUser(data.smtpUser || '');
+        setSmtpPass(data.smtpPass || '');
+        setSmtpFromName(data.smtpFromName || 'CINJELLY Stream');
+        setSmtpFromEmail(data.smtpFromEmail || '');
+
+        // Email templates & verification settings
+        setEmailVerificationEnabled(!!data.emailVerificationEnabled);
+        setEmailVerificationSubject(data.emailVerificationSubject || '');
+        setEmailVerificationTemplate(data.emailVerificationTemplate || '');
+        setWelcomeEmailSubject(data.welcomeEmailSubject || '');
+        setWelcomeEmailTemplate(data.welcomeEmailTemplate || '');
+        setNotificationEmailSubject(data.notificationEmailSubject || '');
+        setNotificationEmailTemplate(data.notificationEmailTemplate || '');
+
+        // Monnify settings
+        setMonnifyEnabled(!!data.monnifyEnabled);
+        setMonnifyApiKey(data.monnifyApiKey || '');
+        setMonnifyContractCode(data.monnifyContractCode || '');
+        setMonnifySecretKey(data.monnifySecretKey || '');
+        setMonnifyMode(data.monnifyMode || 'live');
+        setSubscriptionAmount(data.subscriptionAmount ? String(data.subscriptionAmount) : '600.00');
       }
     } catch (err: any) {
       setConfigError('Could not load active Jellyfin server settings.');
@@ -426,14 +633,35 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
           contactWhatsApp,
           contactOther,
           iosDownloadUrl,
-          androidDownloadUrl
+          androidDownloadUrl,
+          smtpEnabled,
+          smtpHost,
+          smtpPort,
+          smtpSecure,
+          smtpUser,
+          smtpPass,
+          smtpFromName,
+          smtpFromEmail,
+          emailVerificationEnabled,
+          emailVerificationSubject,
+          emailVerificationTemplate,
+          welcomeEmailSubject,
+          welcomeEmailTemplate,
+          notificationEmailSubject,
+          notificationEmailTemplate,
+          monnifyEnabled,
+          monnifyApiKey,
+          monnifyContractCode,
+          monnifySecretKey,
+          monnifyMode,
+          subscriptionAmount
         })
       });
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || 'Failed to save configuration');
       }
-      setConfigSuccess('Server configuration and commission rates updated successfully!');
+      setConfigSuccess('System settings, SMTP & Email Verification options saved successfully!');
       showToast('Configuration settings saved successfully!', 'success');
       fetchUsers();
     } catch (err: any) {
@@ -441,6 +669,43 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       showToast(err.message || 'Failed to save configuration.', 'error');
     } finally {
       setConfigSaving(false);
+    }
+  };
+
+  const handleTestSmtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!smtpTestEmail) {
+      showToast('Please enter an email address for testing SMTP.', 'error');
+      return;
+    }
+
+    setSmtpTesting(true);
+    try {
+      const response = await fetch('/api/admin/smtp-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          smtpHost,
+          smtpPort: Number(smtpPort),
+          smtpSecure,
+          smtpUser,
+          smtpPass,
+          smtpFromName,
+          smtpFromEmail,
+          testEmail: smtpTestEmail
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || data.error || 'SMTP test failed');
+      }
+
+      showToast(`Success! Test email delivered to ${smtpTestEmail}`, 'success');
+    } catch (err: any) {
+      showToast(err.message || 'SMTP Connection Test Failed', 'error');
+    } finally {
+      setSmtpTesting(false);
     }
   };
 
@@ -887,10 +1152,45 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             <Tv className="w-4 h-4" /> Subscription Control
           </button>
           <button
+            onClick={() => setActiveTab('payments')}
+            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'payments' ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
+          >
+            <CreditCard className="w-4 h-4" /> Verify Payments
+            {users.filter(u => u.paymentStatus === 'Pending Verification').length > 0 && (
+              <span className="bg-rose-600 text-white font-extrabold text-[10px] px-1.5 py-0.5 rounded-full min-w-4 text-center ml-1 animate-pulse">
+                {users.filter(u => u.paymentStatus === 'Pending Verification').length}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setActiveTab('payment_settings')}
+            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'payment_settings' ? 'border-sky-500 text-sky-400 bg-sky-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
+          >
+            <CreditCard className="w-4 h-4" /> Payment Settings & Monnify
+          </button>
+          <button
+            onClick={() => setActiveTab('support_config')}
+            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'support_config' ? 'border-indigo-500 text-indigo-400 bg-indigo-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
+          >
+            <HelpCircle className="w-4 h-4" /> Support & Chatbot
+          </button>
+          <button
+            onClick={() => setActiveTab('mobile_app')}
+            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'mobile_app' ? 'border-rose-400 text-rose-300 bg-rose-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
+          >
+            <Smartphone className="w-4 h-4" /> Mobile Apps
+          </button>
+          <button
             onClick={() => setActiveTab('affiliates')}
             className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'affiliates' ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
           >
             <Percent className="w-4 h-4" /> Affiliates Program
+          </button>
+          <button
+            onClick={() => setActiveTab('affiliates_dashboard')}
+            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'affiliates_dashboard' ? 'border-indigo-500 text-indigo-400 bg-indigo-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
+          >
+            <Award className="w-4 h-4" /> Affiliate Partners
           </button>
           <button
             onClick={() => setActiveTab('commissions')}
@@ -903,23 +1203,6 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'reports' ? 'border-violet-500 text-violet-400 bg-violet-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
           >
             <TrendingUp className="w-4 h-4" /> BI Reports
-          </button>
-          <button
-            onClick={() => setActiveTab('payments')}
-            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'payments' ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
-          >
-            <CreditCard className="w-4 h-4" /> Verify Payments
-            {users.filter(u => u.paymentStatus === 'Pending Verification').length > 0 && (
-              <span className="bg-rose-600 text-white font-extrabold text-[10px] px-1.5 py-0.5 rounded-full min-w-4 text-center ml-1 animate-pulse">
-                {users.filter(u => u.paymentStatus === 'Pending Verification').length}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => setActiveTab('affiliates_dashboard')}
-            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'affiliates_dashboard' ? 'border-indigo-500 text-indigo-400 bg-indigo-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
-          >
-            <Award className="w-4 h-4" /> Affiliate Partners
           </button>
           <button
             onClick={() => setActiveTab('media_requests')}
@@ -937,6 +1220,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'notifications' ? 'border-sky-500 text-sky-400 bg-sky-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
           >
             <MessageSquare className="w-4 h-4" /> Send Broadcasts
+          </button>
+          <button
+            onClick={() => setActiveTab('smtp_email')}
+            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'smtp_email' ? 'border-purple-500 text-purple-400 bg-purple-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
+          >
+            <Mail className="w-4 h-4" /> SMTP & Verification
           </button>
         </div>        {/* TAB 1: SUBSCRIPTION CONTROL */}
         {activeTab === 'subscriptions' && (
@@ -1023,28 +1312,30 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     <thead className="bg-[#0e1018]">
                       <tr className="text-left text-xs font-semibold text-slate-400 tracking-wider">
                         <th className="px-6 py-4">Subscriber Details</th>
+                        <th className="px-6 py-4">Signed Up Date & Day</th>
                         <th className="px-6 py-4">Plan Status</th>
-                        <th className="px-6 py-4">Jellyfin Server Link</th>
+                        <th className="px-6 py-4">Server Link ID</th>
                         <th className="px-6 py-4 text-right">Expiration Action Controls</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/40 text-sm">
                       {loading ? (
                         <tr>
-                          <td colSpan={4} className="px-6 py-12 text-center text-slate-500">
+                          <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
                             <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-rose-500" />
                             <span className="text-xs">Fetching records...</span>
                           </td>
                         </tr>
                       ) : filteredUsersForSubs.length === 0 ? (
                         <tr>
-                          <td colSpan={4} className="px-6 py-12 text-center text-slate-400 font-medium text-xs">
+                          <td colSpan={5} className="px-6 py-12 text-center text-slate-400 font-medium text-xs">
                             No subscriber accounts match this filter.
                           </td>
                         </tr>
                       ) : (
                         filteredUsersForSubs.map((user) => {
                           const expiringNow = isExpiring(user.subscriptionExpiryDate);
+                          const isNew = isNewUser(user.registrationDate);
                           return (
                             <tr key={user.id} className="hover:bg-[#11131e]/50 transition text-xs">
                               <td 
@@ -1052,13 +1343,32 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                                 onClick={() => setSelectedUserForView(user)}
                                 title="Click to open Birds-eye View & User Management"
                               >
-                                <span className="block font-bold text-white text-sm group-hover:text-rose-400 group-hover:underline transition-colors flex items-center gap-1.5">
+                                <span className="font-bold text-white text-sm group-hover:text-rose-400 group-hover:underline transition-colors flex items-center gap-1.5 flex-wrap">
                                   {user.fullName}
+                                  {isNew && (
+                                    <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider font-mono">
+                                      (NEW)
+                                    </span>
+                                  )}
                                   <span className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] bg-rose-500/15 text-rose-300 font-normal px-1.5 py-0.5 rounded border border-rose-500/20 font-sans">
                                     Manage
                                   </span>
                                 </span>
-                                <span className="block text-[11px] text-slate-400">@{user.username} • {user.email}</span>
+                                <span className="block text-[11px] text-slate-400 mt-0.5">@{user.username} • {user.email}</span>
+                              </td>
+                              <td className="px-6 py-4">
+                                <div className="flex flex-col gap-1 items-start">
+                                  <span className="text-slate-200 font-medium text-xs flex items-center gap-1.5">
+                                    <CalendarDays className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                    {formatSignupDateAndDay(user.registrationDate)}
+                                  </span>
+                                  {isNew && (
+                                    <span className="inline-flex items-center gap-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-extrabold px-2 py-0.5 rounded-full">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+                                      Registered Recently
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                               <td className="px-6 py-4">
                                 <div className="flex flex-col gap-1 items-start">
@@ -1346,39 +1656,174 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
           </div>
         )}
 
-        {/* TAB 2: AFFILIATES PROGRAM */}
-        {activeTab === 'affiliates' && (
+        {/* TAB: PAYMENT SETTINGS & MONNIFY */}
+        {activeTab === 'payment_settings' && (
           <div className="space-y-6">
             
-            {/* Configurable Default Commission Rate */}
+            {/* Monnify Payment Gateway Configuration */}
             <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
-              <div className="absolute top-0 left-0 w-full h-[3px] bg-emerald-500"></div>
-              <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
-                <Settings className="w-4.5 h-4.5 text-emerald-400" />
-                <span>Default Affiliate Commission Rate</span>
-              </h3>
-              <p className="text-slate-400 text-xs mt-1 leading-relaxed max-w-2xl">
-                Configure the reward amount automatically allocated to a referral partner immediately upon their referred user completing their first 30-day paid subscription.
-              </p>
-              
-              <div className="mt-5 flex flex-col sm:flex-row items-end gap-3 max-w-sm">
-                <div className="space-y-1 w-full">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Commission Reward (₦ NGN)</label>
-                  <input 
-                    type="number" 
-                    step="0.01" 
-                    required
-                    placeholder="100.00" 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-emerald-500 transition"
-                    value={defaultCommission}
-                    onChange={(e) => setDefaultCommission(e.target.value)}
+              <div className="absolute top-0 left-0 w-full h-[3px] bg-sky-500"></div>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
+                    <CreditCard className="w-4.5 h-4.5 text-sky-400" />
+                    <span>Monnify Web Checkout Gateway</span>
+                  </h3>
+                  <p className="text-slate-400 text-xs mt-1 leading-relaxed max-w-2xl">
+                    Configure Monnify API credentials to enable instant automated payments via Card, Bank Transfer, USSD, and Mobile Wallet.
+                  </p>
+                </div>
+                
+                {/* Gateway Feature Toggle */}
+                <div className="flex items-center gap-3 bg-[#07080c] p-2.5 px-4 rounded-xl border border-slate-800">
+                  <div className="text-right">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Gateway Status</div>
+                    <div className={`text-xs font-bold ${monnifyEnabled ? 'text-emerald-400' : 'text-slate-500'}`}>
+                      {monnifyEnabled ? 'FEATURE ENABLED' : 'FEATURE TOTALLY OFF'}
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      className="sr-only peer"
+                      checked={monnifyEnabled}
+                      onChange={(e) => setMonnifyEnabled(e.target.checked)}
+                    />
+                    <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-500"></div>
+                  </label>
+                </div>
+              </div>
+
+              {/* Mode & Subscription Fee */}
+              <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4 bg-[#08090f] p-4 rounded-xl border border-slate-800/80">
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    Environment Mode <span className="text-sky-400">*</span>
+                  </label>
+                  <select
+                    value={monnifyMode}
+                    onChange={(e: any) => setMonnifyMode(e.target.value)}
+                    className="w-full bg-[#11131e] border border-slate-700 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition cursor-pointer font-bold"
+                  >
+                    <option value="live">🟢 Live / Production Mode</option>
+                    <option value="test">🟡 Test / Sandbox Mode</option>
+                  </select>
+                  <p className="text-[10px] text-slate-500 mt-0.5">
+                    {monnifyMode === 'test' ? 'Test mode uses Monnify sandbox endpoints and test card/transfer simulations.' : 'Live mode accepts real monetary payments from subscribers.'}
+                  </p>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    Subscription Fee (₦ NGN) <span className="text-sky-400">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="600.00"
+                    className="w-full bg-[#11131e] border border-slate-700 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition font-mono font-bold"
+                    value={subscriptionAmount}
+                    onChange={(e) => setSubscriptionAmount(e.target.value)}
+                  />
+                  <p className="text-[10px] text-slate-500 mt-0.5">
+                    Amount charged per 30-day access period.
+                  </p>
+                </div>
+              </div>
+
+              {/* Required Keys */}
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                    <span>Public Key / API Key <span className="text-sky-400">*</span></span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. MK_PROD_FLX4P92EDF or MK_TEST_..."
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition font-mono"
+                    value={monnifyApiKey}
+                    onChange={(e) => setMonnifyApiKey(e.target.value)}
                   />
                 </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                    <span>Contract Key / Code <span className="text-sky-400">*</span></span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 626609763141"
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition font-mono"
+                    value={monnifyContractCode}
+                    onChange={(e) => setMonnifyContractCode(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                    <span>Secret Key <span className="text-sky-400">*</span></span>
+                  </label>
+                  <input
+                    type="password"
+                    placeholder="e.g. MK_SECRET_..."
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition font-mono"
+                    value={monnifySecretKey}
+                    onChange={(e) => setMonnifySecretKey(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {/* Webhook Configuration Field */}
+              <div className="mt-5 p-4 rounded-xl bg-[#080a12] border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-bold text-sky-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <Code className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Monnify Webhook URL (Full Production & Sandbox Endpoint)</span>
+                  </label>
+                  <span className="text-[10px] text-slate-500">Copy & paste into Monnify Developer Dashboard</span>
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={getFullWebhookUrl()}
+                    className="w-full bg-[#030407] border border-slate-800 text-slate-200 text-xs font-mono py-2 px-3 rounded-lg focus:outline-none select-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCopyWebhook}
+                    className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                  >
+                    {copiedWebhook ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-emerald-400">Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5 text-slate-300" />
+                        <span>Copy URL</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500 leading-normal">
+                  In your Monnify portal under <strong>Settings &gt; Webhook URL</strong>, set this exact URL. Our server also listens to <code className="text-slate-400">/api/monnify/webhook</code> for maximum compatibility.
+                </p>
+              </div>
+
+              <div className="mt-5 flex items-center justify-between pt-4 border-t border-slate-800/60">
+                <span className="text-[11px] text-slate-400">
+                  Status: {monnifyEnabled ? <span className="text-emerald-400 font-bold">Active ({monnifyMode.toUpperCase()} MODE)</span> : <span className="text-rose-400 font-bold">Disabled</span>}
+                </span>
                 <button
                   onClick={handleSaveConfig}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded-xl text-xs transition cursor-pointer whitespace-nowrap h-[36px]"
+                  disabled={configSaving}
+                  className="bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-5 rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 h-[36px]"
                 >
-                  Save Comm. Rate
+                  {configSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                  <span>Save Monnify Settings</span>
                 </button>
               </div>
             </div>
@@ -1446,8 +1891,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 </button>
               </div>
             </div>
+          </div>
+        )}
 
-            {/* System Communication & Support Options */}
+        {/* TAB: SUPPORT & CHATBOT CONFIGURATION */}
+        {activeTab === 'support_config' && (
+          <div className="space-y-6">
             <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-[3px] bg-indigo-500"></div>
               <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
@@ -1534,8 +1983,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 </button>
               </div>
             </div>
+          </div>
+        )}
 
-            {/* Mobile App Download Configuration */}
+        {/* TAB: MOBILE CLIENT DOWNLOAD LINKS */}
+        {activeTab === 'mobile_app' && (
+          <div className="space-y-6">
             <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-[3px] bg-rose-500"></div>
               <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
@@ -1575,6 +2028,45 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   className="bg-rose-600 hover:bg-rose-700 text-white font-bold py-2 px-5 rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 h-[36px]"
                 >
                   <Check className="w-3.5 h-3.5" /> Save Mobile Download Links
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 2: AFFILIATES PROGRAM */}
+        {activeTab === 'affiliates' && (
+          <div className="space-y-6">
+            
+            {/* Configurable Default Commission Rate */}
+            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-[3px] bg-emerald-500"></div>
+              <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
+                <Settings className="w-4.5 h-4.5 text-emerald-400" />
+                <span>Default Affiliate Commission Rate</span>
+              </h3>
+              <p className="text-slate-400 text-xs mt-1 leading-relaxed max-w-2xl">
+                Configure the reward amount automatically allocated to a referral partner immediately upon their referred user completing their first 30-day paid subscription.
+              </p>
+              
+              <div className="mt-5 flex flex-col sm:flex-row items-end gap-3 max-w-sm">
+                <div className="space-y-1 w-full">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Commission Reward (₦ NGN)</label>
+                  <input 
+                    type="number" 
+                    step="0.01" 
+                    required
+                    placeholder="100.00" 
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-emerald-500 transition"
+                    value={defaultCommission}
+                    onChange={(e) => setDefaultCommission(e.target.value)}
+                  />
+                </div>
+                <button
+                  onClick={handleSaveConfig}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-4 rounded-xl text-xs transition cursor-pointer whitespace-nowrap h-[36px]"
+                >
+                  Save Comm. Rate
                 </button>
               </div>
             </div>
@@ -1627,8 +2119,19 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       users.map((user) => (
                         <tr key={user.id} className="hover:bg-[#11131e]/50 transition text-xs">
                           <td className="px-6 py-4">
-                            <span className="block font-bold text-white text-sm">{user.fullName}</span>
+                            <span className="font-bold text-white text-sm flex items-center gap-1.5 flex-wrap">
+                              {user.fullName}
+                              {isNewUser(user.registrationDate) && (
+                                <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider font-mono">
+                                  (NEW)
+                                </span>
+                              )}
+                            </span>
                             <span className="block text-[10px] text-slate-500">@{user.username} • {user.email}</span>
+                            <span className="block text-[10px] text-emerald-400 mt-1 font-medium flex items-center gap-1">
+                              <CalendarDays className="w-3 h-3 text-emerald-400 shrink-0" />
+                              Signed up: {formatSignupDateAndDay(user.registrationDate)}
+                            </span>
                           </td>
                           <td className="px-6 py-4">
                             {user.isAffiliate ? (
@@ -2209,7 +2712,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     <span>User Content Requests</span>
                   </h3>
                   <p className="text-slate-400 text-xs mt-1">
-                    Manage requests submitted by members for movies or TV shows they wish to see on your Jellyfin server.
+                    Manage requests submitted by members for movies or TV shows they wish to see on your streaming server.
                   </p>
                 </div>
                 <div className="bg-[#07080c] px-4 py-2 border border-slate-800 rounded-xl shrink-0">
@@ -2557,13 +3060,559 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
           </div>
         )}
 
-        {/* Jellyfin Server Connection card served at bottom of page */}
+        {/* TAB 9: SMTP & EMAIL VERIFICATION CONFIGURATION */}
+        {activeTab === 'smtp_email' && (
+          <div className="space-y-6">
+            <form onSubmit={handleSaveConfig} className="space-y-6">
+              
+              {/* Card 1: SMTP Server Configuration */}
+              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-5">
+                  <div>
+                    <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
+                      <Mail className="w-5 h-5 text-purple-400" />
+                      <span>SMTP Mail Server Credentials</span>
+                    </h3>
+                    <p className="text-slate-400 text-xs mt-0.5">
+                      Configure your custom SMTP host to deliver automated email verifications, welcome messages, and subscriber alerts.
+                    </p>
+                  </div>
+
+                  <label className="inline-flex items-center gap-3 cursor-pointer bg-[#07080c] border border-slate-800 py-2 px-4 rounded-xl">
+                    <input 
+                      type="checkbox" 
+                      className="w-4 h-4 accent-purple-600 cursor-pointer"
+                      checked={smtpEnabled}
+                      onChange={(e) => setSmtpEnabled(e.target.checked)}
+                    />
+                    <span className="text-xs font-bold text-white uppercase tracking-wider">
+                      {smtpEnabled ? 'SMTP Active' : 'SMTP Disabled'}
+                    </span>
+                  </label>
+                </div>
+
+                {smtpEnabled && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="space-y-1 md:col-span-2">
+                        <label className="block text-xs font-bold text-slate-300">SMTP Server Host</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. mail.zerolord.com or smtp.gmail.com"
+                          className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                          value={smtpHost}
+                          onChange={(e) => setSmtpHost(e.target.value)}
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="block text-xs font-bold text-slate-300">SMTP Port</label>
+                        <input
+                          type="number"
+                          placeholder="587"
+                          className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                          value={smtpPort}
+                          onChange={(e) => setSmtpPort(Number(e.target.value))}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="block text-xs font-bold text-slate-300">SMTP Username / Email</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. noreply@zerolord.com"
+                          className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                          value={smtpUser}
+                          onChange={(e) => setSmtpUser(e.target.value)}
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="block text-xs font-bold text-slate-300">SMTP Password</label>
+                        <input
+                          type="password"
+                          placeholder="••••••••••••"
+                          className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                          value={smtpPass}
+                          onChange={(e) => setSmtpPass(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="space-y-1">
+                        <label className="block text-xs font-bold text-slate-300">Sender Display Name</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. CINJELLY Stream Support"
+                          className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                          value={smtpFromName}
+                          onChange={(e) => setSmtpFromName(e.target.value)}
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="block text-xs font-bold text-slate-300">Sender From Email Address</label>
+                        <input
+                          type="email"
+                          placeholder="e.g. noreply@zerolord.com"
+                          className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                          value={smtpFromEmail}
+                          onChange={(e) => setSmtpFromEmail(e.target.value)}
+                        />
+                      </div>
+
+                      <div className="flex items-end pb-1">
+                        <label className="inline-flex items-center gap-2 cursor-pointer bg-[#07080c] border border-slate-800 p-2.5 rounded-xl w-full">
+                          <input
+                            type="checkbox"
+                            className="w-4 h-4 accent-purple-600 cursor-pointer"
+                            checked={smtpSecure}
+                            onChange={(e) => setSmtpSecure(e.target.checked)}
+                          />
+                          <span className="text-xs font-semibold text-slate-300">
+                            Use SSL/TLS Security (Port 465)
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* SMTP Live Connection Testing Tool */}
+                    <div className="bg-[#07080c] border border-slate-800/80 p-4 rounded-xl space-y-3 mt-4">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                          <Send className="w-3.5 h-3.5 text-purple-400" />
+                          <span>Test SMTP Server Connection</span>
+                        </span>
+                        <span className="text-[10px] text-slate-500">Delivers an immediate diagnostic test message</span>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <input
+                          type="email"
+                          placeholder="Enter target test email address (e.g. admin@example.com)"
+                          className="flex-1 bg-[#11131e] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                          value={smtpTestEmail}
+                          onChange={(e) => setSmtpTestEmail(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          onClick={handleTestSmtp}
+                          disabled={smtpTesting || !smtpTestEmail}
+                          className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-bold py-2 px-4 rounded-xl text-xs transition cursor-pointer flex items-center gap-2 shrink-0"
+                        >
+                          {smtpTesting ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              Testing...
+                            </>
+                          ) : (
+                            <>
+                              <Send className="w-3.5 h-3.5" />
+                              Send Test Email
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Card 2: Email Verification & Signup Toggles */}
+              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-5">
+                  <div>
+                    <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
+                      <CheckCircle className="w-5 h-5 text-emerald-400" />
+                      <span>Signup Email Verification Toggle & Template</span>
+                    </h3>
+                    <p className="text-slate-400 text-xs mt-0.5">
+                      When enabled, new users will automatically receive a verification email upon signup and must confirm it before access.
+                    </p>
+                  </div>
+
+                  <label className="inline-flex items-center gap-3 cursor-pointer bg-[#07080c] border border-slate-800 py-2 px-4 rounded-xl">
+                    <input 
+                      type="checkbox" 
+                      className="w-4 h-4 accent-emerald-600 cursor-pointer"
+                      checked={emailVerificationEnabled}
+                      onChange={(e) => setEmailVerificationEnabled(e.target.checked)}
+                    />
+                    <span className="text-xs font-bold text-white uppercase tracking-wider">
+                      {emailVerificationEnabled ? 'Verification Enabled' : 'Verification Disabled'}
+                    </span>
+                  </label>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <label className="block text-xs font-bold text-slate-300">Verification Email Subject</label>
+                    <input
+                      type="text"
+                      placeholder="Verify Your Email Address - CINJELLY Stream"
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-emerald-500 transition"
+                      value={emailVerificationSubject}
+                      onChange={(e) => setEmailVerificationSubject(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[#07080c] p-2.5 rounded-xl border border-slate-800">
+                      <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                        <Code className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Verification HTML Email Template</span>
+                      </label>
+
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <div className="bg-[#11131e] p-1 rounded-lg border border-slate-800 flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setVerifViewMode('edit')}
+                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${verifViewMode === 'edit' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                          >
+                            <Code className="w-3 h-3" /> Code
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setVerifViewMode('preview')}
+                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${verifViewMode === 'preview' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                          >
+                            <Eye className="w-3 h-3" /> Live Preview
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setVerifViewMode('split')}
+                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${verifViewMode === 'split' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                          >
+                            <Layout className="w-3 h-3" /> Split View
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={handleResetVerifTemplate}
+                          className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                          title="Reset to Factory Default"
+                        >
+                          <RotateCcw className="w-3 h-3 text-amber-400" /> Reset
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleSendTestTemplate('verif')}
+                          disabled={testingTemplate === 'verif' || !smtpTestEmail}
+                          className="px-2.5 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                          title={smtpTestEmail ? `Send live test email to ${smtpTestEmail}` : 'Enter test recipient email in SMTP section above to send'}
+                        >
+                          {testingTemplate === 'verif' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                          <span>Test Send</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setEmailModal({
+                            title: 'Signup Verification Email Live Preview',
+                            subject: emailVerificationSubject || 'Verify Your Email Address',
+                            html: renderSampleEmailHtml(emailVerificationTemplate)
+                          })}
+                          className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <Maximize2 className="w-3 h-3" /> Fullscreen
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Verification Email View Modes */}
+                    {verifViewMode === 'edit' && (
+                      <textarea
+                        rows={12}
+                        placeholder="Paste HTML or plain text email content here..."
+                        className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-3 text-emerald-300 text-xs font-mono focus:outline-none focus:border-emerald-500 transition leading-relaxed"
+                        value={emailVerificationTemplate}
+                        onChange={(e) => setEmailVerificationTemplate(e.target.value)}
+                      />
+                    )}
+
+                    {verifViewMode === 'preview' && (
+                      <div className="bg-white rounded-xl overflow-hidden border border-slate-700 shadow-inner p-2 min-h-[350px]">
+                        <iframe
+                          title="Verification Email Live Preview"
+                          className="w-full h-[380px] border-0 rounded-lg"
+                          srcDoc={renderSampleEmailHtml(emailVerificationTemplate)}
+                        />
+                      </div>
+                    )}
+
+                    {verifViewMode === 'split' && (
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 block uppercase">HTML Code Editor (Edit Anytime)</span>
+                          <textarea
+                            rows={14}
+                            placeholder="Paste HTML email content..."
+                            className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-3 text-emerald-300 text-xs font-mono focus:outline-none focus:border-emerald-500 transition leading-relaxed"
+                            value={emailVerificationTemplate}
+                            onChange={(e) => setEmailVerificationTemplate(e.target.value)}
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <div className="flex justify-between items-center text-[10px] font-bold text-slate-400 uppercase">
+                            <span>Live Rendered Email Preview</span>
+                            <span className="text-emerald-400 font-normal">Real-time update</span>
+                          </div>
+                          <div className="bg-[#0b0d17] p-2 rounded-xl border border-slate-800 h-[280px] sm:h-[330px]">
+                            <iframe
+                              title="Verification Email Live Preview"
+                              className="w-full h-full border-0 bg-white rounded-lg shadow-inner"
+                              srcDoc={renderSampleEmailHtml(emailVerificationTemplate)}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 3: Welcome & Payment Confirmation Email Settings */}
+              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl">
+                <div className="border-b border-slate-800/60 pb-5">
+                  <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-sky-400" />
+                    <span>Welcome & Payment Approval Notification Email</span>
+                  </h3>
+                  <p className="text-slate-400 text-xs mt-0.5">
+                    Automatically sent to subscribers whenever an admin approves their payment verification or activates their account.
+                  </p>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <label className="block text-xs font-bold text-slate-300">Welcome Email Subject</label>
+                    <input
+                      type="text"
+                      placeholder="Welcome to CINJELLY Stream! Payment Confirmed"
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition"
+                      value={welcomeEmailSubject}
+                      onChange={(e) => setWelcomeEmailSubject(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[#07080c] p-2.5 rounded-xl border border-slate-800">
+                      <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                        <Code className="w-3.5 h-3.5 text-sky-400" />
+                        <span>Welcome HTML Email Template</span>
+                      </label>
+
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <div className="bg-[#11131e] p-1 rounded-lg border border-slate-800 flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setWelcomeViewMode('edit')}
+                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${welcomeViewMode === 'edit' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                          >
+                            <Code className="w-3 h-3" /> Code
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setWelcomeViewMode('preview')}
+                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${welcomeViewMode === 'preview' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                          >
+                            <Eye className="w-3 h-3" /> Live Preview
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setWelcomeViewMode('split')}
+                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${welcomeViewMode === 'split' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                          >
+                            <Layout className="w-3 h-3" /> Split View
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={handleResetWelcomeTemplate}
+                          className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                          title="Reset to Factory Default"
+                        >
+                          <RotateCcw className="w-3 h-3 text-amber-400" /> Reset
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleSendTestTemplate('welcome')}
+                          disabled={testingTemplate === 'welcome' || !smtpTestEmail}
+                          className="px-2.5 py-1.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                          title={smtpTestEmail ? `Send live test email to ${smtpTestEmail}` : 'Enter test recipient email in SMTP section above to send'}
+                        >
+                          {testingTemplate === 'welcome' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                          <span>Test Send</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setEmailModal({
+                            title: 'Welcome & Payment Approval Email Live Preview',
+                            subject: welcomeEmailSubject || 'Welcome to CINJELLY Stream!',
+                            html: renderSampleEmailHtml(welcomeEmailTemplate)
+                          })}
+                          className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <Maximize2 className="w-3 h-3" /> Fullscreen
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Welcome Email View Modes */}
+                    {welcomeViewMode === 'edit' && (
+                      <textarea
+                        rows={12}
+                        placeholder="Paste Welcome HTML content here..."
+                        className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-3 text-sky-300 text-xs font-mono focus:outline-none focus:border-sky-500 transition leading-relaxed"
+                        value={welcomeEmailTemplate}
+                        onChange={(e) => setWelcomeEmailTemplate(e.target.value)}
+                      />
+                    )}
+
+                    {welcomeViewMode === 'preview' && (
+                      <div className="bg-white rounded-xl overflow-hidden border border-slate-700 shadow-inner p-2 min-h-[350px]">
+                        <iframe
+                          title="Welcome Email Live Preview"
+                          className="w-full h-[380px] border-0 rounded-lg"
+                          srcDoc={renderSampleEmailHtml(welcomeEmailTemplate)}
+                        />
+                      </div>
+                    )}
+
+                    {welcomeViewMode === 'split' && (
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 block uppercase">HTML Code Editor (Edit Anytime)</span>
+                          <textarea
+                            rows={14}
+                            placeholder="Paste Welcome HTML content..."
+                            className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-3 text-sky-300 text-xs font-mono focus:outline-none focus:border-sky-500 transition leading-relaxed"
+                            value={welcomeEmailTemplate}
+                            onChange={(e) => setWelcomeEmailTemplate(e.target.value)}
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <div className="flex justify-between items-center text-[10px] font-bold text-slate-400 uppercase">
+                            <span>Live Rendered Email Preview</span>
+                            <span className="text-sky-400 font-normal">Real-time update</span>
+                          </div>
+                          <div className="bg-[#0b0d17] p-2 rounded-xl border border-slate-800 h-[280px] sm:h-[330px]">
+                            <iframe
+                              title="Welcome Email Live Preview"
+                              className="w-full h-full border-0 bg-white rounded-lg shadow-inner"
+                              srcDoc={renderSampleEmailHtml(welcomeEmailTemplate)}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 4: Variables Reference Cheat Sheet */}
+              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-amber-400 mb-3 flex items-center gap-2">
+                  <Info className="w-4 h-4" />
+                  <span>Dynamic Template Variables Cheat Sheet</span>
+                </h4>
+                <p className="text-slate-400 text-xs mb-4">
+                  Insert these variable placeholders into your HTML email templates. They will automatically be populated with each recipient's actual details upon delivery:
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 text-xs font-mono">
+                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-amber-400 font-bold block">{`{username}`}</span>
+                    <span className="text-slate-500 text-[10px]">User's login username</span>
+                  </div>
+                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-amber-400 font-bold block">{`{fullName}`}</span>
+                    <span className="text-slate-500 text-[10px]">User's full display name</span>
+                  </div>
+                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-amber-400 font-bold block">{`{email}`}</span>
+                    <span className="text-slate-500 text-[10px]">User's email address</span>
+                  </div>
+                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-purple-400 font-bold block">{`{support_email}`}</span>
+                    <span className="text-slate-500 text-[10px]">Support contact email</span>
+                  </div>
+                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-purple-400 font-bold block">{`{website_url}`}</span>
+                    <span className="text-slate-500 text-[10px]">Portal/Server website URL</span>
+                  </div>
+                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-purple-400 font-bold block">{`{current_year}`}</span>
+                    <span className="text-slate-500 text-[10px]">Current year (e.g. 2026)</span>
+                  </div>
+                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-emerald-400 font-bold block">{`{verification_code}`}</span>
+                    <span className="text-slate-500 text-[10px]">6-digit OTP security code</span>
+                  </div>
+                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-emerald-400 font-bold block">{`{verification_link}`}</span>
+                    <span className="text-slate-500 text-[10px]">Direct 1-click verification link</span>
+                  </div>
+                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-sky-400 font-bold block">{`{ios_app_link}`}</span>
+                    <span className="text-slate-500 text-[10px]">iOS Apple Store app link</span>
+                  </div>
+                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-sky-400 font-bold block">{`{android_app_link}`}</span>
+                    <span className="text-slate-500 text-[10px]">Android APK / Store app link</span>
+                  </div>
+                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-rose-400 font-bold block">{`{app_name}`}</span>
+                    <span className="text-slate-500 text-[10px]">CINJELLY Stream</span>
+                  </div>
+                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-rose-400 font-bold block">{`{login_url}`}</span>
+                    <span className="text-slate-500 text-[10px]">Portal login portal URL</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Global Save Button */}
+              <div className="flex justify-end pt-2">
+                <button
+                  type="submit"
+                  disabled={configSaving}
+                  className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-bold py-3 px-8 rounded-xl text-xs transition cursor-pointer flex items-center gap-2 shadow-xl"
+                >
+                  {configSaving ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" /> Saving Settings...
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" /> Save SMTP & Email Settings
+                    </>
+                  )}
+                </button>
+              </div>
+
+            </form>
+          </div>
+        )}
+
+        {/* Media Server Connection card served at bottom of page */}
         {activeTab === 'subscriptions' && (
-          <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl" id="jellyfin-config-card">
+          <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl" id="server-config-card">
             <div>
               <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
                 <Tv className="w-5 h-5 text-rose-500" />
-                <span>Jellyfin Connection Settings</span>
+                <span>Media Server Connection Settings</span>
               </h3>
               <p className="text-slate-400 text-xs mt-1">
                 Directly adjust the connection parameters to your streaming server. Settings are stored securely in your active database.
@@ -2592,13 +3641,13 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <label htmlFor="serverUrl" className="block text-xs font-semibold text-slate-300">
-                      Jellyfin Server URL
+                      Media Server URL
                     </label>
                     <input
                       type="url"
                       id="serverUrl"
                       required
-                      placeholder="e.g. http://131.153.147.178:8096"
+                      placeholder="e.g. https://cinode.zerolord.com"
                       className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs placeholder-slate-600 focus:outline-none focus:border-rose-500 transition"
                       value={serverUrl}
                       onChange={(e) => setServerUrl(e.target.value)}
@@ -2607,7 +3656,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
                   <div className="space-y-1">
                     <label htmlFor="jellyfinAdminUser" className="block text-xs font-semibold text-slate-300">
-                      Jellyfin Admin Username
+                      Server Admin Username
                     </label>
                     <input
                       type="text"
@@ -2624,7 +3673,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <label htmlFor="jellyfinAdminPass" className="block text-xs font-semibold text-slate-300">
-                      Jellyfin Admin Password (Optional)
+                      Server Admin Password (Optional)
                     </label>
                     <input
                       type="password"
@@ -2638,13 +3687,13 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
                   <div className="space-y-1">
                     <label htmlFor="apiKey" className="block text-xs font-semibold text-slate-300">
-                      Jellyfin API Key
+                      Server API Key
                     </label>
                     <input
                       type="password"
                       id="apiKey"
                       required
-                      placeholder="Paste your Jellyfin API Key"
+                      placeholder="Paste your Server API Key"
                       className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs placeholder-slate-600 focus:outline-none focus:border-rose-500 transition"
                       value={apiKey}
                       onChange={(e) => setApiKey(e.target.value)}
@@ -2763,7 +3812,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               </div>
               <h3 className="text-lg font-display font-extrabold text-white">Create New Subscriber</h3>
               <p className="text-slate-400 text-xs mt-1">
-                Add a new user locally and configure their synced Jellyfin account.
+                Add a new user locally and configure their synced streaming account.
               </p>
             </div>
 
@@ -3208,7 +4257,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               {/* Extended Details */}
               <div className="bg-[#07080c] border border-slate-800/60 rounded-xl p-4 space-y-2.5 text-xs">
                 <div className="flex justify-between items-center border-b border-slate-800/40 pb-2">
-                  <span className="text-slate-500">Jellyfin ID:</span>
+                  <span className="text-slate-500">Synced Server ID:</span>
                   <span className="font-mono text-slate-300 truncate max-w-[200px]" title={selectedUserForView.jellyfinUserId || 'None'}>
                     {selectedUserForView.jellyfinUserId || 'Not Synced'}
                   </span>
@@ -3220,6 +4269,18 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     {selectedUserForView.isAffiliate ? (
                       <span className="text-emerald-400 font-bold">Yes (Code: {selectedUserForView.affiliateCode})</span>
                     ) : 'No'}
+                  </span>
+                </div>
+
+                <div className="flex justify-between items-center border-b border-slate-800/40 pb-2">
+                  <span className="text-slate-500">Signed Up Date & Day:</span>
+                  <span className="text-slate-200 font-medium flex items-center gap-1.5 text-right">
+                    {formatSignupDateAndDay(selectedUserForView.registrationDate)}
+                    {isNewUser(selectedUserForView.registrationDate) && (
+                      <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[9px] font-extrabold px-1.5 py-0.5 rounded font-mono">
+                        (NEW)
+                      </span>
+                    )}
                   </span>
                 </div>
 
@@ -3348,7 +4409,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 Are you absolutely sure you want to delete <span className="text-rose-400 font-bold">{targetUser.fullName}</span> (@{targetUser.username})?
               </p>
               <p className="text-slate-500 text-[10px] mt-2">
-                This action is irreversible. The account will be deleted locally from the database AND removed from your Jellyfin media server.
+                This action is irreversible. The account will be deleted locally from the database AND removed from your streaming server.
               </p>
             </div>
 
@@ -3467,6 +4528,73 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             <p className="text-xs text-slate-400 mt-3 font-medium bg-slate-950/80 py-1.5 px-4 rounded-full border border-slate-800">
               Click anywhere outside the image to close.
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* Fullscreen Email Live Preview Modal */}
+      {emailModal && (
+        <div 
+          className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4 sm:p-6"
+          onClick={() => setEmailModal(null)}
+        >
+          <div 
+            className="w-full max-w-5xl bg-[#11131e] border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[85vh] relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b border-slate-800/80 bg-[#07080c]">
+              <div>
+                <h3 className="text-sm font-display font-bold text-white flex items-center gap-2">
+                  <Eye className="w-4 h-4 text-emerald-400" />
+                  <span>{emailModal.title}</span>
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Subject: <span className="text-slate-200 font-semibold">{emailModal.subject}</span>
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                {/* Device Selector */}
+                <div className="bg-[#11131e] p-1 rounded-lg border border-slate-800 flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setModalDevice('desktop')}
+                    className={`px-3 py-1 rounded text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${modalDevice === 'desktop' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                  >
+                    <Monitor className="w-3.5 h-3.5" /> Desktop Mode
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setModalDevice('mobile')}
+                    className={`px-3 py-1 rounded text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${modalDevice === 'mobile' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                  >
+                    <Smartphone className="w-3.5 h-3.5" /> Mobile View (375px)
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => setEmailModal(null)}
+                  className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center font-bold text-lg transition cursor-pointer"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 bg-[#07080c] p-6 flex justify-center items-center overflow-auto">
+              <div 
+                className="w-full h-full transition-all duration-300 mx-auto shadow-2xl rounded-xl overflow-hidden bg-white"
+                style={{ maxWidth: modalDevice === 'mobile' ? '390px' : '100%' }}
+              >
+                <iframe
+                  title="Fullscreen Email Live Preview"
+                  className="w-full h-full border-0"
+                  srcDoc={emailModal.html}
+                />
+              </div>
+            </div>
           </div>
         </div>
       )}

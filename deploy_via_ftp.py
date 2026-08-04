@@ -10,9 +10,10 @@ HTACCESS_CONTENT = """<IfModule mod_rewrite.c>
     RewriteEngine On
     RewriteBase /
 
-    # Route /api and /jellyfin requests directly to the PHP folder
+    # Route /api, /jellyfin, /php-backend, and /backend requests directly to backend/index.php
     RewriteRule ^api/(.*)$ backend/index.php [QSA,L]
     RewriteRule ^jellyfin/(.*)$ backend/index.php [QSA,L]
+    RewriteRule ^php-backend/(.*)$ backend/index.php [QSA,L]
 
     # Standard React Router fallback for clean client URLs
     RewriteCond %{REQUEST_FILENAME} !-f
@@ -77,22 +78,21 @@ def deploy():
                 upload_file(ftp, local_file_path, filename)
                 
         # 3. Upload php-backend
-        print("\n--- Step 3: Deploying PHP backend ---")
-        # Check if backend folder exists
-        try:
-            ftp.cwd("/backend")
-        except ftplib.error_perm:
-            print("Creating remote 'backend' directory...")
-            ftp.cwd("/")
-            ftp.mkd("backend")
-            ftp.cwd("/backend")
-            
-        # Upload PHP backend files
-        local_backend_dir = "php-backend"
-        for filename in os.listdir(local_backend_dir):
-            local_file_path = os.path.join(local_backend_dir, filename)
-            if os.path.isfile(local_file_path):
-                upload_file(ftp, local_file_path, filename)
+        print("\n--- Step 3: Deploying PHP backend to /backend and /php-backend ---")
+        for target_remote_dir in ["/backend", "/php-backend"]:
+            try:
+                ftp.cwd(target_remote_dir)
+            except ftplib.error_perm:
+                print(f"Creating remote '{target_remote_dir}' directory...")
+                ftp.cwd("/")
+                ftp.mkd(target_remote_dir.lstrip("/"))
+                ftp.cwd(target_remote_dir)
+                
+            local_backend_dir = "php-backend"
+            for filename in os.listdir(local_backend_dir):
+                local_file_path = os.path.join(local_backend_dir, filename)
+                if os.path.isfile(local_file_path):
+                    upload_file(ftp, local_file_path, filename)
                 
         # 4. Upload .htaccess to root
         print("\n--- Step 4: Deploying root .htaccess ---")

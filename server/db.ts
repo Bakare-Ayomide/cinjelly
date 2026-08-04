@@ -20,6 +20,30 @@ export interface JellyfinConfig {
   contactOther?: string;
   iosDownloadUrl?: string;
   androidDownloadUrl?: string;
+  // SMTP Configuration
+  smtpEnabled?: number;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpSecure?: number;
+  smtpUser?: string;
+  smtpPass?: string;
+  smtpFromName?: string;
+  smtpFromEmail?: string;
+  // Email Verification & Template Settings
+  emailVerificationEnabled?: number;
+  emailVerificationSubject?: string;
+  emailVerificationTemplate?: string;
+  welcomeEmailSubject?: string;
+  welcomeEmailTemplate?: string;
+  notificationEmailSubject?: string;
+  notificationEmailTemplate?: string;
+  // Monnify & Subscription Settings
+  monnifyEnabled?: number;
+  monnifyApiKey?: string;
+  monnifyContractCode?: string;
+  monnifySecretKey?: string;
+  monnifyMode?: string;
+  subscriptionAmount?: number;
 }
 
 export interface UserRecord {
@@ -46,6 +70,9 @@ export interface UserRecord {
   transactionRef?: string;
   lastPaymentTime?: string;
   systemNotification?: string;
+  emailVerified?: number;
+  verificationToken?: string;
+  verificationTokenExpires?: string;
 }
 
 export interface CommissionRecord {
@@ -153,6 +180,9 @@ export async function initDb() {
     try { await pool.query("ALTER TABLE users ADD COLUMN transactionRef VARCHAR(255) NULL"); } catch (e) {}
     try { await pool.query("ALTER TABLE users ADD COLUMN lastPaymentTime VARCHAR(255) NULL"); } catch (e) {}
     try { await pool.query("ALTER TABLE users ADD COLUMN systemNotification TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE users ADD COLUMN emailVerified TINYINT(1) NOT NULL DEFAULT 1"); } catch (e) {}
+    try { await pool.query("ALTER TABLE users ADD COLUMN verificationToken VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE users ADD COLUMN verificationTokenExpires VARCHAR(255) NULL"); } catch (e) {}
 
     // Create system_config table
     await pool.query(`
@@ -178,6 +208,27 @@ export async function initDb() {
     try { await pool.query("ALTER TABLE system_config ADD COLUMN contactOther TEXT NULL"); } catch (e) {}
     try { await pool.query("ALTER TABLE system_config ADD COLUMN iosDownloadUrl TEXT NULL"); } catch (e) {}
     try { await pool.query("ALTER TABLE system_config ADD COLUMN androidDownloadUrl TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN smtpEnabled TINYINT(1) NOT NULL DEFAULT 0"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN smtpHost VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN smtpPort INT NOT NULL DEFAULT 587"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN smtpSecure TINYINT(1) NOT NULL DEFAULT 0"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN smtpUser VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN smtpPass TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN smtpFromName VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN smtpFromEmail VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN emailVerificationEnabled TINYINT(1) NOT NULL DEFAULT 0"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN emailVerificationSubject VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN emailVerificationTemplate LONGTEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN welcomeEmailSubject VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN welcomeEmailTemplate LONGTEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN notificationEmailSubject VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN notificationEmailTemplate LONGTEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN monnifyEnabled TINYINT(1) NOT NULL DEFAULT 0"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN monnifyApiKey VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN monnifyContractCode VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN monnifySecretKey TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN monnifyMode VARCHAR(50) NOT NULL DEFAULT 'live'"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN subscriptionAmount DECIMAL(10,2) NOT NULL DEFAULT 600.00"); } catch (e) {}
 
     // Create persistent sessions table to keep user logins intact across server restarts/compiles
     await pool.query(`
@@ -309,7 +360,28 @@ export const db = {
             contactWhatsApp: rows[0].contactWhatsApp || '',
             contactOther: rows[0].contactOther || '',
             iosDownloadUrl: rows[0].iosDownloadUrl || '',
-            androidDownloadUrl: rows[0].androidDownloadUrl || ''
+            androidDownloadUrl: rows[0].androidDownloadUrl || '',
+            smtpEnabled: rows[0].smtpEnabled !== undefined ? Number(rows[0].smtpEnabled) : 0,
+            smtpHost: rows[0].smtpHost || '',
+            smtpPort: rows[0].smtpPort ? Number(rows[0].smtpPort) : 587,
+            smtpSecure: rows[0].smtpSecure !== undefined ? Number(rows[0].smtpSecure) : 0,
+            smtpUser: rows[0].smtpUser || '',
+            smtpPass: rows[0].smtpPass || '',
+            smtpFromName: rows[0].smtpFromName || 'CINJELLY Stream',
+            smtpFromEmail: rows[0].smtpFromEmail || '',
+            emailVerificationEnabled: rows[0].emailVerificationEnabled !== undefined ? Number(rows[0].emailVerificationEnabled) : 0,
+            emailVerificationSubject: rows[0].emailVerificationSubject || '',
+            emailVerificationTemplate: rows[0].emailVerificationTemplate || '',
+            welcomeEmailSubject: rows[0].welcomeEmailSubject || '',
+            welcomeEmailTemplate: rows[0].welcomeEmailTemplate || '',
+            notificationEmailSubject: rows[0].notificationEmailSubject || '',
+            notificationEmailTemplate: rows[0].notificationEmailTemplate || '',
+            monnifyEnabled: rows[0].monnifyEnabled !== undefined ? Number(rows[0].monnifyEnabled) : 0,
+            monnifyApiKey: rows[0].monnifyApiKey || '',
+            monnifyContractCode: rows[0].monnifyContractCode || '',
+            monnifySecretKey: rows[0].monnifySecretKey || '',
+            monnifyMode: rows[0].monnifyMode || 'live',
+            subscriptionAmount: rows[0].subscriptionAmount !== undefined ? Number(rows[0].subscriptionAmount) : 600.00
           };
         }
       } catch (err) {
@@ -349,8 +421,17 @@ export const db = {
     }
 
     await pool.query(`
-      INSERT INTO system_config (id, serverUrl, adminUsername, adminPasswordFull, apiKey, defaultCommission, bankAccountNo, bankName, bankBeneficiary, bankInstructions, chatbotInfo, chatbotInstructions, contactEmail, contactPhone, contactWhatsApp, contactOther, iosDownloadUrl, androidDownloadUrl)
-      VALUES ('main', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO system_config (
+        id, serverUrl, adminUsername, adminPasswordFull, apiKey, defaultCommission, 
+        bankAccountNo, bankName, bankBeneficiary, bankInstructions, 
+        chatbotInfo, chatbotInstructions, contactEmail, contactPhone, contactWhatsApp, contactOther, 
+        iosDownloadUrl, androidDownloadUrl,
+        smtpEnabled, smtpHost, smtpPort, smtpSecure, smtpUser, smtpPass, smtpFromName, smtpFromEmail,
+        emailVerificationEnabled, emailVerificationSubject, emailVerificationTemplate,
+        welcomeEmailSubject, welcomeEmailTemplate, notificationEmailSubject, notificationEmailTemplate,
+        monnifyEnabled, monnifyApiKey, monnifyContractCode, monnifySecretKey, monnifyMode, subscriptionAmount
+      )
+      VALUES ('main', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         serverUrl = VALUES(serverUrl),
         adminUsername = VALUES(adminUsername),
@@ -368,7 +449,28 @@ export const db = {
         contactWhatsApp = VALUES(contactWhatsApp),
         contactOther = VALUES(contactOther),
         iosDownloadUrl = VALUES(iosDownloadUrl),
-        androidDownloadUrl = VALUES(androidDownloadUrl)
+        androidDownloadUrl = VALUES(androidDownloadUrl),
+        smtpEnabled = VALUES(smtpEnabled),
+        smtpHost = VALUES(smtpHost),
+        smtpPort = VALUES(smtpPort),
+        smtpSecure = VALUES(smtpSecure),
+        smtpUser = VALUES(smtpUser),
+        smtpPass = VALUES(smtpPass),
+        smtpFromName = VALUES(smtpFromName),
+        smtpFromEmail = VALUES(smtpFromEmail),
+        emailVerificationEnabled = VALUES(emailVerificationEnabled),
+        emailVerificationSubject = VALUES(emailVerificationSubject),
+        emailVerificationTemplate = VALUES(emailVerificationTemplate),
+        welcomeEmailSubject = VALUES(welcomeEmailSubject),
+        welcomeEmailTemplate = VALUES(welcomeEmailTemplate),
+        notificationEmailSubject = VALUES(notificationEmailSubject),
+        notificationEmailTemplate = VALUES(notificationEmailTemplate),
+        monnifyEnabled = VALUES(monnifyEnabled),
+        monnifyApiKey = VALUES(monnifyApiKey),
+        monnifyContractCode = VALUES(monnifyContractCode),
+        monnifySecretKey = VALUES(monnifySecretKey),
+        monnifyMode = VALUES(monnifyMode),
+        subscriptionAmount = VALUES(subscriptionAmount)
     `, [
       config.serverUrl, 
       config.adminUsername, 
@@ -386,7 +488,28 @@ export const db = {
       config.contactWhatsApp || null,
       config.contactOther || null,
       config.iosDownloadUrl || null,
-      config.androidDownloadUrl || null
+      config.androidDownloadUrl || null,
+      config.smtpEnabled !== undefined ? Number(config.smtpEnabled) : 0,
+      config.smtpHost || null,
+      config.smtpPort ? Number(config.smtpPort) : 587,
+      config.smtpSecure !== undefined ? Number(config.smtpSecure) : 0,
+      config.smtpUser || null,
+      config.smtpPass || null,
+      config.smtpFromName || null,
+      config.smtpFromEmail || null,
+      config.emailVerificationEnabled !== undefined ? Number(config.emailVerificationEnabled) : 0,
+      config.emailVerificationSubject || null,
+      config.emailVerificationTemplate || null,
+      config.welcomeEmailSubject || null,
+      config.welcomeEmailTemplate || null,
+      config.notificationEmailSubject || null,
+      config.notificationEmailTemplate || null,
+      config.monnifyEnabled !== undefined ? Number(config.monnifyEnabled) : 0,
+      config.monnifyApiKey || null,
+      config.monnifyContractCode || null,
+      config.monnifySecretKey || null,
+      config.monnifyMode || 'live',
+      config.subscriptionAmount !== undefined ? Number(config.subscriptionAmount) : 600.00
     ]);
   },
 
@@ -431,13 +554,26 @@ export const db = {
     return undefined;
   },
 
+  async getUserByVerificationToken(token: string): Promise<UserRecord | undefined> {
+    if (!token) return undefined;
+    const cleanToken = token.trim();
+    if (!mysqlAvailable) {
+      return localUsers.find(u => u.verificationToken === cleanToken);
+    }
+
+    const [rows]: any = await pool.query('SELECT * FROM users WHERE verificationToken = ?', [cleanToken]);
+    if (rows && rows.length > 0) return rows[0];
+    return undefined;
+  },
+
   async createUser(user: Omit<UserRecord, 'id' | 'registrationDate'>): Promise<UserRecord> {
     const id = crypto.randomUUID();
     const registrationDate = new Date().toISOString();
     const newUser: UserRecord = {
       ...user,
       id,
-      registrationDate
+      registrationDate,
+      emailVerified: user.emailVerified !== undefined ? user.emailVerified : 1
     };
 
     if (!mysqlAvailable) {
@@ -450,8 +586,9 @@ export const db = {
         id, fullName, username, email, passwordHash, jellyfinUserId, 
         subscriptionStatus, paymentStatus, registrationDate, 
         subscriptionStartDate, subscriptionExpiryDate, accountStatus, role,
-        isAffiliate, affiliateCode, referredBy, disabledAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        isAffiliate, affiliateCode, referredBy, disabledAt,
+        emailVerified, verificationToken, verificationTokenExpires
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       id,
       newUser.fullName,
@@ -469,7 +606,10 @@ export const db = {
       newUser.isAffiliate || 0,
       newUser.affiliateCode || null,
       newUser.referredBy || null,
-      newUser.disabledAt || null
+      newUser.disabledAt || null,
+      newUser.emailVerified !== undefined ? newUser.emailVerified : 1,
+      newUser.verificationToken || null,
+      newUser.verificationTokenExpires || null
     ]);
     return newUser;
   },

@@ -168,14 +168,14 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
         )}
 
         {step === 1 ? (
-          <form onSubmit={handleSaveConfig} className="space-y-5" id="jellyfin-config-form">
+          <form onSubmit={handleSaveConfig} className="space-y-5" id="server-config-form">
             <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-200 text-xs leading-relaxed space-y-1.5">
               <p className="font-semibold text-sm flex items-center gap-1.5">
                 <Sparkles className="w-4 h-4 text-amber-400" />
-                <span>Step 1: Configure Jellyfin Connection</span>
+                <span>Step 1: Configure Media Server Connection</span>
               </p>
               <p>
-                To activate your streaming portal, please connect it to your Jellyfin Server. These credentials will be stored securely in your database.
+                To activate your streaming portal, please connect it to your streaming server. These credentials will be stored securely in your database.
               </p>
               {isEnvConfigured && (
                 <div className="pt-2 border-t border-amber-500/10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
@@ -193,13 +193,13 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
 
             <div className="space-y-1">
               <label htmlFor="serverUrl" className="block text-xs font-semibold text-slate-300">
-                Jellyfin Server URL
+                Media Server URL
               </label>
               <input
                 type="url"
                 id="serverUrl"
                 required
-                placeholder="e.g. http://131.153.147.178:8096"
+                placeholder="e.g. https://cinode.zerolord.com"
                 className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-sm transition"
                 value={serverUrl}
                 onChange={(e) => setServerUrl(e.target.value)}
@@ -208,7 +208,7 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
 
             <div className="space-y-1">
               <label htmlFor="jellyfinAdminUser" className="block text-xs font-semibold text-slate-300">
-                Jellyfin Admin Username
+                Server Admin Username
               </label>
               <input
                 type="text"
@@ -223,7 +223,7 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
 
             <div className="space-y-1">
               <label htmlFor="jellyfinAdminPass" className="block text-xs font-semibold text-slate-300">
-                Jellyfin Admin Password (Optional)
+                Server Admin Password (Optional)
               </label>
               <input
                 type="password"
@@ -237,19 +237,19 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
 
             <div className="space-y-1">
               <label htmlFor="apiKey" className="block text-xs font-semibold text-slate-300">
-                Jellyfin API Key
+                Server API Key
               </label>
               <input
                 type="password"
                 id="apiKey"
                 required
-                placeholder="Paste your Jellyfin API Key"
+                placeholder="Paste your Server API Key"
                 className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-sm transition"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
               />
               <span className="text-[10px] text-slate-500 block mt-1">
-                Generated in Jellyfin under Admin Dashboard &gt; API Keys
+                Generated in Server Admin Dashboard &gt; API Keys
               </span>
             </div>
 
@@ -265,7 +265,7 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
                   </>
                 ) : (
                   <>
-                    <ShieldCheck className="w-4 h-4" /> Save & Connect Jellyfin
+                    <ShieldCheck className="w-4 h-4" /> Save & Connect Server
                   </>
                 )}
               </button>

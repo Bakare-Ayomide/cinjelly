@@ -3,7 +3,7 @@ import {
   Tv, LogOut, CheckCircle, AlertTriangle, Play, ShieldAlert, CreditCard, 
   Loader2, RefreshCw, Key, HelpCircle, ArrowLeft, ExternalLink, X, Info, UserCheck, Calendar,
   Users, DollarSign, Gift, Clock, Share2, Copy, Check, Percent, MessageSquare, PlusCircle, Bell,
-  Smartphone, Download
+  Smartphone, Download, Building2
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -46,6 +46,33 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
   const [notificationType, setNotificationType] = useState<'accepted' | 'declined' | null>(null);
   const [notificationDeclineReason, setNotificationDeclineReason] = useState<string>('');
   const [redirectCountdown, setRedirectCountdown] = useState<number | null>(null);
+
+  // Device selection modal state
+  const [showDeviceModal, setShowDeviceModal] = useState(false);
+  const [deviceNotice, setDeviceNotice] = useState<string | null>(null);
+
+  // Email verification state
+  const [resendingEmail, setResendingEmail] = useState(false);
+  const [emailMsg, setEmailMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+  const handleResendEmailVerification = async () => {
+    setResendingEmail(true);
+    setEmailMsg(null);
+    try {
+      const res = await fetch('/api/auth/resend-verification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: user.email || user.username })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to resend verification email');
+      setEmailMsg({ text: 'Verification email sent! Please check your inbox and spam folder.', type: 'success' });
+    } catch (err: any) {
+      setEmailMsg({ text: err.message || 'Could not resend email.', type: 'error' });
+    } finally {
+      setResendingEmail(false);
+    }
+  };
 
   // Broadcast & media request states
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -201,6 +228,147 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
     }
   };
 
+  const [monnifyLoading, setMonnifyLoading] = useState(false);
+
+  const loadMonnifyScript = (): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const getSDK = () => (window as any).MonnifySDK || (window as any).Monnify || (window as any).monnify;
+      if (typeof window !== 'undefined' && getSDK()) {
+        resolve();
+        return;
+      }
+      const existingScript = document.getElementById('monnify-sdk-script') as HTMLScriptElement | null;
+      if (existingScript) {
+        let checks = 0;
+        const interval = setInterval(() => {
+          checks++;
+          if (getSDK()) {
+            clearInterval(interval);
+            resolve();
+          } else if (checks > 30) {
+            clearInterval(interval);
+            // Even if timer expires, try resolving so initialize can attempt or throw descriptive error
+            resolve();
+          }
+        }, 100);
+        existingScript.addEventListener('load', () => {
+          clearInterval(interval);
+          resolve();
+        });
+        existingScript.addEventListener('error', () => {
+          clearInterval(interval);
+          reject(new Error('Monnify script load error'));
+        });
+        return;
+      }
+      const script = document.createElement('script');
+      script.id = 'monnify-sdk-script';
+      script.src = 'https://sdk.monnify.com/plugin/monnify.js';
+      script.async = true;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Failed to load Monnify Checkout plugin'));
+      document.body.appendChild(script);
+    });
+  };
+
+  const handlePayWithMonnify = async () => {
+    if (!bankInfo || bankInfo.monnifyEnabled === false || bankInfo.monnifyEnabled === 0) {
+      setError('Monnify payment feature is currently turned off by admin. Please use the manual bank transfer option.');
+      return;
+    }
+
+    if (!bankInfo.monnifyApiKey || !bankInfo.monnifyContractCode) {
+      setError('Monnify gateway is missing API Key or Contract Code. Please contact Admin or use manual transfer.');
+      return;
+    }
+
+    setMonnifyLoading(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      await loadMonnifyScript();
+    } catch (e: any) {
+      setMonnifyLoading(false);
+      setError('Monnify checkout plugin failed to load. Please check your network connection and try again.');
+      return;
+    }
+
+    const sdkObj = (window as any).MonnifySDK || (window as any).Monnify || (window as any).monnify;
+
+    if (!sdkObj) {
+      setMonnifyLoading(false);
+      setError('Monnify checkout SDK is unavailable. Please refresh and try again.');
+      return;
+    }
+
+    const subAmount = Number(bankInfo.subscriptionAmount) || 600;
+    const paymentRef = 'MON_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+
+    try {
+      sdkObj.initialize({
+        amount: subAmount,
+        currency: 'NGN',
+        reference: paymentRef,
+        paymentReference: paymentRef,
+        customerFullName: (user.fullName || user.username || 'Subscriber').trim(),
+        customerName: (user.fullName || user.username || 'Subscriber').trim(),
+        customerEmail: (user.email || `${user.username}@cinjelly.com`).trim(),
+        apiKey: (bankInfo.monnifyApiKey || '').trim(),
+        contractCode: (bankInfo.monnifyContractCode || '').trim(),
+        paymentDescription: 'CINJELLY Stream 30-Day Access Renewal',
+        isTestMode: bankInfo.monnifyMode === 'test',
+        mode: bankInfo.monnifyMode === 'test' ? 'TEST' : 'LIVE',
+        onLoadStart: () => {
+          console.log("Monnify SDK load start");
+        },
+        onLoadComplete: () => {
+          console.log("Monnify SDK load complete");
+          setMonnifyLoading(false);
+        },
+        onComplete: async (response: any) => {
+          setMonnifyLoading(true);
+          try {
+            const res = await fetch('/api/payment/monnify-complete', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                paymentReference: response.paymentReference || response.reference || paymentRef,
+                transactionReference: response.transactionReference || response.paymentReference || paymentRef,
+                paymentStatus: response.paymentStatus || 'PAID',
+                response
+              })
+            });
+            const data = await res.json();
+            if (!res.ok) {
+              throw new Error(data.error || 'Failed to complete subscription update');
+            }
+            setSuccess('Payment successful! Your subscription is now active for 30 days.');
+            if (onReloadUser) {
+              onReloadUser();
+            }
+          } catch (err: any) {
+            setError(err.message || 'Payment received but account update failed. Contact support.');
+          } finally {
+            setMonnifyLoading(false);
+          }
+        },
+        onClose: (data: any) => {
+          console.log("Monnify modal closed", data);
+          setMonnifyLoading(false);
+        }
+      });
+
+      // Clear button loading state after 1.2s to allow user interaction
+      setTimeout(() => {
+        setMonnifyLoading(false);
+      }, 1200);
+    } catch (err: any) {
+      setMonnifyLoading(false);
+      setError('Failed to launch Monnify checkout: ' + (err.message || err));
+    }
+  };
+
   const fetchBankInfo = async () => {
     try {
       const response = await fetch('/api/payment/bank-info');
@@ -318,6 +486,8 @@ Note: My payment receipt has been uploaded to the portal.`;
       setShowNotificationModal(false);
       setShowManualPay(false);
       setRedirectCountdown(null);
+      setDeviceNotice(null);
+      setShowDeviceModal(true);
       return;
     }
     const timer = setTimeout(() => {
@@ -384,7 +554,7 @@ Note: My payment receipt has been uploaded to the portal.`;
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const isActive = user.role === 'admin' || user.subscriptionStatus === 'Active';
+  const isActive = user.role === 'admin' || (user.subscriptionStatus === 'Active' && user.accountStatus === 'Active');
 
   // Handle simulated payment
   const handlePayment = async () => {
@@ -489,6 +659,8 @@ Note: My payment receipt has been uploaded to the portal.`;
       setError('An error occurred setting up automatic login on this browser. Please try again.');
     }
   };
+
+  const hasPaidBefore = Boolean(user.subscriptionExpiryDate);
 
   return (
     <div className="min-h-screen bg-[#090a0f] py-8 px-4 sm:px-6 lg:px-8 selection:bg-rose-600 selection:text-white" id="user-portal-root">
@@ -599,6 +771,51 @@ Note: My payment receipt has been uploaded to the portal.`;
       </nav>
 
       <main className="max-w-4xl mx-auto">
+        {/* Email Verification Banner */}
+        {user.emailVerified === 0 && (
+          <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5 mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-lg">
+            <div className="flex items-start gap-3">
+              <div className="p-2 bg-amber-500/20 text-amber-400 rounded-xl shrink-0 mt-0.5">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-amber-300">Email Verification Required</h4>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  Please verify your email address <strong className="text-white">({user.email || user.username})</strong> to secure your account. Check your inbox for the confirmation link.
+                </p>
+                {emailMsg && (
+                  <p className={`text-xs mt-2 font-semibold ${emailMsg.type === 'success' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {emailMsg.text}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+              <button
+                onClick={handleResendEmailVerification}
+                disabled={resendingEmail}
+                className="bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold py-2 px-4 rounded-xl transition cursor-pointer flex items-center gap-1.5"
+              >
+                {resendingEmail ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> Sending...
+                  </>
+                ) : (
+                  'Resend Email'
+                )}
+              </button>
+              <button
+                onClick={onReloadUser}
+                className="bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs font-bold py-2 px-3 rounded-xl transition cursor-pointer"
+                title="Refresh Status"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Welcome Header */}
         <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 mb-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 relative overflow-hidden shadow-xl">
           <div className="absolute top-0 left-0 right-0 h-[4px] bg-gradient-to-r from-rose-500 to-amber-500"></div>
@@ -615,8 +832,8 @@ Note: My payment receipt has been uploaded to the portal.`;
                 <CheckCircle className="w-4 h-4 text-emerald-400" /> Account Active
               </span>
             ) : (
-              <span className="bg-rose-500/10 text-rose-400 border border-rose-500/20 py-2 px-5 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-2 animate-pulse">
-                <AlertTriangle className="w-4 h-4 text-rose-400" /> Plan Expired
+              <span className="bg-amber-500/10 text-amber-400 border border-amber-500/20 py-2 px-5 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-2 animate-pulse">
+                <AlertTriangle className="w-4 h-4 text-amber-400" /> {hasPaidBefore ? 'Plan Expired' : 'Payment Required'}
               </span>
             )}
           </div>
@@ -663,7 +880,7 @@ Note: My payment receipt has been uploaded to the portal.`;
                 </div>
                 <div className="flex justify-between border-t border-slate-800/80 pt-3">
                   <span className="text-slate-400">Media Platform:</span>
-                  <span className="text-rose-400 font-bold">Private Secured Jellyfin</span>
+                  <span className="text-rose-400 font-bold">Cinode Private Server</span>
                 </div>
               </div>
 
@@ -835,14 +1052,22 @@ Note: My payment receipt has been uploaded to the portal.`;
             /* Billing Options Selector Panel */
             <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-8 text-center max-w-xl mx-auto shadow-2xl relative">
               <div className="absolute top-0 right-0 bg-rose-600 text-white font-extrabold text-[10px] uppercase tracking-wider py-1.5 px-4 rounded-bl-xl">
-                Access Suspended
+                {hasPaidBefore ? 'Access Suspended' : 'Payment Required'}
               </div>
               
-              <ShieldAlert className="w-12 h-12 text-rose-500 mx-auto mb-4" />
+              {hasPaidBefore ? (
+                <ShieldAlert className="w-12 h-12 text-rose-500 mx-auto mb-4" />
+              ) : (
+                <CreditCard className="w-12 h-12 text-amber-400 mx-auto mb-4 animate-bounce" />
+              )}
               
-              <h3 className="text-xl font-display font-extrabold text-white">Streaming Access Paused</h3>
+              <h3 className="text-xl sm:text-2xl font-display font-extrabold text-white">
+                {hasPaidBefore ? 'Streaming Access Paused' : 'Pay ₦600 to Start Enjoying'}
+              </h3>
               <p className="text-slate-400 text-sm mt-2 leading-relaxed">
-                Your ₦600 monthly plan is expired. Please renew your access to continue watching unlimited premium movies instantly.
+                {hasPaidBefore 
+                  ? 'Your ₦600 monthly plan is expired. Please renew your access to continue watching unlimited premium movies instantly.'
+                  : 'Subscribe now for ₦600 NGN to unlock instant 30-day access to our complete library of 4K movies, TV series, and live streaming.'}
               </p>
 
               <div className="bg-[#07080c] border border-slate-800/60 rounded-xl p-5 my-6 text-left text-xs space-y-3 max-w-sm mx-auto text-slate-300">
@@ -856,22 +1081,49 @@ Note: My payment receipt has been uploaded to the portal.`;
                 </div>
                 <div className="flex justify-between border-t border-slate-800/80 pt-3">
                   <span className="text-slate-400">Media Platform:</span>
-                  <span className="text-rose-400 font-bold">Private Secured Jellyfin</span>
+                  <span className="text-rose-400 font-bold">Cinode Private Server</span>
                 </div>
               </div>
 
-              <div className="max-w-sm mx-auto">
+              <div className="max-w-sm mx-auto space-y-3">
+                {bankInfo?.monnifyEnabled && (
+                  <button
+                    onClick={handlePayWithMonnify}
+                    disabled={monnifyLoading}
+                    className="w-full bg-gradient-to-r from-sky-500 via-blue-600 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-extrabold py-3.5 px-6 rounded-xl flex items-center justify-center gap-2.5 transition cursor-pointer text-sm shadow-xl shadow-sky-950/30 border border-sky-400/30"
+                    id="pay-monnify-button"
+                  >
+                    {monnifyLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-white" /> Opening Monnify Gateway...
+                      </>
+                    ) : (
+                      <>
+                        <CreditCard className="w-4.5 h-4.5 text-sky-200" />
+                        <span>Pay via Monnify (Instant Activation)</span>
+                      </>
+                    )}
+                  </button>
+                )}
+
                 <button
                   onClick={() => setShowManualPay(true)}
-                  className="w-full bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white font-bold py-3.5 px-6 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer text-xs shadow-lg shadow-rose-950/20"
+                  className={`w-full font-bold py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer text-xs ${
+                    bankInfo?.monnifyEnabled
+                      ? 'bg-[#0f111a] hover:bg-[#181a28] text-slate-300 border border-slate-800'
+                      : 'bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white shadow-lg shadow-rose-950/20 py-3.5 text-sm'
+                  }`}
                   id="pay-manually-button"
                 >
-                  <CreditCard className="w-4 h-4 text-white" /> Renew Subscription
+                  <Building2 className="w-4 h-4 text-slate-400" /> 
+                  {bankInfo?.monnifyEnabled ? 'Alternative: Manual Bank Transfer' : (hasPaidBefore ? 'Renew Subscription' : 'Pay ₦600 to Start Enjoying')}
                 </button>
               </div>
               
               <p className="text-[11px] text-slate-500 mt-4 leading-relaxed">
-                Unlock instant access manually via bank transfer securely. Cancel any time.
+                {bankInfo?.monnifyEnabled 
+                  ? 'Instant automatic activation via Monnify (Card, Bank Transfer, USSD). Safe & secure.' 
+                  : 'Unlock instant access via manual bank transfer securely. Cancel any time.'}
               </p>
             </div>
           )
@@ -895,7 +1147,10 @@ Note: My payment receipt has been uploaded to the portal.`;
 
               <div className="mt-8 flex flex-col sm:flex-row gap-4">
                 <button
-                  onClick={() => launchStreaming('')}
+                  onClick={() => {
+                    setDeviceNotice(null);
+                    setShowDeviceModal(true);
+                  }}
                   className="bg-rose-600 hover:bg-rose-700 text-white font-bold py-4 px-8 rounded-xl flex items-center justify-center gap-2 transition shadow-xl shadow-rose-950/40 cursor-pointer text-sm"
                   id="launch-jellyfin-button"
                 >
@@ -964,6 +1219,18 @@ Note: My payment receipt has been uploaded to the portal.`;
               <p className="text-slate-400 text-xs max-w-xl leading-relaxed">
                 Watch seamlessly on the move without buffering or using mobile data! Download our dedicated client apps for your iPhone, iPad, or Android smartphone/tablet.
               </p>
+              
+              <div className="bg-[#07080c] border border-rose-500/30 rounded-xl p-3 max-w-xl space-y-1 text-left">
+                <span className="text-rose-400 font-bold text-[11px] uppercase tracking-wider block">
+                  📱 Mobile App Connection Setup
+                </span>
+                <p className="text-slate-300 text-xs">
+                  When opening the mobile app for the first time, in the field requiring you to enter the <strong>Server URL</strong>, enter:
+                </p>
+                <div className="bg-[#111320] border border-slate-800 rounded-lg px-2.5 py-1.5 text-rose-300 font-mono text-xs flex items-center justify-between font-bold select-all">
+                  <span>https://cinode.zerolord.com</span>
+                </div>
+              </div>
             </div>
             
             <div className="flex flex-wrap items-center gap-3 justify-center shrink-0">
@@ -1176,7 +1443,7 @@ Note: My payment receipt has been uploaded to the portal.`;
                   <PlusCircle className="w-5 h-5 text-cyan-400" />
                   <span>Request Content</span>
                 </h3>
-                <p className="text-slate-400 text-xs mt-1">Submit the movie or TV show you want to watch on Jellyfin.</p>
+                <p className="text-slate-400 text-xs mt-1">Submit the movie or TV show you want to watch on Cinode.</p>
               </div>
 
               <form onSubmit={handleMediaRequestSubmit} className="space-y-4 text-left">
@@ -1639,20 +1906,22 @@ Note: My payment receipt has been uploaded to the portal.`;
                   <CheckCircle className="w-10 h-10" />
                 </div>
                 <h3 className="text-2xl font-display font-black text-white tracking-tight mb-2">
-                  Congratulations, accepted!
+                  Payment Confirmed! 🎉
                 </h3>
                 <p className="text-slate-300 text-sm leading-relaxed mb-6">
-                  Your subscription payment has been successfully verified by our system. Welcome back! Your unlimited premium streaming access is now fully restored.
+                  Your subscription payment of ₦600 has been successfully verified by the administrator! You can now start streaming unlimited 4K movies and TV shows.
                 </p>
                 <button
                   onClick={() => {
                     setShowNotificationModal(false);
                     setShowManualPay(false);
                     setRedirectCountdown(null);
+                    setDeviceNotice(null);
+                    setShowDeviceModal(true);
                   }}
-                  className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold py-3 px-6 rounded-xl transition cursor-pointer text-sm shadow-lg shadow-emerald-950/20"
+                  className="w-full bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white font-bold py-3.5 px-6 rounded-xl transition cursor-pointer text-sm shadow-lg shadow-rose-950/20 flex items-center justify-center gap-2"
                 >
-                  Go to Dashboard {redirectCountdown !== null ? `(${redirectCountdown}s)` : ''}
+                  <Play className="w-4 h-4 fill-current text-white" /> Open Streaming Now {redirectCountdown !== null ? `(${redirectCountdown}s)` : ''}
                 </button>
               </>
             ) : (
@@ -1739,6 +2008,139 @@ Note: My payment receipt has been uploaded to the portal.`;
             <div className="p-4 bg-slate-950/40 border-t border-slate-800/50 flex justify-end">
               <button 
                 onClick={() => setSelectedModalNotif(null)}
+                className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2 px-5 rounded-xl text-xs transition cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DEVICE SELECTION MODAL */}
+      {showDeviceModal && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-[120]">
+          <div className="bg-[#11131e] border border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl relative overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-150 text-left">
+            <div className="absolute top-0 left-0 right-0 h-[4px] bg-gradient-to-r from-rose-500 via-amber-500 to-rose-500"></div>
+            
+            <div className="p-6 border-b border-slate-800/60 flex items-start justify-between gap-4">
+              <div>
+                <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider block mb-0.5">Stream Launcher</span>
+                <h3 className="text-xl font-display font-extrabold text-white">Select Your Device</h3>
+                <p className="text-slate-400 text-xs mt-1">Which device are you streaming on today?</p>
+              </div>
+              <button 
+                onClick={() => { setShowDeviceModal(false); setDeviceNotice(null); }}
+                className="text-slate-400 hover:text-white p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-3.5">
+              {deviceNotice && (
+                <div className="p-3.5 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-xl mb-2 flex items-start justify-between gap-2">
+                  <span>{deviceNotice}</span>
+                  <button 
+                    onClick={() => setDeviceNotice(null)}
+                    className="text-slate-400 hover:text-white shrink-0 text-xs font-bold"
+                  >
+                    &times;
+                  </button>
+                </div>
+              )}
+
+              {/* Option 1: iPhone / iOS */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (systemStatus?.iosDownloadUrl) {
+                    window.open(systemStatus.iosDownloadUrl, '_blank');
+                    setShowDeviceModal(false);
+                  } else {
+                    setDeviceNotice("The iOS app link is currently being configured by our admins. You can continue watching directly in your Web Browser!");
+                  }
+                }}
+                className="w-full bg-[#080911] hover:bg-[#141727] border border-slate-800 hover:border-rose-500/40 p-4 rounded-xl text-left transition cursor-pointer group flex items-center justify-between shadow-md"
+              >
+                <div className="flex items-center gap-3.5">
+                  <div className="w-10 h-10 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-center text-white group-hover:border-rose-500/50 group-hover:bg-rose-500/10 transition">
+                    <svg className="w-5 h-5 fill-current text-white group-hover:text-rose-400 transition" viewBox="0 0 24 24">
+                      <path d="M18.71,19.5C17.88,20.74 17,21.95 15.66,21.97C14.32,22 13.89,21.18 12.37,21.18C10.84,21.18 10.37,21.95 9.1,22C7.79,22.05 6.8,20.68 5.96,19.47C4.25,17 2.94,12.45 4.7,9.39C5.57,7.87 7.13,6.91 8.82,6.88C10.1,6.86 11.32,7.75 12.11,7.75C12.89,7.75 14.37,6.68 15.92,6.84C16.57,6.87 18.39,7.1 19.56,8.82C19.47,8.88 17.39,10.1 17.41,12.63C17.44,15.65 20.06,16.66 20.1,16.67C20.08,16.74 19.67,18.11 18.71,19.5M15.97,4.17C16.63,3.37 17.07,2.28 16.95,1C16,1.04 14.9,1.6 14.24,2.38C13.68,3.04 13.19,4.14 13.34,5.39C14.39,5.47 15.4,4.88 15.97,4.17Z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <span className="font-extrabold text-sm text-white block group-hover:text-rose-400 transition">
+                      iPhone / iPad (iOS)
+                    </span>
+                    <span className="text-slate-400 text-xs block mt-0.5">
+                      Open or download official iOS mobile app
+                    </span>
+                  </div>
+                </div>
+                <ExternalLink className="w-4 h-4 text-slate-500 group-hover:text-rose-400 transition" />
+              </button>
+
+              {/* Option 2: Android Phone / Tablet */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (systemStatus?.androidDownloadUrl) {
+                    window.open(systemStatus.androidDownloadUrl, '_blank');
+                    setShowDeviceModal(false);
+                  } else {
+                    setDeviceNotice("The Android Play Store app link is currently being configured by our admins. You can continue watching directly in your Web Browser!");
+                  }
+                }}
+                className="w-full bg-[#080911] hover:bg-[#141727] border border-slate-800 hover:border-amber-500/40 p-4 rounded-xl text-left transition cursor-pointer group flex items-center justify-between shadow-md"
+              >
+                <div className="flex items-center gap-3.5">
+                  <div className="w-10 h-10 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-center text-white group-hover:border-amber-500/50 group-hover:bg-amber-500/10 transition">
+                    <svg className="w-5 h-5 fill-current text-amber-400 group-hover:text-amber-300 transition" viewBox="0 0 24 24">
+                      <path d="M3,5.27V18.73L16.55,12L3,5.27M17.87,11.33L19.43,12.11L17.87,12.89L16.67,12L17.87,11.33M3,3.41L15.67,9.7L18.11,8.47L3,3.41M3,20.59L18.11,15.53L15.67,14.3L3,20.59Z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <span className="font-extrabold text-sm text-white block group-hover:text-amber-400 transition">
+                      Android Phone / Tablet
+                    </span>
+                    <span className="text-slate-400 text-xs block mt-0.5">
+                      Download app on Google Play Store
+                    </span>
+                  </div>
+                </div>
+                <ExternalLink className="w-4 h-4 text-slate-500 group-hover:text-amber-400 transition" />
+              </button>
+
+              {/* Option 3: Web Browser / PC / Smart TV */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDeviceModal(false);
+                  launchStreaming('');
+                }}
+                className="w-full bg-[#080911] hover:bg-[#141727] border border-slate-800 hover:border-emerald-500/40 p-4 rounded-xl text-left transition cursor-pointer group flex items-center justify-between shadow-md"
+              >
+                <div className="flex items-center gap-3.5">
+                  <div className="w-10 h-10 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-center text-white group-hover:border-emerald-500/50 group-hover:bg-emerald-500/10 transition">
+                    <Tv className="w-5 h-5 text-emerald-400 group-hover:text-emerald-300 transition" />
+                  </div>
+                  <div>
+                    <span className="font-extrabold text-sm text-white block group-hover:text-emerald-400 transition">
+                      Web Browser / PC / Smart TV
+                    </span>
+                    <span className="text-slate-400 text-xs block mt-0.5">
+                      Watch instantly in browser with auto sign-in
+                    </span>
+                  </div>
+                </div>
+                <Play className="w-4 h-4 text-slate-500 group-hover:text-emerald-400 transition fill-current" />
+              </button>
+            </div>
+
+            <div className="p-4 bg-slate-950/40 border-t border-slate-800/50 flex justify-end">
+              <button 
+                onClick={() => { setShowDeviceModal(false); setDeviceNotice(null); }}
                 className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2 px-5 rounded-xl text-xs transition cursor-pointer"
               >
                 Close

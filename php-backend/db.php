@@ -106,6 +106,15 @@ class DB {
         try {
             $pdo->exec("ALTER TABLE users ADD COLUMN systemNotification TEXT NULL");
         } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN emailVerified TINYINT(1) NOT NULL DEFAULT 1");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN verificationToken VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN verificationTokenExpires VARCHAR(255) NULL");
+        } catch (Exception $e) {}
 
         // Create system_config table
         $pdo->exec("
@@ -156,6 +165,69 @@ class DB {
         } catch (Exception $e) {}
         try {
             $pdo->exec("ALTER TABLE system_config ADD COLUMN androidDownloadUrl TEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN smtpEnabled TINYINT(1) NOT NULL DEFAULT 0");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN smtpHost VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN smtpPort INT NOT NULL DEFAULT 587");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN smtpSecure TINYINT(1) NOT NULL DEFAULT 0");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN smtpUser VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN smtpPass TEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN smtpFromName VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN smtpFromEmail VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN emailVerificationEnabled TINYINT(1) NOT NULL DEFAULT 0");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN emailVerificationSubject VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN emailVerificationTemplate LONGTEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN welcomeEmailSubject VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN welcomeEmailTemplate LONGTEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN notificationEmailSubject VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN notificationEmailTemplate LONGTEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN monnifyEnabled TINYINT(1) NOT NULL DEFAULT 0");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN monnifyApiKey VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN monnifyContractCode VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN monnifySecretKey TEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN monnifyMode VARCHAR(50) NOT NULL DEFAULT 'live'");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN subscriptionAmount DECIMAL(10,2) NOT NULL DEFAULT 600.00");
         } catch (Exception $e) {}
 
         // Create persistent sessions table
@@ -277,83 +349,106 @@ class DB {
             // Ignore if tables are not set up yet
         }
 
-        if ($row) {
-            return [
-                'serverUrl' => $envUrl ?: $row['serverUrl'],
-                'adminUsername' => $envUsername ?: $row['adminUsername'],
-                'adminPasswordFull' => $envPassword ?: $row['adminPasswordFull'],
-                'apiKey' => $envApiKey ?: $row['apiKey'],
-                'defaultCommission' => isset($row['defaultCommission']) ? (float)$row['defaultCommission'] : 100.00,
-                'bankAccountNo' => $row['bankAccountNo'] ?? '',
-                'bankName' => $row['bankName'] ?? '',
-                'bankBeneficiary' => $row['bankBeneficiary'] ?? '',
-                'bankInstructions' => $row['bankInstructions'] ?? '',
-                'chatbotInfo' => $row['chatbotInfo'] ?? '',
-                'chatbotInstructions' => $row['chatbotInstructions'] ?? '',
-                'contactEmail' => $row['contactEmail'] ?? '',
-                'contactPhone' => $row['contactPhone'] ?? '',
-                'contactWhatsApp' => $row['contactWhatsApp'] ?? '',
-                'contactOther' => $row['contactOther'] ?? '',
-                'iosDownloadUrl' => $row['iosDownloadUrl'] ?? '',
-                'androidDownloadUrl' => $row['androidDownloadUrl'] ?? ''
-            ];
+        if (!$row || !is_array($row)) {
+            $row = [];
         }
 
-        if ($envUrl && $envUsername && $envApiKey) {
-            return [
-                'serverUrl' => $envUrl,
-                'adminUsername' => $envUsername,
-                'adminPasswordFull' => $envPassword,
-                'apiKey' => $envApiKey,
-                'defaultCommission' => 100.00
-            ];
-        }
-
-        return null;
+        return [
+            'serverUrl' => !empty($row['serverUrl']) ? $row['serverUrl'] : $envUrl,
+            'adminUsername' => !empty($row['adminUsername']) ? $row['adminUsername'] : $envUsername,
+            'adminPasswordFull' => !empty($row['adminPasswordFull']) ? $row['adminPasswordFull'] : $envPassword,
+            'apiKey' => !empty($row['apiKey']) ? $row['apiKey'] : $envApiKey,
+            'defaultCommission' => isset($row['defaultCommission']) ? (float)$row['defaultCommission'] : 100.00,
+            'bankAccountNo' => $row['bankAccountNo'] ?? '',
+            'bankName' => $row['bankName'] ?? '',
+            'bankBeneficiary' => $row['bankBeneficiary'] ?? '',
+            'bankInstructions' => $row['bankInstructions'] ?? '',
+            'chatbotInfo' => $row['chatbotInfo'] ?? '',
+            'chatbotInstructions' => $row['chatbotInstructions'] ?? '',
+            'contactEmail' => $row['contactEmail'] ?? '',
+            'contactPhone' => $row['contactPhone'] ?? '',
+            'contactWhatsApp' => $row['contactWhatsApp'] ?? '',
+            'contactOther' => $row['contactOther'] ?? '',
+            'iosDownloadUrl' => $row['iosDownloadUrl'] ?? '',
+            'androidDownloadUrl' => $row['androidDownloadUrl'] ?? '',
+            'smtpEnabled' => isset($row['smtpEnabled']) ? (int)$row['smtpEnabled'] : 0,
+            'smtpHost' => $row['smtpHost'] ?? '',
+            'smtpPort' => isset($row['smtpPort']) ? (int)$row['smtpPort'] : 587,
+            'smtpSecure' => isset($row['smtpSecure']) ? (int)$row['smtpSecure'] : 0,
+            'smtpUser' => $row['smtpUser'] ?? '',
+            'smtpPass' => $row['smtpPass'] ?? '',
+            'smtpFromName' => $row['smtpFromName'] ?? '',
+            'smtpFromEmail' => $row['smtpFromEmail'] ?? '',
+            'emailVerificationEnabled' => isset($row['emailVerificationEnabled']) ? (int)$row['emailVerificationEnabled'] : 0,
+            'emailVerificationSubject' => $row['emailVerificationSubject'] ?? '',
+            'emailVerificationTemplate' => $row['emailVerificationTemplate'] ?? '',
+            'welcomeEmailSubject' => $row['welcomeEmailSubject'] ?? '',
+            'welcomeEmailTemplate' => $row['welcomeEmailTemplate'] ?? '',
+            'notificationEmailSubject' => $row['notificationEmailSubject'] ?? '',
+            'notificationEmailTemplate' => $row['notificationEmailTemplate'] ?? '',
+            'monnifyEnabled' => isset($row['monnifyEnabled']) ? (int)$row['monnifyEnabled'] : 0,
+            'monnifyApiKey' => $row['monnifyApiKey'] ?? '',
+            'monnifyContractCode' => $row['monnifyContractCode'] ?? '',
+            'monnifySecretKey' => $row['monnifySecretKey'] ?? '',
+            'monnifyMode' => $row['monnifyMode'] ?? 'live',
+            'subscriptionAmount' => isset($row['subscriptionAmount']) ? (float)$row['subscriptionAmount'] : 600.00
+        ];
     }
 
     public static function saveConfig($config) {
         $pdo = self::getConnection();
         $stmt = $pdo->prepare('
-            INSERT INTO system_config (id, serverUrl, adminUsername, adminPasswordFull, apiKey, defaultCommission, bankAccountNo, bankName, bankBeneficiary, bankInstructions, chatbotInfo, chatbotInstructions, contactEmail, contactPhone, contactWhatsApp, contactOther, iosDownloadUrl, androidDownloadUrl)
-            VALUES ("main", ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON DUPLICATE KEY UPDATE
-                serverUrl = VALUES(serverUrl),
-                adminUsername = VALUES(adminUsername),
-                adminPasswordFull = VALUES(adminPasswordFull),
-                apiKey = VALUES(apiKey),
-                defaultCommission = VALUES(defaultCommission),
-                bankAccountNo = VALUES(bankAccountNo),
-                bankName = VALUES(bankName),
-                bankBeneficiary = VALUES(bankBeneficiary),
-                bankInstructions = VALUES(bankInstructions),
-                chatbotInfo = VALUES(chatbotInfo),
-                chatbotInstructions = VALUES(chatbotInstructions),
-                contactEmail = VALUES(contactEmail),
-                contactPhone = VALUES(contactPhone),
-                contactWhatsApp = VALUES(contactWhatsApp),
-                contactOther = VALUES(contactOther),
-                iosDownloadUrl = VALUES(iosDownloadUrl),
-                androidDownloadUrl = VALUES(androidDownloadUrl)
+            REPLACE INTO system_config (
+                id, serverUrl, adminUsername, adminPasswordFull, apiKey, defaultCommission, 
+                bankAccountNo, bankName, bankBeneficiary, bankInstructions, 
+                chatbotInfo, chatbotInstructions, contactEmail, contactPhone, contactWhatsApp, contactOther, 
+                iosDownloadUrl, androidDownloadUrl,
+                smtpEnabled, smtpHost, smtpPort, smtpSecure, smtpUser, smtpPass, smtpFromName, smtpFromEmail,
+                emailVerificationEnabled, emailVerificationSubject, emailVerificationTemplate,
+                welcomeEmailSubject, welcomeEmailTemplate, notificationEmailSubject, notificationEmailTemplate,
+                monnifyEnabled, monnifyApiKey, monnifyContractCode, monnifySecretKey, monnifyMode, subscriptionAmount
+            )
+            VALUES ("main", ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ');
         $stmt->execute([
-            $config['serverUrl'],
-            $config['adminUsername'],
+            $config['serverUrl'] ?? '',
+            $config['adminUsername'] ?? '',
             $config['adminPasswordFull'] ?? null,
-            $config['apiKey'],
+            $config['apiKey'] ?? '',
             isset($config['defaultCommission']) ? (float)$config['defaultCommission'] : 100.00,
-            $config['bankAccountNo'] ?? null,
-            $config['bankName'] ?? null,
-            $config['bankBeneficiary'] ?? null,
-            $config['bankInstructions'] ?? null,
-            $config['chatbotInfo'] ?? null,
-            $config['chatbotInstructions'] ?? null,
-            $config['contactEmail'] ?? null,
-            $config['contactPhone'] ?? null,
-            $config['contactWhatsApp'] ?? null,
-            $config['contactOther'] ?? null,
-            $config['iosDownloadUrl'] ?? null,
-            $config['androidDownloadUrl'] ?? null
+            $config['bankAccountNo'] ?? '',
+            $config['bankName'] ?? '',
+            $config['bankBeneficiary'] ?? '',
+            $config['bankInstructions'] ?? '',
+            $config['chatbotInfo'] ?? '',
+            $config['chatbotInstructions'] ?? '',
+            $config['contactEmail'] ?? '',
+            $config['contactPhone'] ?? '',
+            $config['contactWhatsApp'] ?? '',
+            $config['contactOther'] ?? '',
+            $config['iosDownloadUrl'] ?? '',
+            $config['androidDownloadUrl'] ?? '',
+            isset($config['smtpEnabled']) ? (int)$config['smtpEnabled'] : 0,
+            $config['smtpHost'] ?? '',
+            isset($config['smtpPort']) ? (int)$config['smtpPort'] : 587,
+            isset($config['smtpSecure']) ? (int)$config['smtpSecure'] : 0,
+            $config['smtpUser'] ?? '',
+            $config['smtpPass'] ?? '',
+            $config['smtpFromName'] ?? '',
+            $config['smtpFromEmail'] ?? '',
+            isset($config['emailVerificationEnabled']) ? (int)$config['emailVerificationEnabled'] : 0,
+            $config['emailVerificationSubject'] ?? '',
+            $config['emailVerificationTemplate'] ?? '',
+            $config['welcomeEmailSubject'] ?? '',
+            $config['welcomeEmailTemplate'] ?? '',
+            $config['notificationEmailSubject'] ?? '',
+            $config['notificationEmailTemplate'] ?? '',
+            isset($config['monnifyEnabled']) ? (int)$config['monnifyEnabled'] : 0,
+            $config['monnifyApiKey'] ?? '',
+            $config['monnifyContractCode'] ?? '',
+            $config['monnifySecretKey'] ?? '',
+            $config['monnifyMode'] ?? 'live',
+            isset($config['subscriptionAmount']) ? (float)$config['subscriptionAmount'] : 600.00
         ]);
     }
 

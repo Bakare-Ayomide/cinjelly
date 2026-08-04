@@ -60,11 +60,22 @@ export class JellyfinService {
   // Verify the provided Jellyfin configuration is valid (tries to fetch admin users/info)
   async verifyConnection(): Promise<boolean> {
     try {
-      // Try to get system info or users list using the API Key
-      await this.request('/System/Info', 'GET', undefined, true);
-      return true;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      const cleanUrl = this.config.serverUrl.replace(/\/$/, '');
+      const url = `${cleanUrl}/System/Info`;
+      const token = this.config.apiKey;
+      const headers = getAuthHeader(token);
+      
+      const response = await fetch(url, {
+        method: 'GET',
+        headers,
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      return response.ok;
     } catch (err) {
-      console.error('Jellyfin connection validation failed:', err);
+      console.error('Jellyfin connection validation timed out or failed:', err);
       return false;
     }
   }

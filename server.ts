@@ -6,6 +6,14 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import crypto from 'crypto';
 import { db, hashPassword, verifyPassword, UserRecord, initDb, mysqlAvailable, mysqlErrorMsg } from './server/db.js';
 import { JellyfinService } from './server/jellyfin.js';
+import { 
+  sendEmail, 
+  testSmtpConnection, 
+  replaceTemplateVars, 
+  DEFAULT_VERIFICATION_TEMPLATE, 
+  DEFAULT_WELCOME_TEMPLATE, 
+  DEFAULT_NOTIFICATION_TEMPLATE 
+} from './server/email.js';
 
 const app = express();
 const PORT = 3000;
@@ -64,7 +72,7 @@ const jellyfinProxy = async (req: any, res: any, next: any) => {
   try {
     const config = await db.getConfig();
     if (!config || !config.serverUrl) {
-      return res.status(503).json({ error: 'Jellyfin server not configured yet.' });
+      return res.status(503).json({ error: 'Media server not configured yet.' });
     }
 
     const target = config.serverUrl.replace(/\/$/, '');
@@ -82,7 +90,7 @@ const jellyfinProxy = async (req: any, res: any, next: any) => {
           error: (err, req, res: any) => {
             console.error('Jellyfin proxy connection error:', err.message);
             if (res && typeof res.status === 'function') {
-              res.status(502).send('Error connecting to media server. Please verify Jellyfin URL is reachable.');
+              res.status(502).send('Error connecting to media server. Please verify server URL is reachable.');
             } else if (res && typeof res.end === 'function') {
               res.end();
             }
@@ -121,7 +129,9 @@ app.get('/api/status', async (req, res) => {
       mysqlAvailable: mysqlAvailable,
       mysqlError: mysqlAvailable ? null : (mysqlErrorMsg || 'Sandbox Memory Fallback Mode active'),
       iosDownloadUrl: config?.iosDownloadUrl || '',
-      androidDownloadUrl: config?.androidDownloadUrl || ''
+      androidDownloadUrl: config?.androidDownloadUrl || '',
+      emailVerificationEnabled: !!(config?.emailVerificationEnabled && config?.smtpEnabled),
+      smtpEnabled: !!(config?.smtpEnabled && config?.smtpHost)
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -180,17 +190,17 @@ app.post('/api/setup', async (req, res) => {
     const config = await db.getConfig();
     if (!config) {
       return res.status(400).json({ 
-        error: 'Jellyfin Server is not configured. Please set the JELLYFIN_SERVER_URL, JELLYFIN_ADMIN_USERNAME, JELLYFIN_ADMIN_PASSWORD, and JELLYFIN_API_KEY environment variables first.' 
+        error: 'Media Server is not configured. Please set the server URL, admin username, password, and API Key variables first.' 
       });
     }
 
-    // Try connecting to Jellyfin using the environment configuration to make sure it's valid
+    // Try connecting to Media Server using the environment configuration to make sure it's valid
     const jellyfin = new JellyfinService(config);
     const connectionOk = await jellyfin.verifyConnection();
 
     if (!connectionOk) {
       return res.status(400).json({ 
-        error: 'Could not connect to Jellyfin Server using the backend environment credentials. Please check your system variables.' 
+        error: 'Could not connect to Media Server using the backend credentials. Please check your system variables.' 
       });
     }
 
@@ -276,13 +286,38 @@ app.post('/api/admin/config', async (req: any, res) => {
     contactWhatsApp,
     contactOther,
     iosDownloadUrl,
-    androidDownloadUrl
+    androidDownloadUrl,
+    // SMTP fields
+    smtpEnabled,
+    smtpHost,
+    smtpPort,
+    smtpSecure,
+    smtpUser,
+    smtpPass,
+    smtpFromName,
+    smtpFromEmail,
+    // Email Templates
+    emailVerificationEnabled,
+    emailVerificationSubject,
+    emailVerificationTemplate,
+    welcomeEmailSubject,
+    welcomeEmailTemplate,
+    notificationEmailSubject,
+    notificationEmailTemplate,
+    // Monnify fields
+    monnifyEnabled,
+    monnifyApiKey,
+    monnifyContractCode,
+    monnifySecretKey,
+    monnifyMode,
+    subscriptionAmount
   } = req.body;
   if (!serverUrl || !adminUsername || !apiKey) {
     return res.status(400).json({ error: 'Server URL, Admin Username, and API Key are required.' });
   }
   
   const newConfig = {
+    ...existingConfig,
     serverUrl,
     adminUsername,
     adminPasswordFull,
@@ -299,17 +334,154 @@ app.post('/api/admin/config', async (req: any, res) => {
     contactWhatsApp: contactWhatsApp || '',
     contactOther: contactOther || '',
     iosDownloadUrl: iosDownloadUrl || '',
-    androidDownloadUrl: androidDownloadUrl || ''
+    androidDownloadUrl: androidDownloadUrl || '',
+    smtpEnabled: smtpEnabled ? 1 : 0,
+    smtpHost: smtpHost || '',
+    smtpPort: smtpPort ? Number(smtpPort) : 587,
+    smtpSecure: smtpSecure ? 1 : 0,
+    smtpUser: smtpUser || '',
+    smtpPass: smtpPass || '',
+    smtpFromName: smtpFromName || 'CINJELLY Stream',
+    smtpFromEmail: smtpFromEmail || '',
+    emailVerificationEnabled: emailVerificationEnabled ? 1 : 0,
+    emailVerificationSubject: emailVerificationSubject || 'Verify Your Email Address - CINJELLY',
+    emailVerificationTemplate: emailVerificationTemplate || DEFAULT_VERIFICATION_TEMPLATE,
+    welcomeEmailSubject: welcomeEmailSubject || 'Welcome to CINJELLY Stream!',
+    welcomeEmailTemplate: welcomeEmailTemplate || DEFAULT_WELCOME_TEMPLATE,
+    notificationEmailSubject: notificationEmailSubject || 'Important Update - CINJELLY Stream',
+    notificationEmailTemplate: notificationEmailTemplate || DEFAULT_NOTIFICATION_TEMPLATE,
+    monnifyEnabled: monnifyEnabled ? 1 : 0,
+    monnifyApiKey: monnifyApiKey || '',
+    monnifyContractCode: monnifyContractCode || '',
+    monnifySecretKey: monnifySecretKey || '',
+    monnifyMode: monnifyMode || 'live',
+    subscriptionAmount: subscriptionAmount !== undefined ? Number(subscriptionAmount) : 600.00
   };
   
-  const jellyfin = new JellyfinService(newConfig);
-  const connectionOk = await jellyfin.verifyConnection();
-  if (!connectionOk) {
-    return res.status(400).json({ error: 'Could not connect to the Jellyfin Server with these credentials. Please verify the URL and API Key are correct and that the Jellyfin server is running and accessible.' });
-  }
-  
   await db.saveConfig(newConfig);
-  res.json({ success: true, message: 'Configuration and payment information updated and saved in the database!' });
+
+  let warning = '';
+  if (serverUrl && apiKey) {
+    try {
+      const jellyfin = new JellyfinService(newConfig);
+      const connectionOk = await jellyfin.verifyConnection();
+      if (!connectionOk) {
+        warning = ' Warning: Could not connect to Media Server with these credentials. Please check Media Server URL and API Key.';
+      }
+    } catch (e: any) {
+      warning = ' Warning: Media Server verification check failed.';
+    }
+  }
+
+  res.json({ success: true, message: `System settings, SMTP, and Email templates saved successfully!${warning}` });
+});
+
+// Admin test SMTP Connection
+app.post('/api/admin/smtp-test', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin session required.' });
+  }
+
+  const { testEmail, smtpHost, smtpPort, smtpSecure, smtpUser, smtpPass, smtpFromName, smtpFromEmail, customSubject, customHtml } = req.body;
+
+  if (!testEmail) {
+    return res.status(400).json({ error: 'Recipient test email address is required' });
+  }
+
+  try {
+    const customConfig = (smtpHost && smtpUser) ? {
+      smtpEnabled: 1,
+      smtpHost,
+      smtpPort: smtpPort ? Number(smtpPort) : 587,
+      smtpSecure: smtpSecure ? 1 : 0,
+      smtpUser,
+      smtpPass,
+      smtpFromName: smtpFromName || 'CINJELLY Stream',
+      smtpFromEmail: smtpFromEmail || smtpUser
+    } : undefined;
+
+    if (customHtml) {
+      const dummyUser = { username: 'AdminTest', fullName: 'Admin Tester', email: testEmail };
+      const configObj = customConfig || (await db.getConfig());
+      const replacedSubj = replaceTemplateVars(customSubject || 'Test Email Preview', dummyUser, configObj);
+      const replacedHtml = replaceTemplateVars(customHtml, dummyUser, configObj);
+      const emailResult = await sendEmail(testEmail, replacedSubj, replacedHtml, configObj as any);
+      if (emailResult.success) {
+        return res.json({ success: true, message: `Test preview email delivered to ${testEmail}` });
+      } else {
+        return res.status(400).json({ error: emailResult.error || 'Failed to send test email.' });
+      }
+    }
+
+    const result = await testSmtpConnection(testEmail, customConfig as any);
+    if (result.success) {
+      return res.json({ success: true, message: 'SMTP Test connection successful! Test email delivered.' });
+    } else {
+      return res.status(400).json({ error: result.error || 'SMTP Connection failed.' });
+    }
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'SMTP test failed' });
+  }
+});
+
+// Admin Send Custom HTML Email to User(s)
+app.post('/api/admin/send-email', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin session required.' });
+  }
+
+  const { targetUserId, targetType, subject, bodyHtml } = req.body;
+
+  if (!subject || !bodyHtml) {
+    return res.status(400).json({ error: 'Subject and Email HTML Body are required.' });
+  }
+
+  try {
+    const config = await db.getConfig();
+    if (!config || !config.smtpEnabled) {
+      return res.status(400).json({ error: 'SMTP is not enabled. Please configure and enable SMTP settings in Admin Panel first.' });
+    }
+
+    let recipients: UserRecord[] = [];
+    const allUsers = await db.getUsers();
+
+    if (targetType === 'single' && targetUserId) {
+      const u = allUsers.find(x => x.id === targetUserId);
+      if (u) recipients.push(u);
+    } else if (targetType === 'active') {
+      recipients = allUsers.filter(u => u.subscriptionStatus === 'Active');
+    } else if (targetType === 'unpaid') {
+      recipients = allUsers.filter(u => u.paymentStatus === 'Unpaid');
+    } else {
+      recipients = allUsers; // All users
+    }
+
+    if (recipients.length === 0) {
+      return res.status(400).json({ error: 'No recipients found for the selected target.' });
+    }
+
+    let sentCount = 0;
+    let failedCount = 0;
+
+    for (const u of recipients) {
+      const replacedSubject = replaceTemplateVars(subject, u, config);
+      const replacedHtml = replaceTemplateVars(bodyHtml, u, config);
+
+      const result = await sendEmail(u.email, replacedSubject, replacedHtml);
+      if (result.success) {
+        sentCount++;
+      } else {
+        failedCount++;
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Email notification process finished. Successfully delivered: ${sentCount}, Failed: ${failedCount}.`
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to send emails' });
+  }
 });
 
 // Authentication
@@ -362,9 +534,15 @@ app.post('/api/auth/register', async (req, res) => {
         jellyfinUserId = await jellyfin.createUser(username.trim(), password);
       }
     } catch (err: any) {
-      console.error('Failed to register user in Jellyfin:', err.message);
-      return res.status(400).json({ error: `Jellyfin integration failed: ${err.message}` });
+      console.error('Failed to register user on media server:', err.message);
+      return res.status(400).json({ error: `Media server integration failed: ${err.message}` });
     }
+
+    // Check if email verification is enabled by admin
+    const emailVerifActive = !!(config.emailVerificationEnabled && config.smtpEnabled);
+    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const verificationToken = crypto.randomBytes(24).toString('hex');
+    const tokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24 hours
 
     // 2. Create user record in our database
     const newUser = await db.createUser({
@@ -377,8 +555,32 @@ app.post('/api/auth/register', async (req, res) => {
       paymentStatus: 'Unpaid',
       accountStatus: 'Expired',
       role: 'user',
-      referredBy: referredBy ? referredBy.trim().toUpperCase() : undefined
+      referredBy: referredBy ? referredBy.trim().toUpperCase() : undefined,
+      emailVerified: emailVerifActive ? 0 : 1,
+      verificationToken: emailVerifActive ? verificationToken : undefined,
+      verificationTokenExpires: emailVerifActive ? tokenExpires : undefined
     });
+
+    // Send Verification Email if enabled
+    let emailSent = false;
+    if (emailVerifActive) {
+      const subject = config.emailVerificationSubject || 'Verify Your Email Address - CINJELLY Stream';
+      const template = config.emailVerificationTemplate || DEFAULT_VERIFICATION_TEMPLATE;
+      
+      const hostUrl = req.protocol + '://' + req.get('host');
+      const verificationLink = `${hostUrl}/api/auth/verify-email?token=${verificationToken}`;
+
+      const customVars = {
+        verification_code: verificationCode,
+        verification_link: verificationLink
+      };
+
+      const replacedSubject = replaceTemplateVars(subject, newUser, config, customVars);
+      const replacedHtml = replaceTemplateVars(template, newUser, config, customVars);
+
+      const emailResult = await sendEmail(newUser.email, replacedSubject, replacedHtml);
+      emailSent = emailResult.success;
+    }
 
     // Disable account in Jellyfin initially since they are Unpaid/Expired!
     try {
@@ -400,6 +602,11 @@ app.post('/api/auth/register', async (req, res) => {
 
     res.status(201).json({
       success: true,
+      emailVerificationRequired: emailVerifActive,
+      emailSent,
+      message: emailVerifActive 
+        ? 'Account created! Please check your email to verify your account.' 
+        : 'Account created successfully!',
       user: {
         id: newUser.id,
         fullName: newUser.fullName,
@@ -407,12 +614,162 @@ app.post('/api/auth/register', async (req, res) => {
         email: newUser.email,
         subscriptionStatus: newUser.subscriptionStatus,
         paymentStatus: newUser.paymentStatus,
-        role: newUser.role
+        role: newUser.role,
+        emailVerified: newUser.emailVerified
       }
     });
   } catch (err: any) {
     console.error('Registration failed:', err);
     res.status(500).json({ error: 'Internal registration failure' });
+  }
+});
+
+// Verify Email Endpoint (POST - for UI form submission with token or code)
+app.post('/api/auth/verify-email', async (req: any, res) => {
+  try {
+    const { token, email, code } = req.body;
+
+    let targetUser: UserRecord | undefined = undefined;
+
+    if (token) {
+      targetUser = await db.getUserByVerificationToken(token);
+    } else if (email) {
+      targetUser = await db.getUserByEmail(email);
+    } else if (req.user) {
+      targetUser = req.user;
+    }
+
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User account or verification token not found.' });
+    }
+
+    if (targetUser.emailVerified === 1) {
+      return res.json({ success: true, message: 'Your email address is already verified!' });
+    }
+
+    // If a token was provided, ensure it matches
+    if (token && targetUser.verificationToken && targetUser.verificationToken !== token) {
+      return res.status(400).json({ error: 'Invalid verification token.' });
+    }
+
+    // Update user record to verified
+    await db.updateUser(targetUser.id, {
+      emailVerified: 1,
+      verificationToken: undefined,
+      verificationTokenExpires: undefined
+    });
+
+    res.json({ success: true, message: 'Email address verified successfully! You can now proceed to select a plan and enjoy streaming.' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Email verification failed' });
+  }
+});
+
+// Verify Email Endpoint (GET - for direct link clicks from email inbox)
+app.get('/api/auth/verify-email', async (req: any, res) => {
+  const token = (req.query.token || '').toString();
+  if (!token) {
+    return res.status(400).send('<h2>Verification Link Invalid</h2><p>Missing token in link.</p>');
+  }
+
+  try {
+    const targetUser = await db.getUserByVerificationToken(token);
+    if (!targetUser) {
+      return res.status(404).send('<h2>Verification Link Invalid or Expired</h2><p>Could not find account for this verification link.</p>');
+    }
+
+    await db.updateUser(targetUser.id, {
+      emailVerified: 1,
+      verificationToken: undefined,
+      verificationTokenExpires: undefined
+    });
+
+    // Return friendly HTML verification success page that redirects back to app
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Email Verified - CINJELLY Stream</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0d0f17; color: #fff; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+          .card { background: #161a29; border: 1px solid rgba(255,255,255,0.1); padding: 40px; border-radius: 16px; text-align: center; max-width: 450px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
+          .icon { width: 64px; height: 64px; background: rgba(16,185,129,0.15); color: #10b981; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 32px; }
+          h1 { margin: 0 0 10px; font-size: 24px; font-weight: 700; }
+          p { color: #9ca3af; font-size: 15px; line-height: 1.5; margin-bottom: 24px; }
+          .btn { background: linear-gradient(135deg, #e11d48, #be123c); color: white; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; display: inline-block; transition: opacity 0.2s; }
+          .btn:hover { opacity: 0.9; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="icon">✓</div>
+          <h1>Email Verified Successfully!</h1>
+          <p>Thank you for verifying your email address (${targetUser.email}). Your account is now fully active.</p>
+          <a href="/" class="btn">Return to CINJELLY Stream</a>
+        </div>
+      </body>
+      </html>
+    `);
+  } catch (err: any) {
+    res.status(500).send(`<h2>Verification Error</h2><p>${err.message}</p>`);
+  }
+});
+
+// Resend Verification Email
+app.post('/api/auth/resend-verification', async (req: any, res) => {
+  try {
+    let targetUser: UserRecord | undefined = undefined;
+    const { email } = req.body;
+
+    if (email) {
+      targetUser = await db.getUserByEmail(email);
+    } else if (req.user) {
+      targetUser = req.user;
+    }
+
+    if (!targetUser) {
+      return res.status(404).json({ error: 'User account not found.' });
+    }
+
+    if (targetUser.emailVerified === 1) {
+      return res.json({ success: true, message: 'Your email address is already verified!' });
+    }
+
+    const config = await db.getConfig();
+    if (!config || !config.smtpEnabled) {
+      return res.status(400).json({ error: 'SMTP email notifications are not enabled on this server.' });
+    }
+
+    const verificationToken = crypto.randomBytes(24).toString('hex');
+    const tokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+    await db.updateUser(targetUser.id, {
+      verificationToken,
+      verificationTokenExpires: tokenExpires
+    });
+
+    const subject = config.emailVerificationSubject || 'Verify Your Email Address - CINJELLY Stream';
+    const template = config.emailVerificationTemplate || DEFAULT_VERIFICATION_TEMPLATE;
+
+    const hostUrl = req.protocol + '://' + req.get('host');
+    const verificationLink = `${hostUrl}/api/auth/verify-email?token=${verificationToken}`;
+
+    const customVars = {
+      verification_link: verificationLink
+    };
+
+    const replacedSubject = replaceTemplateVars(subject, targetUser, config, customVars);
+    const replacedHtml = replaceTemplateVars(template, targetUser, config, customVars);
+
+    const emailResult = await sendEmail(targetUser.email, replacedSubject, replacedHtml);
+
+    if (emailResult.success) {
+      res.json({ success: true, message: 'A new verification email has been sent to your inbox.' });
+    } else {
+      res.status(400).json({ error: `Failed to send email: ${emailResult.error || 'SMTP delivery failed'}` });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to resend verification email' });
   }
 });
 
@@ -563,7 +920,7 @@ app.post('/api/auth/jellyfin-token', async (req: any, res) => {
 
     res.json({ success: true, jellyfinToken: authResult.accessToken });
   } catch (err: any) {
-    res.status(400).json({ error: `Jellyfin sync failed: ${err.message}` });
+    res.status(400).json({ error: `Media server sync failed: ${err.message}` });
   }
 });
 
@@ -618,7 +975,7 @@ app.post('/api/payment/simulate', async (req: any, res) => {
 
     res.json({
       success: true,
-      message: 'Subscription successfully activated for 30 days! Jellyfin access enabled.',
+      message: 'Subscription successfully activated for 30 days! Streaming access enabled.',
       subscriptionExpiryDate: expiryDate.toISOString()
     });
   } catch (err: any) {
@@ -647,11 +1004,142 @@ app.get('/api/payment/bank-info', async (req: any, res) => {
       contactEmail: config.contactEmail || '',
       contactPhone: config.contactPhone || '',
       contactWhatsApp: config.contactWhatsApp || '',
-      contactOther: config.contactOther || ''
+      contactOther: config.contactOther || '',
+      monnifyEnabled: Boolean(config.monnifyEnabled),
+      monnifyApiKey: config.monnifyApiKey || '',
+      monnifyContractCode: config.monnifyContractCode || '',
+      monnifyMode: config.monnifyMode || 'live',
+      subscriptionAmount: config.subscriptionAmount ? Number(config.subscriptionAmount) : 600.00
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// POST /api/payment/monnify-complete
+app.post('/api/payment/monnify-complete', async (req: any, res) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const { paymentReference, transactionReference } = req.body;
+  const refToSave = paymentReference || transactionReference;
+
+  if (!refToSave) {
+    return res.status(400).json({ error: 'Missing transaction or payment reference' });
+  }
+
+  try {
+    const config = await db.getConfig();
+    const daysToAdd = 30;
+    let currentExpiry = Date.now();
+    if (req.user.subscriptionExpiryDate) {
+      const existingExpiry = new Date(req.user.subscriptionExpiryDate).getTime();
+      if (existingExpiry > Date.now()) {
+        currentExpiry = existingExpiry;
+      }
+    }
+    const newExpiryDate = new Date(currentExpiry + daysToAdd * 24 * 60 * 60 * 1000).toISOString();
+
+    const updatedUser = await db.updateUser(req.user.id, {
+      subscriptionStatus: 'Active',
+      accountStatus: 'Active',
+      paymentStatus: 'Paid',
+      subscriptionStartDate: req.user.subscriptionStartDate || new Date().toISOString(),
+      subscriptionExpiryDate: newExpiryDate,
+      transactionRef: refToSave,
+      lastPaymentTime: new Date().toISOString(),
+      declineReason: undefined,
+      systemNotification: 'accepted'
+    });
+
+    if (req.user.jellyfinUserId && config) {
+      try {
+        const jellyfin = new JellyfinService(config);
+        await jellyfin.setUserDisabledStatus(req.user.jellyfinUserId, false);
+      } catch (e) {}
+    }
+
+    if (req.user.referredBy) {
+      const affiliateUser = await db.getUserByAffiliateCode(req.user.referredBy);
+      if (affiliateUser) {
+        const commissionAmount = (config && config.defaultCommission) ? Number(config.defaultCommission) : 100.00;
+        await db.createCommission({
+          affiliateId: affiliateUser.id,
+          referredUserId: req.user.id,
+          amount: commissionAmount,
+          status: 'Approved'
+        });
+      }
+    }
+
+    res.json({ success: true, user: updatedUser });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/payment/monnify-webhook and /api/monnify/webhook
+const handleMonnifyWebhook = async (req: any, res: any) => {
+  try {
+    const body = req.body || {};
+    const email = body.eventData?.customer?.email || body.customerEmail || body.eventData?.customerEmail;
+    const paymentRef = body.eventData?.paymentReference || body.paymentReference || body.eventData?.transactionReference || body.transactionReference;
+    const paymentStatus = (body.eventData?.paymentStatus || body.paymentStatus || '').toUpperCase();
+
+    if (email && (paymentStatus === 'PAID' || paymentStatus === 'SUCCESSFUL' || paymentStatus === 'OVERPAID')) {
+      const users = await db.getUsers();
+      const targetUser = users.find((u: any) => u.email && u.email.toLowerCase() === email.toLowerCase());
+
+      if (targetUser) {
+        const config = await db.getConfig();
+        const daysToAdd = 30;
+        let currentExpiry = Date.now();
+        if (targetUser.subscriptionExpiryDate) {
+          const existingExpiry = new Date(targetUser.subscriptionExpiryDate).getTime();
+          if (existingExpiry > Date.now()) {
+            currentExpiry = existingExpiry;
+          }
+        }
+        const newExpiryDate = new Date(currentExpiry + daysToAdd * 24 * 60 * 60 * 1000).toISOString();
+
+        await db.updateUser(targetUser.id, {
+          subscriptionStatus: 'Active',
+          accountStatus: 'Active',
+          paymentStatus: 'Paid',
+          subscriptionStartDate: targetUser.subscriptionStartDate || new Date().toISOString(),
+          subscriptionExpiryDate: newExpiryDate,
+          transactionRef: paymentRef || ('WH_' + Date.now()),
+          lastPaymentTime: new Date().toISOString(),
+          declineReason: undefined,
+          systemNotification: 'accepted'
+        });
+
+        if (targetUser.jellyfinUserId && config) {
+          try {
+            const jellyfin = new JellyfinService(config);
+            await jellyfin.setUserDisabledStatus(targetUser.jellyfinUserId, false);
+          } catch (e) {}
+        }
+      }
+    }
+    return res.status(200).json({ requestSuccessful: true, responseMessage: "Webhook processed", responseCode: "0" });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+app.all('/api/payment/monnify-webhook', (req: any, res: any) => {
+  if (req.method === 'GET') {
+    return res.status(200).json({ status: "active", message: "Monnify payment webhook endpoint is live and listening for transaction events.", requestSuccessful: true, responseCode: "0" });
+  }
+  return handleMonnifyWebhook(req, res);
+});
+
+app.all('/api/monnify/webhook', (req: any, res: any) => {
+  if (req.method === 'GET') {
+    return res.status(200).json({ status: "active", message: "Monnify payment webhook endpoint is live and listening for transaction events.", requestSuccessful: true, responseCode: "0" });
+  }
+  return handleMonnifyWebhook(req, res);
 });
 
 // POST /api/payment/request-verification
@@ -782,6 +1270,19 @@ app.post('/api/admin/payments/verify', async (req: any, res) => {
             amount: commissionAmount,
             status: 'Approved'
           });
+        }
+      }
+
+      // Send welcome / payment confirmed notification email if SMTP is configured
+      if (config && config.smtpEnabled) {
+        try {
+          const subject = config.welcomeEmailSubject || 'Welcome to CINJELLY Stream! Payment Confirmed';
+          const template = config.welcomeEmailTemplate || DEFAULT_WELCOME_TEMPLATE;
+          const replacedSubject = replaceTemplateVars(subject, updatedUser || userToVerify, config);
+          const replacedHtml = replaceTemplateVars(template, updatedUser || userToVerify, config);
+          await sendEmail(userToVerify.email, replacedSubject, replacedHtml);
+        } catch (e: any) {
+          console.error(`Failed to send payment approval email to ${userToVerify.email}:`, e.message);
         }
       }
 

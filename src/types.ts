@@ -17,6 +17,8 @@ export interface User {
   disabledAt?: string;
   declineReason?: string;
   systemNotification?: string;
+  emailVerified?: number;
+  verificationToken?: string;
 }
 
 export interface SystemStatus {
@@ -29,6 +31,8 @@ export interface SystemStatus {
   defaultCommission?: number;
   iosDownloadUrl?: string;
   androidDownloadUrl?: string;
+  emailVerificationEnabled?: boolean;
+  smtpEnabled?: boolean;
 }
 
 export interface JellyfinConfigDetails {
@@ -71,4 +75,24 @@ export interface AffiliateStats {
     subscriptionStatus: string;
   }[];
   commissions: Commission[];
+}
+
+declare global {
+  interface Window {
+    MonnifySDK?: {
+      initialize: (options: {
+        amount: number;
+        customerName: string;
+        customerEmail: string;
+        paymentReference: string;
+        paymentDescription: string;
+        currency: string;
+        apiKey: string;
+        contractCode: string;
+        isTestMode?: boolean;
+        onComplete: (response: any) => void;
+        onClose: (data: any) => void;
+      }) => void;
+    };
+  }
 }

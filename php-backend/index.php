@@ -29,6 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 // Include models and database
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/jellyfin.php';
+require_once __DIR__ . '/email.php';
 
 try {
     DB::initDb();
@@ -51,6 +52,9 @@ if ($apiPos !== false) {
 } elseif ($jfPos !== false) {
     $path = substr($path, $jfPos); // e.g. "/jellyfin/Users/..."
 }
+
+$path = rtrim($path, '/');
+if (empty($path)) $path = '/';
 
 $method = $_SERVER['REQUEST_METHOD'];
 
@@ -202,7 +206,7 @@ if ($method === 'POST' && $path === '/api/setup') {
     if (!$config) {
         http_response_code(400);
         echo json_encode([
-            'error' => 'Jellyfin Server is not configured. Please set the database configurations or environmental variables first.'
+            'error' => 'Media Server is not configured. Please set the database configurations or environmental variables first.'
         ]);
         exit;
     }
@@ -211,7 +215,7 @@ if ($method === 'POST' && $path === '/api/setup') {
     if (!$jellyfin->verifyConnection()) {
         http_response_code(400);
         echo json_encode([
-            'error' => 'Could not connect to Jellyfin Server using the backend environment credentials. Please check your system variables.'
+            'error' => 'Could not connect to Media Server using the backend credentials. Please check your system variables.'
         ]);
         exit;
     }
@@ -288,29 +292,29 @@ if ($path === '/api/admin/config') {
             exit;
         }
         
-        $serverUrl = $input['serverUrl'] ?? '';
-        $adminUsername = $input['adminUsername'] ?? '';
-        $adminPasswordFull = $input['adminPasswordFull'] ?? '';
-        $apiKey = $input['apiKey'] ?? '';
-        $defaultCommission = isset($input['defaultCommission']) ? (float)$input['defaultCommission'] : 100.00;
-        $bankAccountNo = $input['bankAccountNo'] ?? '';
-        $bankName = $input['bankName'] ?? '';
-        $bankBeneficiary = $input['bankBeneficiary'] ?? '';
-        $bankInstructions = $input['bankInstructions'] ?? '';
-        $chatbotInfo = $input['chatbotInfo'] ?? '';
-        $chatbotInstructions = $input['chatbotInstructions'] ?? '';
-        $contactEmail = $input['contactEmail'] ?? '';
-        $contactPhone = $input['contactPhone'] ?? '';
-        $contactWhatsApp = $input['contactWhatsApp'] ?? '';
-        $contactOther = $input['contactOther'] ?? '';
-        $iosDownloadUrl = $input['iosDownloadUrl'] ?? '';
-        $androidDownloadUrl = $input['androidDownloadUrl'] ?? '';
-        
-        if (empty($serverUrl) || empty($adminUsername) || empty($apiKey)) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Server URL, Admin Username, and API Key are required.']);
-            exit;
-        }
+        $serverUrl = $input['serverUrl'] ?? ($existingConfig['serverUrl'] ?? '');
+        $adminUsername = $input['adminUsername'] ?? ($existingConfig['adminUsername'] ?? '');
+        $adminPasswordFull = $input['adminPasswordFull'] ?? ($existingConfig['adminPasswordFull'] ?? '');
+        $apiKey = $input['apiKey'] ?? ($existingConfig['apiKey'] ?? '');
+        $defaultCommission = isset($input['defaultCommission']) ? (float)$input['defaultCommission'] : ($existingConfig['defaultCommission'] ?? 100.00);
+        $bankAccountNo = $input['bankAccountNo'] ?? ($existingConfig['bankAccountNo'] ?? '');
+        $bankName = $input['bankName'] ?? ($existingConfig['bankName'] ?? '');
+        $bankBeneficiary = $input['bankBeneficiary'] ?? ($existingConfig['bankBeneficiary'] ?? '');
+        $bankInstructions = $input['bankInstructions'] ?? ($existingConfig['bankInstructions'] ?? '');
+        $chatbotInfo = $input['chatbotInfo'] ?? ($existingConfig['chatbotInfo'] ?? '');
+        $chatbotInstructions = $input['chatbotInstructions'] ?? ($existingConfig['chatbotInstructions'] ?? '');
+        $contactEmail = $input['contactEmail'] ?? ($existingConfig['contactEmail'] ?? '');
+        $contactPhone = $input['contactPhone'] ?? ($existingConfig['contactPhone'] ?? '');
+        $contactWhatsApp = $input['contactWhatsApp'] ?? ($existingConfig['contactWhatsApp'] ?? '');
+        $contactOther = $input['contactOther'] ?? ($existingConfig['contactOther'] ?? '');
+        $iosDownloadUrl = $input['iosDownloadUrl'] ?? ($existingConfig['iosDownloadUrl'] ?? '');
+        $androidDownloadUrl = $input['androidDownloadUrl'] ?? ($existingConfig['androidDownloadUrl'] ?? '');
+        $monnifyEnabled = isset($input['monnifyEnabled']) ? ((bool)$input['monnifyEnabled'] ? 1 : 0) : ($existingConfig['monnifyEnabled'] ?? 0);
+        $monnifyApiKey = $input['monnifyApiKey'] ?? ($existingConfig['monnifyApiKey'] ?? '');
+        $monnifyContractCode = $input['monnifyContractCode'] ?? ($existingConfig['monnifyContractCode'] ?? '');
+        $monnifySecretKey = $input['monnifySecretKey'] ?? ($existingConfig['monnifySecretKey'] ?? '');
+        $monnifyMode = $input['monnifyMode'] ?? ($existingConfig['monnifyMode'] ?? 'live');
+        $subscriptionAmount = isset($input['subscriptionAmount']) ? (float)$input['subscriptionAmount'] : ($existingConfig['subscriptionAmount'] ?? 600.00);
         
         $newConfig = [
             'serverUrl' => $serverUrl,
@@ -329,20 +333,282 @@ if ($path === '/api/admin/config') {
             'contactWhatsApp' => $contactWhatsApp,
             'contactOther' => $contactOther,
             'iosDownloadUrl' => $iosDownloadUrl,
-            'androidDownloadUrl' => $androidDownloadUrl
+            'androidDownloadUrl' => $androidDownloadUrl,
+            'monnifyEnabled' => $monnifyEnabled,
+            'monnifyApiKey' => $monnifyApiKey,
+            'monnifyContractCode' => $monnifyContractCode,
+            'monnifySecretKey' => $monnifySecretKey,
+            'monnifyMode' => $monnifyMode,
+            'subscriptionAmount' => $subscriptionAmount,
+            'smtpEnabled' => isset($input['smtpEnabled']) ? ((bool)$input['smtpEnabled'] ? 1 : 0) : ($existingConfig['smtpEnabled'] ?? 0),
+            'smtpHost' => $input['smtpHost'] ?? ($existingConfig['smtpHost'] ?? ''),
+            'smtpPort' => isset($input['smtpPort']) ? (int)$input['smtpPort'] : ($existingConfig['smtpPort'] ?? 587),
+            'smtpSecure' => isset($input['smtpSecure']) ? ((bool)$input['smtpSecure'] ? 1 : 0) : ($existingConfig['smtpSecure'] ?? 0),
+            'smtpUser' => $input['smtpUser'] ?? ($existingConfig['smtpUser'] ?? ''),
+            'smtpPass' => isset($input['smtpPass']) ? $input['smtpPass'] : ($existingConfig['smtpPass'] ?? ''),
+            'smtpFromName' => $input['smtpFromName'] ?? ($existingConfig['smtpFromName'] ?? ''),
+            'smtpFromEmail' => $input['smtpFromEmail'] ?? ($existingConfig['smtpFromEmail'] ?? ''),
+            'emailVerificationEnabled' => isset($input['emailVerificationEnabled']) ? ((bool)$input['emailVerificationEnabled'] ? 1 : 0) : ($existingConfig['emailVerificationEnabled'] ?? 0),
+            'emailVerificationSubject' => $input['emailVerificationSubject'] ?? ($existingConfig['emailVerificationSubject'] ?? ''),
+            'emailVerificationTemplate' => $input['emailVerificationTemplate'] ?? ($existingConfig['emailVerificationTemplate'] ?? ''),
+            'welcomeEmailSubject' => $input['welcomeEmailSubject'] ?? ($existingConfig['welcomeEmailSubject'] ?? ''),
+            'welcomeEmailTemplate' => $input['welcomeEmailTemplate'] ?? ($existingConfig['welcomeEmailTemplate'] ?? ''),
+            'notificationEmailSubject' => $input['notificationEmailSubject'] ?? ($existingConfig['notificationEmailSubject'] ?? ''),
+            'notificationEmailTemplate' => $input['notificationEmailTemplate'] ?? ($existingConfig['notificationEmailTemplate'] ?? '')
         ];
         
-        $jellyfin = new JellyfinService($newConfig);
-        if (!$jellyfin->verifyConnection()) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Could not connect to the Jellyfin Server with these credentials. Please verify the URL and API Key are correct and that the Jellyfin server is running and accessible.']);
-            exit;
+        DB::saveConfig($newConfig);
+
+        $warning = '';
+        if (!empty($serverUrl) && !empty($apiKey)) {
+            try {
+                $jellyfin = new JellyfinService($newConfig);
+                if (!$jellyfin->verifyConnection()) {
+                    $warning = ' Warning: Could not connect to Media Server with these credentials. Please check Media Server URL and API Key.';
+                }
+            } catch (Exception $e) {
+                $warning = ' Warning: Media Server verification failed.';
+            }
         }
         
-        DB::saveConfig($newConfig);
-        echo json_encode(['success' => true, 'message' => 'Configuration and payment information updated and saved in the database!']);
+        echo json_encode(['success' => true, 'message' => 'System settings, SMTP options, and Email templates saved in the database!' . $warning]);
         exit;
     }
+}
+
+// POST /api/admin/smtp-test
+if ($method === 'POST' && $path === '/api/admin/smtp-test') {
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized. Admin session required.']);
+        exit;
+    }
+
+    $dbConfig = DB::getConfig() ?: [];
+    $testEmail = !empty($input['testEmail']) ? trim($input['testEmail']) : '';
+    $smtpHost = !empty($input['smtpHost']) ? trim($input['smtpHost']) : ($dbConfig['smtpHost'] ?? '');
+    $smtpPort = isset($input['smtpPort']) && $input['smtpPort'] !== '' ? (int)$input['smtpPort'] : ($dbConfig['smtpPort'] ?? 587);
+    $smtpSecure = isset($input['smtpSecure']) ? (!empty($input['smtpSecure']) ? 1 : 0) : ($dbConfig['smtpSecure'] ?? 0);
+    $smtpUser = !empty($input['smtpUser']) ? trim($input['smtpUser']) : ($dbConfig['smtpUser'] ?? '');
+    $smtpPass = (isset($input['smtpPass']) && $input['smtpPass'] !== '') ? $input['smtpPass'] : ($dbConfig['smtpPass'] ?? '');
+    $smtpFromName = !empty($input['smtpFromName']) ? trim($input['smtpFromName']) : ($dbConfig['smtpFromName'] ?? 'CINJELLY Stream');
+    $smtpFromEmail = !empty($input['smtpFromEmail']) ? trim($input['smtpFromEmail']) : ($dbConfig['smtpFromEmail'] ?? $smtpUser);
+    $customSubject = $input['customSubject'] ?? '';
+    $customHtml = $input['customHtml'] ?? '';
+
+    if (empty($testEmail)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Recipient test email address is required']);
+        exit;
+    }
+
+    $customConfig = (!empty($smtpHost) && !empty($smtpUser)) ? [
+        'smtpEnabled' => 1,
+        'smtpHost' => $smtpHost,
+        'smtpPort' => $smtpPort,
+        'smtpSecure' => $smtpSecure,
+        'smtpUser' => $smtpUser,
+        'smtpPass' => $smtpPass,
+        'smtpFromName' => $smtpFromName,
+        'smtpFromEmail' => $smtpFromEmail
+    ] : null;
+
+    $configObj = $customConfig ?: $dbConfig;
+
+    if (!empty($customHtml)) {
+        $dummyUser = ['username' => 'AdminTest', 'fullName' => 'Admin Tester', 'email' => $testEmail];
+        $replacedSubj = replace_template_vars($customSubject ?: 'Test Email Preview', $dummyUser, $configObj);
+        $replacedHtml = replace_template_vars($customHtml, $dummyUser, $configObj);
+        $emailResult = send_smtp_email($testEmail, $replacedSubj, $replacedHtml, $configObj);
+        if ($emailResult['success']) {
+            echo json_encode(['success' => true, 'message' => "Test preview email delivered to {$testEmail}"]);
+        } else {
+            http_response_code(400);
+            echo json_encode(['error' => $emailResult['error'] ?? 'Failed to send email']);
+        }
+        exit;
+    }
+
+    $testSubj = "CINJELLY Stream - SMTP Connection Test";
+    $testHtml = "<div style='font-family:sans-serif;padding:20px;background:#11131e;color:#fff;'><h2>SMTP Connection Successful</h2><p>Your SMTP server settings are correctly configured!</p></div>";
+    $emailResult = send_smtp_email($testEmail, $testSubj, $testHtml, $configObj);
+
+    if ($emailResult['success']) {
+        echo json_encode(['success' => true, 'message' => "SMTP connection verified! Test email successfully delivered to {$testEmail}."]);
+    } else {
+        http_response_code(400);
+        echo json_encode(['error' => $emailResult['error'] ?? 'SMTP test failed']);
+    }
+    exit;
+}
+
+// POST /api/admin/send-email
+if ($method === 'POST' && $path === '/api/admin/send-email') {
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized. Admin session required.']);
+        exit;
+    }
+
+    $targetUserId = $input['targetUserId'] ?? '';
+    $targetType = $input['targetType'] ?? 'all';
+    $subject = $input['subject'] ?? '';
+    $bodyHtml = $input['bodyHtml'] ?? '';
+
+    if (empty($subject) || empty($bodyHtml)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Subject and Email HTML Body are required.']);
+        exit;
+    }
+
+    $config = DB::getConfig();
+    if (!$config || empty($config['smtpEnabled'])) {
+        http_response_code(400);
+        echo json_encode(['error' => 'SMTP is not enabled. Please configure and enable SMTP settings in Admin Panel first.']);
+        exit;
+    }
+
+    $allUsers = DB::getUsers();
+    $recipients = [];
+
+    if ($targetType === 'single' && !empty($targetUserId)) {
+        foreach ($allUsers as $u) {
+            if (($u['id'] ?? '') === $targetUserId) {
+                $recipients[] = $u;
+                break;
+            }
+        }
+    } else if ($targetType === 'active') {
+        foreach ($allUsers as $u) {
+            if (($u['subscriptionStatus'] ?? '') === 'Active') {
+                $recipients[] = $u;
+            }
+        }
+    } else if ($targetType === 'unpaid') {
+        foreach ($allUsers as $u) {
+            if (($u['paymentStatus'] ?? '') === 'Unpaid') {
+                $recipients[] = $u;
+            }
+        }
+    } else {
+        $recipients = $allUsers;
+    }
+
+    if (empty($recipients)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'No recipients found for the selected target.']);
+        exit;
+    }
+
+    $sentCount = 0;
+    $failedCount = 0;
+
+    foreach ($recipients as $u) {
+        if (empty($u['email'])) continue;
+        $replacedSubj = replace_template_vars($subject, $u, $config);
+        $replacedHtml = replace_template_vars($bodyHtml, $u, $config);
+
+        $res = send_smtp_email($u['email'], $replacedSubj, $replacedHtml, $config);
+        if ($res['success']) {
+            $sentCount++;
+        } else {
+            $failedCount++;
+        }
+    }
+
+    echo json_encode([
+        'success' => true,
+        'message' => "Campaign email sent successfully to {$sentCount} recipient(s)." . ($failedCount > 0 ? " ({$failedCount} failed)" : ""),
+        'sentCount' => $sentCount,
+        'failedCount' => $failedCount
+    ]);
+    exit;
+}
+
+// POST /api/auth/resend-verification
+if ($method === 'POST' && $path === '/api/auth/resend-verification') {
+    $email = $input['email'] ?? '';
+    if (empty($email)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Email address is required']);
+        exit;
+    }
+
+    $user = DB::getUserByEmail($email) ?: DB::getUserByUsername($email);
+    if (!$user) {
+        http_response_code(404);
+        echo json_encode(['error' => 'User account not found with that email/username']);
+        exit;
+    }
+
+    if (!empty($user['emailVerified']) && $user['emailVerified'] == 1) {
+        echo json_encode(['success' => true, 'message' => 'Your email address is already verified! You can proceed to log in.']);
+        exit;
+    }
+
+    $config = DB::getConfig();
+    if (!$config || empty($config['smtpEnabled'])) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Email delivery is not enabled or configured on this server.']);
+        exit;
+    }
+
+    $token = DB::generateUUID();
+    $expires = date(DATE_ISO8601, time() + 24 * 60 * 60);
+
+    DB::updateUser($user['id'], [
+        'verificationToken' => $token,
+        'verificationTokenExpires' => $expires
+    ]);
+
+    $protocol = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https://' : 'http://';
+    $host = $_SERVER['HTTP_HOST'] ?? 'zerolord.com';
+    $verifyLink = "{$protocol}{$host}/api/auth/verify-email?token={$token}";
+
+    $subject = !empty($config['emailVerificationSubject']) ? $config['emailVerificationSubject'] : 'Verify Your Email Address - CINJELLY Stream';
+    $template = !empty($config['emailVerificationTemplate']) ? $config['emailVerificationTemplate'] : "Welcome {{fullName}}, please verify your account by clicking <a href='{{verification_url}}'>here</a>.";
+
+    $body = replace_template_vars($template, $user, $config, ['verification_url' => $verifyLink]);
+    $res = send_smtp_email($user['email'], $subject, $body, $config);
+
+    if ($res['success']) {
+        echo json_encode(['success' => true, 'message' => "Verification email sent to {$user['email']}. Please check your inbox or spam folder."]);
+    } else {
+        http_response_code(400);
+        echo json_encode(['error' => 'Failed to send verification email: ' . ($res['error'] ?? 'Unknown error')]);
+    }
+    exit;
+}
+
+// GET /api/auth/verify-email
+if ($method === 'GET' && $path === '/api/auth/verify-email') {
+    $token = $_GET['token'] ?? '';
+    if (empty($token)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Verification token is required']);
+        exit;
+    }
+
+    $pdo = DB::getConnection();
+    $stmt = $pdo->prepare('SELECT * FROM users WHERE verificationToken = ? LIMIT 1');
+    $stmt->execute([$token]);
+    $user = $stmt->fetch();
+
+    if (!$user) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid or expired verification token.']);
+        exit;
+    }
+
+    DB::updateUser($user['id'], [
+        'emailVerified' => 1,
+        'verificationToken' => null,
+        'verificationTokenExpires' => null
+    ]);
+
+    header('Content-Type: text/html; charset=utf-8');
+    echo "<!DOCTYPE html><html><head><title>Email Verified</title><style>body{background:#0b0d14;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;}.card{background:#11131e;border:1px solid #1e293b;padding:40px;border-radius:16px;text-align:center;max-width:400px;}.btn{display:inline-block;margin-top:20px;padding:12px 24px;background:#10b981;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold;}</style></head><body><div class='card'><h2>Email Verified!</h2><p>Your email has been successfully verified. You can now log into CINJELLY Stream.</p><a class='btn' href='/'>Continue to Login</a></div></body></html>";
+    exit;
 }
 
 // POST /api/auth/register
@@ -689,17 +955,7 @@ if ($method === 'POST' && $path === '/api/payment/simulate') {
 
 // GET /api/payment/bank-info
 if ($method === 'GET' && $path === '/api/payment/bank-info') {
-    if (!$currentUser) {
-        http_response_code(401);
-        echo json_encode(['error' => 'Unauthorized']);
-        exit;
-    }
     $config = DB::getConfig();
-    if (!$config) {
-        http_response_code(500);
-        echo json_encode(['error' => 'System not configured']);
-        exit;
-    }
     echo json_encode([
         'bankAccountNo' => $config['bankAccountNo'] ?? '',
         'bankName' => $config['bankName'] ?? '',
@@ -710,9 +966,162 @@ if ($method === 'GET' && $path === '/api/payment/bank-info') {
         'contactEmail' => $config['contactEmail'] ?? '',
         'contactPhone' => $config['contactPhone'] ?? '',
         'contactWhatsApp' => $config['contactWhatsApp'] ?? '',
-        'contactOther' => $config['contactOther'] ?? ''
+        'contactOther' => $config['contactOther'] ?? '',
+        'monnifyEnabled' => !empty($config['monnifyEnabled']),
+        'monnifyApiKey' => $config['monnifyApiKey'] ?? '',
+        'monnifyContractCode' => $config['monnifyContractCode'] ?? '',
+        'monnifyMode' => $config['monnifyMode'] ?? 'live',
+        'subscriptionAmount' => isset($config['subscriptionAmount']) ? (float)$config['subscriptionAmount'] : 600.00
     ]);
     exit;
+}
+
+// POST /api/payment/monnify-complete
+if ($method === 'POST' && $path === '/api/payment/monnify-complete') {
+    if (!$currentUser) {
+        http_response_code(401);
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+
+    $paymentReference = $input['paymentReference'] ?? ($input['response']['paymentReference'] ?? '');
+    $transactionReference = $input['transactionReference'] ?? ($input['response']['transactionReference'] ?? '');
+    $status = $input['paymentStatus'] ?? ($input['response']['paymentStatus'] ?? 'PAID');
+
+    if (empty($paymentReference) && empty($transactionReference)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Missing transaction or payment reference']);
+        exit;
+    }
+
+    try {
+        $config = DB::getConfig();
+        $daysToAdd = 30;
+        $currentExpiry = time();
+        if (!empty($currentUser['subscriptionExpiryDate'])) {
+            $existingExpiry = strtotime($currentUser['subscriptionExpiryDate']);
+            if ($existingExpiry > time()) {
+                $currentExpiry = $existingExpiry;
+            }
+        }
+        $newExpiryDate = date(DATE_ISO8601, $currentExpiry + $daysToAdd * 24 * 60 * 60);
+
+        $refToSave = !empty($paymentReference) ? $paymentReference : $transactionReference;
+
+        $updatedUser = DB::updateUser($currentUser['id'], [
+            'subscriptionStatus' => 'Active',
+            'accountStatus' => 'Active',
+            'paymentStatus' => 'Paid',
+            'subscriptionStartDate' => empty($currentUser['subscriptionStartDate']) ? date(DATE_ISO8601) : $currentUser['subscriptionStartDate'],
+            'subscriptionExpiryDate' => $newExpiryDate,
+            'transactionRef' => $refToSave,
+            'lastPaymentTime' => date(DATE_ISO8601),
+            'declineReason' => null,
+            'systemNotification' => 'accepted'
+        ]);
+
+        // Enable Jellyfin user if linked
+        if (!empty($currentUser['jellyfinUserId']) && $config) {
+            try {
+                $jellyfin = new JellyfinService($config);
+                $jellyfin->setUserDisabledStatus($currentUser['jellyfinUserId'], false);
+            } catch (Exception $e) {
+                // Ignore jellyfin error
+            }
+        }
+
+        // Send welcome email if SMTP configured
+        if ($config && !empty($config['smtpEnabled']) && !empty($config['welcomeEmailTemplate'])) {
+            try {
+                $subj = !empty($config['welcomeEmailSubject']) ? $config['welcomeEmailSubject'] : 'Payment Received - CINJELLY Stream';
+                $body = replace_template_vars($config['welcomeEmailTemplate'], $currentUser, $config);
+                send_smtp_email($currentUser['email'], $subj, $body, $config);
+            } catch (Exception $e) {
+                // Ignore email error
+            }
+        }
+
+        // Calculate affiliate commission if user was referred
+        if (!empty($currentUser['referredBy'])) {
+            $affiliateUser = DB::getUserByAffiliateCode($currentUser['referredBy']);
+            if ($affiliateUser) {
+                $commissionAmount = ($config && isset($config['defaultCommission'])) ? (float)$config['defaultCommission'] : 100.00;
+                DB::createCommission([
+                    'affiliateId' => $affiliateUser['id'],
+                    'referredUserId' => $currentUser['id'],
+                    'amount' => $commissionAmount,
+                    'status' => 'Approved'
+                ]);
+            }
+        }
+
+        echo json_encode(['success' => true, 'user' => $updatedUser]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// GET & POST /api/payment/monnify-webhook and /api/monnify/webhook
+if ($path === '/api/payment/monnify-webhook' || $path === '/api/monnify/webhook') {
+    if ($method === 'GET') {
+        echo json_encode([
+            'status' => 'active',
+            'message' => 'Monnify payment webhook endpoint is live and listening for transaction events.',
+            'requestSuccessful' => true,
+            'responseCode' => '0'
+        ]);
+        exit;
+    }
+    if ($method === 'POST') {
+        $email = $input['eventData']['customer']['email'] ?? ($input['customerEmail'] ?? '');
+        $paymentRef = $input['eventData']['paymentReference'] ?? ($input['paymentReference'] ?? '');
+        $paymentStatus = $input['eventData']['paymentStatus'] ?? ($input['paymentStatus'] ?? '');
+
+        if (!empty($email) && ($paymentStatus === 'PAID' || $paymentStatus === 'SUCCESSFUL')) {
+            $users = DB::getUsers();
+            $targetUser = null;
+            foreach ($users as $u) {
+                if (strtolower($u['email']) === strtolower($email)) {
+                    $targetUser = $u;
+                    break;
+                }
+            }
+
+            if ($targetUser) {
+                $config = DB::getConfig();
+                $daysToAdd = 30;
+                $currentExpiry = time();
+                if (!empty($targetUser['subscriptionExpiryDate'])) {
+                    $existingExpiry = strtotime($targetUser['subscriptionExpiryDate']);
+                    if ($existingExpiry > time()) {
+                        $currentExpiry = $existingExpiry;
+                    }
+                }
+                $newExpiryDate = date(DATE_ISO8601, $currentExpiry + $daysToAdd * 24 * 60 * 60);
+
+                DB::updateUser($targetUser['id'], [
+                    'subscriptionStatus' => 'Active',
+                    'accountStatus' => 'Active',
+                    'paymentStatus' => 'Paid',
+                    'subscriptionExpiryDate' => $newExpiryDate,
+                    'transactionRef' => $paymentRef,
+                    'lastPaymentTime' => date(DATE_ISO8601)
+                ]);
+
+                if (!empty($targetUser['jellyfinUserId']) && $config) {
+                    try {
+                        $jellyfin = new JellyfinService($config);
+                        $jellyfin->setUserDisabledStatus($targetUser['jellyfinUserId'], false);
+                    } catch (Exception $e) {}
+                }
+            }
+        }
+
+        echo json_encode(['requestSuccessful' => true, 'responseCode' => '0', 'responseMessage' => 'Webhook processed']);
+        exit;
+    }
 }
 
 // POST /api/payment/request-verification
@@ -1649,6 +2058,16 @@ if ($method === 'POST' && $path === '/api/admin/payments/verify') {
                     $jellyfin->setUserDisabledStatus($userToVerify['jellyfinUserId'], false);
                 } catch (Exception $e) {
                     // Ignore or log
+                }
+            }
+
+            if ($config && !empty($config['smtpEnabled']) && !empty($config['welcomeEmailTemplate'])) {
+                try {
+                    $subj = !empty($config['welcomeEmailSubject']) ? $config['welcomeEmailSubject'] : 'Welcome to CINJELLY Stream!';
+                    $body = replace_template_vars($config['welcomeEmailTemplate'], $userToVerify, $config);
+                    send_smtp_email($userToVerify['email'], $subj, $body, $config);
+                } catch (Exception $e) {
+                    // Ignore email error
                 }
             }
 
