@@ -118,7 +118,7 @@ export class JellyfinService {
         accessToken: result.AccessToken
       };
     } catch (err: any) {
-      console.error(`Jellyfin auth failed for user ${username}:`, err.message);
+      console.warn(`Jellyfin auth notice for user ${username}:`, err.message);
       throw err;
     }
   }

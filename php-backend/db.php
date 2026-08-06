@@ -331,6 +331,10 @@ class DB {
         );
     }
 
+    public static function getBankInfo() {
+        return self::getConfig();
+    }
+
     public static function getConfig() {
         // Priority 1: Environment variables
         $envUrl = getenv('JELLYFIN_SERVER_URL');

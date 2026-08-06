@@ -41,6 +41,12 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
   const [receiptFileName, setReceiptFileName] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
 
+  // Monnify Form Modal state
+  const [showMonnifyModal, setShowMonnifyModal] = useState(false);
+  const [monnifyFullName, setMonnifyFullName] = useState('');
+  const [monnifyEmail, setMonnifyEmail] = useState('');
+  const [monnifyPhone, setMonnifyPhone] = useState('');
+
   // Notification states
   const [showNotificationModal, setShowNotificationModal] = useState(false);
   const [notificationType, setNotificationType] = useState<'accepted' | 'declined' | null>(null);
@@ -233,7 +239,8 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
   const loadMonnifyScript = (): Promise<void> => {
     return new Promise((resolve, reject) => {
       const getSDK = () => (window as any).MonnifySDK || (window as any).Monnify || (window as any).monnify;
-      if (typeof window !== 'undefined' && getSDK()) {
+      const currentSdk = getSDK();
+      if (typeof window !== 'undefined' && currentSdk && typeof currentSdk.initialize === 'function') {
         resolve();
         return;
       }
@@ -242,23 +249,28 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
         let checks = 0;
         const interval = setInterval(() => {
           checks++;
-          if (getSDK()) {
+          const sdk = getSDK();
+          if (sdk && typeof sdk.initialize === 'function') {
             clearInterval(interval);
             resolve();
           } else if (checks > 30) {
             clearInterval(interval);
-            // Even if timer expires, try resolving so initialize can attempt or throw descriptive error
-            resolve();
+            console.warn("[Monnify] Timeout waiting for existing script element. Injecting dynamic backup script.");
+            const backupScript = document.createElement('script');
+            backupScript.src = 'https://sdk.monnify.com/plugin/monnify.js?v=' + Date.now();
+            backupScript.async = true;
+            backupScript.onload = () => {
+              const recheck = getSDK();
+              if (recheck && typeof recheck.initialize === 'function') {
+                resolve();
+              } else {
+                reject(new Error('Monnify SDK loaded but initialize function is missing on window.MonnifySDK'));
+              }
+            };
+            backupScript.onerror = () => reject(new Error('Failed to load Monnify Checkout plugin'));
+            document.body.appendChild(backupScript);
           }
         }, 100);
-        existingScript.addEventListener('load', () => {
-          clearInterval(interval);
-          resolve();
-        });
-        existingScript.addEventListener('error', () => {
-          clearInterval(interval);
-          reject(new Error('Monnify script load error'));
-        });
         return;
       }
       const script = document.createElement('script');
@@ -271,7 +283,7 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
     });
   };
 
-  const handlePayWithMonnify = async () => {
+  const handlePayWithMonnify = () => {
     if (!bankInfo || bankInfo.monnifyEnabled === false || bankInfo.monnifyEnabled === 0) {
       setError('Monnify payment feature is currently turned off by admin. Please use the manual bank transfer option.');
       return;
@@ -282,90 +294,188 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
       return;
     }
 
-    setMonnifyLoading(true);
+    setMonnifyFullName(user.fullName || user.username || '');
+    setMonnifyEmail(user.email || `${user.username}@cinjelly.com`);
+    setMonnifyPhone((user as any).phone || userPhone || '');
     setError(null);
     setSuccess(null);
+    setShowMonnifyModal(true);
+  };
 
-    try {
-      await loadMonnifyScript();
-    } catch (e: any) {
-      setMonnifyLoading(false);
-      setError('Monnify checkout plugin failed to load. Please check your network connection and try again.');
+  const handleExecuteMonnifyPayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!monnifyFullName.trim()) {
+      setError('Please enter your full name for Monnify payment.');
+      return;
+    }
+    if (!monnifyEmail.trim()) {
+      setError('Please enter your email address for Monnify payment.');
       return;
     }
 
-    const sdkObj = (window as any).MonnifySDK || (window as any).Monnify || (window as any).monnify;
-
-    if (!sdkObj) {
-      setMonnifyLoading(false);
-      setError('Monnify checkout SDK is unavailable. Please refresh and try again.');
-      return;
-    }
-
-    const subAmount = Number(bankInfo.subscriptionAmount) || 600;
-    const paymentRef = 'MON_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+    setMonnifyLoading(true);
+    setError(null);
 
     try {
-      sdkObj.initialize({
-        amount: subAmount,
-        currency: 'NGN',
-        reference: paymentRef,
-        paymentReference: paymentRef,
-        customerFullName: (user.fullName || user.username || 'Subscriber').trim(),
-        customerName: (user.fullName || user.username || 'Subscriber').trim(),
-        customerEmail: (user.email || `${user.username}@cinjelly.com`).trim(),
-        apiKey: (bankInfo.monnifyApiKey || '').trim(),
-        contractCode: (bankInfo.monnifyContractCode || '').trim(),
-        paymentDescription: 'CINJELLY Stream 30-Day Access Renewal',
-        isTestMode: bankInfo.monnifyMode === 'test',
-        mode: bankInfo.monnifyMode === 'test' ? 'TEST' : 'LIVE',
-        onLoadStart: () => {
-          console.log("Monnify SDK load start");
+      // Step 1: Initialize transaction with backend
+      const initUrl = '/api/payment/monnify-initiate';
+      console.log("[Monnify] Request URL:", initUrl);
+
+      const initRes = await fetch(initUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
         },
-        onLoadComplete: () => {
-          console.log("Monnify SDK load complete");
-          setMonnifyLoading(false);
-        },
-        onComplete: async (response: any) => {
-          setMonnifyLoading(true);
-          try {
-            const res = await fetch('/api/payment/monnify-complete', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                paymentReference: response.paymentReference || response.reference || paymentRef,
-                transactionReference: response.transactionReference || response.paymentReference || paymentRef,
-                paymentStatus: response.paymentStatus || 'PAID',
-                response
-              })
-            });
-            const data = await res.json();
-            if (!res.ok) {
-              throw new Error(data.error || 'Failed to complete subscription update');
-            }
-            setSuccess('Payment successful! Your subscription is now active for 30 days.');
-            if (onReloadUser) {
-              onReloadUser();
-            }
-          } catch (err: any) {
-            setError(err.message || 'Payment received but account update failed. Contact support.');
-          } finally {
-            setMonnifyLoading(false);
-          }
-        },
-        onClose: (data: any) => {
-          console.log("Monnify modal closed", data);
-          setMonnifyLoading(false);
-        }
+        body: JSON.stringify({
+          fullName: monnifyFullName.trim(),
+          email: monnifyEmail.trim(),
+          phone: monnifyPhone.trim(),
+          amount: Number(bankInfo?.subscriptionAmount) || 600
+        })
       });
 
-      // Clear button loading state after 1.2s to allow user interaction
+      console.log("[Monnify] HTTP Status Code:", initRes.status);
+      const headersObj: Record<string, string> = {};
+      initRes.headers.forEach((value, key) => { headersObj[key] = value; });
+      console.log("[Monnify] Response Headers:", headersObj);
+
+      const initText = await initRes.text();
+      console.log("Raw Response (monnify-initiate):", initText);
+
+      let initData: any = null;
+      if (initText && initText.trim().length > 0) {
+        try {
+          initData = JSON.parse(initText);
+        } catch (jsonErr: any) {
+          console.error("Failed to parse JSON response:", jsonErr, "Raw Text:", initText);
+          throw new Error(`Invalid JSON response from server (Status ${initRes.status}). Raw output: ${initText.substring(0, 150)}`);
+        }
+      } else {
+        throw new Error(`Server returned empty response (Status ${initRes.status}). Please check server logs.`);
+      }
+
+      if (!initRes.ok || !initData || !initData.success) {
+        throw new Error(initData?.error || `Monnify payment initialization failed (Status ${initRes.status}).`);
+      }
+
+      // Step 2: Ensure Monnify SDK script is loaded
+      await loadMonnifyScript();
+
+      const sdkObj = (window as any).MonnifySDK || (window as any).Monnify || (window as any).monnify;
+      console.log("[Monnify SDK Check] Object on window:", sdkObj);
+      console.log("[Monnify SDK Check] typeof sdkObj?.initialize:", typeof sdkObj?.initialize);
+
+      if (!sdkObj || typeof sdkObj.initialize !== 'function') {
+        throw new Error('Monnify Checkout SDK is unavailable or initialize function is not defined on window.MonnifySDK. Please refresh page and try again.');
+      }
+
+      const paymentRef = initData.paymentReference || initData.reference;
+      const subAmount = Number(initData.amount) || 600;
+      const isTestEnv = initData.isTestMode === true || initData.mode === 'TEST' || (typeof initData.apiKey === 'string' && initData.apiKey.startsWith('MK_TEST_'));
+
+      console.log("[Monnify SDK] Initializing checkout with parameters:", {
+        paymentRef,
+        subAmount,
+        customerFullName: initData.customerFullName,
+        customerEmail: initData.customerEmail,
+        apiKey: initData.apiKey ? `${initData.apiKey.substring(0, 8)}...` : 'MISSING',
+        contractCode: initData.contractCode,
+        isTestEnv
+      });
+
+      // Step 3: Trigger Monnify SDK initialize
+      try {
+        sdkObj.initialize({
+          amount: subAmount,
+          currency: 'NGN',
+          reference: paymentRef,
+          paymentReference: paymentRef,
+          customerFullName: initData.customerFullName || 'Subscriber',
+          customerName: initData.customerFullName || 'Subscriber',
+          customerEmail: initData.customerEmail,
+          customerPhoneNumber: initData.customerPhoneNumber || '',
+          customerMobileNumber: initData.customerPhoneNumber || '',
+          phoneNumber: initData.customerPhoneNumber || '',
+          apiKey: initData.apiKey,
+          contractCode: initData.contractCode,
+          paymentDescription: 'CINJELLY Stream 30-Day Access Renewal',
+          isTestMode: isTestEnv,
+          mode: isTestEnv ? 'TEST' : 'LIVE',
+          onLoadStart: () => {
+            console.log("[Monnify SDK] onLoadStart triggered");
+          },
+          onLoadComplete: () => {
+            console.log("[Monnify SDK] onLoadComplete triggered");
+            setMonnifyLoading(false);
+          },
+          onComplete: async (response: any) => {
+            console.log("[Monnify SDK] onComplete triggered:", response);
+            setMonnifyLoading(true);
+            try {
+              const completeUrl = '/api/payment/monnify-complete';
+              console.log("[Monnify Complete] Request URL:", completeUrl);
+
+              const res = await fetch(completeUrl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Accept': 'application/json'
+                },
+                body: JSON.stringify({
+                  paymentReference: response?.paymentReference || response?.reference || paymentRef,
+                  transactionReference: response?.transactionReference || response?.paymentReference || paymentRef,
+                  paymentStatus: response?.paymentStatus || 'PAID',
+                  response
+                })
+              });
+
+              console.log("[Monnify Complete] HTTP Status Code:", res.status);
+              const resText = await res.text();
+              console.log("Raw Response (monnify-complete):", resText);
+
+              let data: any = null;
+              if (resText && resText.trim().length > 0) {
+                try {
+                  data = JSON.parse(resText);
+                } catch (parseErr) {
+                  console.error("Failed to parse JSON response (monnify-complete):", parseErr, "Raw Text:", resText);
+                  throw new Error(`Invalid response from server (Status ${res.status}): ${resText.substring(0, 150)}`);
+                }
+              }
+
+              if (!res.ok || !data?.success) {
+                throw new Error(data?.error || 'Failed to complete subscription update');
+              }
+              setSuccess('Payment successful! Your subscription is now active for 30 days.');
+              setShowMonnifyModal(false);
+              if (onReloadUser) {
+                onReloadUser();
+              }
+            } catch (err: any) {
+              setError(err.message || 'Payment received but account update failed. Contact support.');
+            } finally {
+              setMonnifyLoading(false);
+            }
+          },
+          onClose: (data: any) => {
+            console.log("[Monnify SDK] onClose triggered:", data);
+            setMonnifyLoading(false);
+          }
+        });
+      } catch (sdkInitErr: any) {
+        console.error("[Monnify SDK] sdkObj.initialize threw error:", sdkInitErr);
+        throw new Error(`Failed to initialize Monnify checkout: ${sdkInitErr.message || sdkInitErr}`);
+      }
+
+      // Safety timeout to reset button loading state so form doesn't stay stuck
       setTimeout(() => {
         setMonnifyLoading(false);
-      }, 1200);
+      }, 1500);
+
     } catch (err: any) {
       setMonnifyLoading(false);
-      setError('Failed to launch Monnify checkout: ' + (err.message || err));
+      setError(err.message || 'Failed to launch Monnify payment gateway.');
     }
   };
 
@@ -1047,6 +1157,113 @@ Note: My payment receipt has been uploaded to the portal.`;
                   )}
                 </button>
               </div>
+            </div>
+          ) : showMonnifyModal ? (
+            /* Monnify Interactive Payment Form Modal */
+            <div className="bg-[#11131e] border border-sky-500/30 rounded-2xl p-6 sm:p-8 text-left max-w-xl mx-auto shadow-2xl relative animate-in fade-in zoom-in-95 duration-150">
+              <button
+                onClick={() => setShowMonnifyModal(false)}
+                className="absolute top-4 right-4 text-slate-400 hover:text-white bg-slate-800/50 hover:bg-slate-800 p-2 rounded-xl transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-sky-500/20 to-blue-500/20 border border-sky-500/30 flex items-center justify-center text-sky-400">
+                  <CreditCard className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-display font-extrabold text-white">Monnify Payment Details</h3>
+                  <p className="text-xs text-sky-400/90 font-medium">Instant Gateway (Card, Bank Transfer, USSD)</p>
+                </div>
+              </div>
+
+              <div className="bg-[#07080c] border border-slate-800 rounded-xl p-4 mb-6 space-y-2 text-xs text-slate-300">
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400">Subscription Plan:</span>
+                  <span className="font-bold text-white">30-Day Streaming Access</span>
+                </div>
+                <div className="flex justify-between items-center border-t border-slate-800/80 pt-2">
+                  <span className="text-slate-400">Amount Due:</span>
+                  <span className="font-extrabold text-sky-400 text-sm">₦{bankInfo?.subscriptionAmount || 600}.00 NGN</span>
+                </div>
+              </div>
+
+              <form onSubmit={handleExecuteMonnifyPayment} className="space-y-4">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                    Full Name <span className="text-sky-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={monnifyFullName}
+                    onChange={(e) => setMonnifyFullName(e.target.value)}
+                    placeholder="e.g. John Doe"
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 text-xs transition"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                    Email Address <span className="text-sky-400">*</span>
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={monnifyEmail}
+                    onChange={(e) => setMonnifyEmail(e.target.value)}
+                    placeholder="e.g. john@example.com"
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 text-xs transition"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                    Phone Number <span className="text-slate-500">(Optional)</span>
+                  </label>
+                  <input
+                    type="tel"
+                    value={monnifyPhone}
+                    onChange={(e) => setMonnifyPhone(e.target.value)}
+                    placeholder="e.g. 08012345678"
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 text-xs transition"
+                  />
+                </div>
+
+                {error && (
+                  <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-400 text-xs flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>{error}</span>
+                  </div>
+                )}
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowMonnifyModal(false)}
+                    className="flex-1 bg-[#0c0d14] hover:bg-[#141622] border border-slate-800 text-slate-400 font-bold py-3.5 px-4 rounded-xl text-xs transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={monnifyLoading}
+                    className="flex-[2] bg-gradient-to-r from-sky-500 via-blue-600 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-extrabold py-3.5 px-6 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 text-xs shadow-lg shadow-sky-950/30 border border-sky-400/30"
+                    id="monnify-pay-now-button"
+                  >
+                    {monnifyLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-white" /> Opening Monnify Gateway...
+                      </>
+                    ) : (
+                      <>
+                        <CreditCard className="w-4 h-4 text-sky-200" /> Pay Now
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
             </div>
           ) : (
             /* Billing Options Selector Panel */

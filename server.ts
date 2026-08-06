@@ -789,11 +789,15 @@ app.post('/api/auth/login', async (req, res) => {
     let jellyfinToken = '';
     if (config) {
       const jellyfin = new JellyfinService(config);
-      try {
-        const authResult = await jellyfin.authenticateUser(username.trim(), password);
-        jellyfinToken = authResult.accessToken;
-      } catch (err) {
-        console.error('Failed to pre-auth user with Jellyfin:', err);
+      if ((user.subscriptionStatus === 'Active' || user.role === 'admin') && user.jellyfinUserId) {
+        try {
+          await jellyfin.setUserDisabledStatus(user.jellyfinUserId, false);
+          await jellyfin.updateUserPassword(user.jellyfinUserId, password);
+          const authResult = await jellyfin.authenticateUser(username.trim(), password);
+          jellyfinToken = authResult.accessToken;
+        } catch (err: any) {
+          console.warn('Notice: Could not pre-auth active user with Jellyfin:', err.message);
+        }
       }
     }
 
@@ -910,6 +914,12 @@ app.post('/api/auth/jellyfin-token', async (req: any, res) => {
 
   try {
     const jellyfin = new JellyfinService(config);
+    if (req.user.jellyfinUserId) {
+      if (req.user.subscriptionStatus === 'Active' || req.user.role === 'admin') {
+        await jellyfin.setUserDisabledStatus(req.user.jellyfinUserId, false);
+        await jellyfin.updateUserPassword(req.user.jellyfinUserId, password);
+      }
+    }
     const authResult = await jellyfin.authenticateUser(req.user.username, password);
     
     // Save token in active session
@@ -1016,19 +1026,137 @@ app.get('/api/payment/bank-info', async (req: any, res) => {
   }
 });
 
+// --- MONNIFY SERVER-SIDE HELPER FUNCTIONS ---
+function getMonnifyTestMode(apiKey: string, configuredMode: string = 'test'): boolean {
+  const cleanKey = (apiKey || '').trim();
+  if (cleanKey.startsWith('MK_TEST_')) {
+    return true;
+  }
+  if (cleanKey.startsWith('MK_PROD_') || cleanKey.startsWith('MK_LIVE_')) {
+    return false;
+  }
+  return (configuredMode || 'test').toLowerCase() === 'test';
+}
+
+async function getMonnifyAccessToken(apiKey: string, secretKey: string, isTestMode: boolean): Promise<string> {
+  const cleanApiKey = (apiKey || '').trim();
+  const cleanSecretKey = (secretKey || '').trim();
+  if (!cleanApiKey || !cleanSecretKey) {
+    throw new Error('Monnify API Key and Secret Key are required for server authentication.');
+  }
+
+  const baseUrl = isTestMode ? 'https://sandbox.monnify.com' : 'https://api.monnify.com';
+  const authUrl = `${baseUrl}/api/v1/auth/login`;
+
+  const authHeader = 'Basic ' + Buffer.from(`${cleanApiKey}:${cleanSecretKey}`).toString('base64');
+
+  const res = await fetch(authUrl, {
+    method: 'POST',
+    headers: {
+      'Authorization': authHeader,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok || !data.requestSuccessful || !data.responseBody?.accessToken) {
+    const msg = data.responseMessage || data.error || `Authentication failed with status code ${res.status}`;
+    const envName = isTestMode ? 'Sandbox (sandbox.monnify.com)' : 'Live (api.monnify.com)';
+    throw new Error(`Monnify Auth Error on ${envName}: ${msg}`);
+  }
+
+  return data.responseBody.accessToken;
+}
+
+async function verifyMonnifyTransaction(paymentReference: string, config: any): Promise<any> {
+  if (!paymentReference) {
+    throw new Error('Payment reference is missing for verification.');
+  }
+
+  const apiKey = (config?.monnifyApiKey || '').trim();
+  const secretKey = (config?.monnifySecretKey || '').trim();
+  const isTestMode = getMonnifyTestMode(apiKey, config?.monnifyMode || 'test');
+
+  if (!apiKey) {
+    throw new Error('Monnify API Key is not configured in settings.');
+  }
+  if (!secretKey) {
+    throw new Error('Monnify Secret Key is missing in settings. Secret key is required for transaction verification.');
+  }
+
+  const accessToken = await getMonnifyAccessToken(apiKey, secretKey, isTestMode);
+  const baseUrl = isTestMode ? 'https://sandbox.monnify.com' : 'https://api.monnify.com';
+
+  const encodedRef = encodeURIComponent(paymentReference);
+  const verifyUrl = `${baseUrl}/api/v2/transactions/searchByReference?paymentReference=${encodedRef}`;
+
+  let res = await fetch(verifyUrl, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  let data: any = await res.json().catch(() => ({}));
+
+  if (!res.ok || !data.requestSuccessful || !data.responseBody) {
+    const verifyUrl2 = `${baseUrl}/api/v2/transactions/${encodedRef}`;
+    const res2 = await fetch(verifyUrl2, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    if (res2.ok) {
+      const data2: any = await res2.json().catch(() => ({}));
+      if (data2.requestSuccessful && data2.responseBody) {
+        data = data2;
+      }
+    }
+  }
+
+  if (!data.requestSuccessful || !data.responseBody) {
+    const msg = data.responseMessage || 'Transaction reference not found on Monnify server.';
+    throw new Error(`Monnify Verification Failed: ${msg}`);
+  }
+
+  const responseBody = data.responseBody;
+  const paymentStatus = (responseBody.paymentStatus || responseBody.status || '').toUpperCase();
+
+  if (paymentStatus !== 'PAID' && paymentStatus !== 'OVERPAID' && paymentStatus !== 'SUCCESSFUL') {
+    throw new Error(`Transaction status on Monnify server is '${paymentStatus}'. Subscription requires confirmed payment.`);
+  }
+
+  return {
+    success: true,
+    paymentStatus,
+    amountPaid: responseBody.amountPaid || responseBody.amount || 0,
+    paymentReference: responseBody.paymentReference || paymentReference,
+    transactionReference: responseBody.transactionReference || paymentReference,
+    raw: responseBody
+  };
+}
+
 // POST /api/payment/monnify-complete
 app.post('/api/payment/monnify-complete', async (req: any, res) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   const { paymentReference, transactionReference } = req.body;
-  const refToSave = paymentReference || transactionReference;
+  const refToVerify = paymentReference || transactionReference;
 
-  if (!refToSave) {
+  if (!refToVerify) {
     return res.status(400).json({ error: 'Missing transaction or payment reference' });
   }
 
   try {
+    const bankInfo = await db.getConfig();
+
+    // Security: Call Monnify REST API to verify transaction. DO NOT trust frontend status.
+    await verifyMonnifyTransaction(refToVerify, bankInfo);
+
     const config = await db.getConfig();
     const daysToAdd = 30;
     let currentExpiry = Date.now();
@@ -1046,7 +1174,7 @@ app.post('/api/payment/monnify-complete', async (req: any, res) => {
       paymentStatus: 'Paid',
       subscriptionStartDate: req.user.subscriptionStartDate || new Date().toISOString(),
       subscriptionExpiryDate: newExpiryDate,
-      transactionRef: refToSave,
+      transactionRef: refToVerify,
       lastPaymentTime: new Date().toISOString(),
       declineReason: undefined,
       systemNotification: 'accepted'
@@ -1072,9 +1200,73 @@ app.post('/api/payment/monnify-complete', async (req: any, res) => {
       }
     }
 
-    res.json({ success: true, user: updatedUser });
+    res.json({ success: true, verified: true, user: updatedUser });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(400).json({ success: false, error: err.message || 'Payment verification failed' });
+  }
+});
+
+// POST /api/payment/monnify-initiate
+app.post('/api/payment/monnify-initiate', async (req: any, res) => {
+  try {
+    const { fullName, email, phone, amount } = req.body || {};
+    const user = req.user;
+
+    if (!user && (!fullName || !email)) {
+      return res.status(401).json({ success: false, error: 'Unauthorized. Please log in first.' });
+    }
+
+    const bankInfo = await db.getConfig();
+
+    if (!bankInfo || !bankInfo.monnifyEnabled) {
+      return res.status(400).json({ success: false, error: 'Monnify payment gateway is currently disabled by Admin.' });
+    }
+
+    const apiKey = (bankInfo.monnifyApiKey || '').trim();
+    const contractCode = (bankInfo.monnifyContractCode || '').trim();
+    const secretKey = (bankInfo.monnifySecretKey || '').trim();
+    const isTestMode = getMonnifyTestMode(apiKey, bankInfo.monnifyMode || 'test');
+
+    if (!apiKey || !contractCode) {
+      return res.status(400).json({ success: false, error: 'Monnify API Key or Contract Code is missing in Admin configuration.' });
+    }
+
+    // Validate merchant credentials if Secret Key is provided
+    if (secretKey) {
+      try {
+        await getMonnifyAccessToken(apiKey, secretKey, isTestMode);
+      } catch (authEx: any) {
+        // Log warning; do not block checkout modal launch if secret key check fails
+        console.warn(`[Monnify Secret Key Pre-Validation Warning] ${authEx.message || authEx}`);
+      }
+    }
+
+    const subAmount = Number(amount) || Number(bankInfo.subscriptionAmount) || 600;
+    const paymentRef = 'MON_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+
+    const customerFullName = (fullName || user?.fullName || user?.username || 'Subscriber').trim();
+    const customerEmail = (email || user?.email || `${user?.username || 'user'}@cinjelly.com`).trim();
+    const customerPhone = (phone || user?.phone || '').trim();
+
+    return res.json({
+      success: true,
+      paymentReference: paymentRef,
+      reference: paymentRef,
+      amount: subAmount,
+      currency: 'NGN',
+      customerFullName,
+      customerName: customerFullName,
+      customerEmail,
+      customerPhoneNumber: customerPhone,
+      phoneNumber: customerPhone,
+      apiKey,
+      contractCode,
+      paymentDescription: 'CINJELLY Stream 30-Day Access Renewal',
+      isTestMode,
+      mode: isTestMode ? 'TEST' : 'LIVE'
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message || 'Failed to initialize Monnify payment.' });
   }
 });
 

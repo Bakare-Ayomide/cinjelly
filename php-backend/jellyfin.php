@@ -120,7 +120,8 @@ class JellyfinService {
                 'accessToken' => $result['AccessToken']
             ];
         } catch (Exception $e) {
-            error_log("Jellyfin auth failed for user {$username}: " . $e->getMessage());
+            // Notice level log so non-active/disabled accounts don't trigger fatal error alerts
+            error_log("Jellyfin auth notice for user {$username}: " . $e->getMessage());
             throw $e;
         }
     }

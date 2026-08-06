@@ -743,11 +743,18 @@ if ($method === 'POST' && $path === '/api/auth/login') {
     $jellyfinToken = '';
     if ($config) {
         $jellyfin = new JellyfinService($config);
-        try {
-            $authResult = $jellyfin->authenticateUser($username, $password);
-            $jellyfinToken = $authResult['accessToken'];
-        } catch (Exception $e) {
-            error_log("Failed to pre-auth user with Jellyfin: " . $e->getMessage());
+        // Only attempt Jellyfin authentication for users with an Active subscription or Admin role
+        if (($user['subscriptionStatus'] === 'Active' || $user['role'] === 'admin') && !empty($user['jellyfinUserId'])) {
+            try {
+                // Ensure account is enabled on Jellyfin & password matches current portal password
+                $jellyfin->setUserDisabledStatus($user['jellyfinUserId'], false);
+                $jellyfin->updateUserPassword($user['jellyfinUserId'], $password);
+
+                $authResult = $jellyfin->authenticateUser($username, $password);
+                $jellyfinToken = $authResult['accessToken'];
+            } catch (Exception $e) {
+                error_log("Notice: Could not obtain Jellyfin token on login: " . $e->getMessage());
+            }
         }
     }
 
@@ -880,6 +887,12 @@ if ($method === 'POST' && $path === '/api/auth/jellyfin-token') {
 
     try {
         $jellyfin = new JellyfinService($config);
+        if (!empty($currentUser['jellyfinUserId'])) {
+            if ($currentUser['subscriptionStatus'] === 'Active' || $currentUser['role'] === 'admin') {
+                $jellyfin->setUserDisabledStatus($currentUser['jellyfinUserId'], false);
+                $jellyfin->updateUserPassword($currentUser['jellyfinUserId'], $password);
+            }
+        }
         $authResult = $jellyfin->authenticateUser($currentUser['username'], $password);
         
         $token = $_COOKIE['session'] ?? '';
@@ -976,25 +989,179 @@ if ($method === 'GET' && $path === '/api/payment/bank-info') {
     exit;
 }
 
+// --- MONNIFY SERVER-SIDE HELPER FUNCTIONS ---
+function getMonnifyTestMode($apiKey, $configuredMode = 'test') {
+    $apiKey = trim($apiKey);
+    if (strpos($apiKey, 'MK_TEST_') === 0) {
+        return true;
+    }
+    if (strpos($apiKey, 'MK_PROD_') === 0 || strpos($apiKey, 'MK_LIVE_') === 0) {
+        return false;
+    }
+    return strtolower(trim($configuredMode)) === 'test';
+}
+
+function getMonnifyAccessToken($apiKey, $secretKey, $isTestMode = false) {
+    $apiKey = trim($apiKey);
+    $secretKey = trim($secretKey);
+    if (empty($apiKey) || empty($secretKey)) {
+        throw new Exception("Monnify API Key and Secret Key are required for server authentication.");
+    }
+
+    $baseUrl = $isTestMode ? "https://sandbox.monnify.com" : "https://api.monnify.com";
+    $authUrl = $baseUrl . "/api/v1/auth/login";
+
+    $authHeader = "Basic " . base64_encode($apiKey . ":" . $secretKey);
+
+    $ch = curl_init($authUrl);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, "");
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        "Authorization: {$authHeader}",
+        "Content-Type: application/json"
+    ]);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+
+    $res = curl_exec($ch);
+    $err = curl_error($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($err) {
+        throw new Exception("Monnify Auth Network Error: " . $err);
+    }
+
+    $data = json_decode($res, true);
+    if ($httpCode !== 200 || empty($data['requestSuccessful']) || empty($data['responseBody']['accessToken'])) {
+        $msg = $data['responseMessage'] ?? ($data['error'] ?? "Authentication failed with status code {$httpCode}");
+        $envName = $isTestMode ? "Sandbox (sandbox.monnify.com)" : "Live (api.monnify.com)";
+        throw new Exception("Monnify Auth Error on {$envName}: " . $msg);
+    }
+
+    return $data['responseBody']['accessToken'];
+}
+
+function verifyMonnifyTransaction($paymentReference, $config) {
+    if (empty($paymentReference)) {
+        throw new Exception("Payment reference is missing for verification.");
+    }
+
+    $apiKey = trim($config['monnifyApiKey'] ?? '');
+    $secretKey = trim($config['monnifySecretKey'] ?? '');
+    $isTestMode = getMonnifyTestMode($apiKey, $config['monnifyMode'] ?? 'test');
+
+    if (empty($apiKey)) {
+        throw new Exception("Monnify API Key is not configured in settings.");
+    }
+
+    if (empty($secretKey)) {
+        throw new Exception("Monnify Secret Key is missing in settings. Secret key is required for transaction verification.");
+    }
+
+    // Step 1: Get Access Token
+    $accessToken = getMonnifyAccessToken($apiKey, $secretKey, $isTestMode);
+
+    $baseUrl = $isTestMode ? "https://sandbox.monnify.com" : "https://api.monnify.com";
+    
+    // Attempt 1: Query by paymentReference using v2 searchByReference
+    $encodedRef = urlencode($paymentReference);
+    $verifyUrl = $baseUrl . "/api/v2/transactions/searchByReference?paymentReference=" . $encodedRef;
+
+    $ch = curl_init($verifyUrl);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPGET, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        "Authorization: Bearer {$accessToken}",
+        "Content-Type: application/json"
+    ]);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+
+    $res = curl_exec($ch);
+    $err = curl_error($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($err) {
+        throw new Exception("Monnify Verification Network Error: " . $err);
+    }
+
+    $data = json_decode($res, true);
+
+    // Attempt 2: Fallback query by transaction reference endpoint if needed
+    if ($httpCode !== 200 || empty($data['requestSuccessful']) || empty($data['responseBody'])) {
+        $verifyUrl2 = $baseUrl . "/api/v2/transactions/" . $encodedRef;
+        $ch2 = curl_init($verifyUrl2);
+        curl_setopt($ch2, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch2, CURLOPT_HTTPGET, true);
+        curl_setopt($ch2, CURLOPT_HTTPHEADER, [
+            "Authorization: Bearer {$accessToken}",
+            "Content-Type: application/json"
+        ]);
+        curl_setopt($ch2, CURLOPT_TIMEOUT, 15);
+        curl_setopt($ch2, CURLOPT_SSL_VERIFYPEER, false);
+
+        $res2 = curl_exec($ch2);
+        $httpCode2 = curl_getinfo($ch2, CURLINFO_HTTP_CODE);
+        curl_close($ch2);
+
+        if ($httpCode2 === 200) {
+            $data2 = json_decode($res2, true);
+            if (!empty($data2['requestSuccessful']) && !empty($data2['responseBody'])) {
+                $data = $data2;
+            }
+        }
+    }
+
+    if (empty($data['requestSuccessful']) || empty($data['responseBody'])) {
+        $msg = $data['responseMessage'] ?? "Transaction reference not found on Monnify server.";
+        throw new Exception("Monnify Verification Failed: " . $msg);
+    }
+
+    $responseBody = $data['responseBody'];
+    $paymentStatus = strtoupper($responseBody['paymentStatus'] ?? $responseBody['status'] ?? '');
+
+    if ($paymentStatus !== 'PAID' && $paymentStatus !== 'OVERPAID' && $paymentStatus !== 'SUCCESSFUL') {
+        throw new Exception("Transaction status on Monnify server is '{$paymentStatus}'. Subscription requires confirmed payment.");
+    }
+
+    return [
+        'success' => true,
+        'paymentStatus' => $paymentStatus,
+        'amountPaid' => $responseBody['amountPaid'] ?? $responseBody['amount'] ?? 0,
+        'paymentReference' => $responseBody['paymentReference'] ?? $paymentReference,
+        'transactionReference' => $responseBody['transactionReference'] ?? $paymentReference,
+        'raw' => $responseBody
+    ];
+}
+
 // POST /api/payment/monnify-complete
 if ($method === 'POST' && $path === '/api/payment/monnify-complete') {
+    header('Content-Type: application/json');
     if (!$currentUser) {
         http_response_code(401);
-        echo json_encode(['error' => 'Unauthorized']);
+        echo json_encode(['success' => false, 'error' => 'Unauthorized']);
         exit;
     }
 
     $paymentReference = $input['paymentReference'] ?? ($input['response']['paymentReference'] ?? '');
     $transactionReference = $input['transactionReference'] ?? ($input['response']['transactionReference'] ?? '');
-    $status = $input['paymentStatus'] ?? ($input['response']['paymentStatus'] ?? 'PAID');
+    $refToVerify = !empty($paymentReference) ? $paymentReference : $transactionReference;
 
-    if (empty($paymentReference) && empty($transactionReference)) {
+    if (empty($refToVerify)) {
         http_response_code(400);
-        echo json_encode(['error' => 'Missing transaction or payment reference']);
+        echo json_encode(['success' => false, 'error' => 'Missing transaction or payment reference']);
         exit;
     }
 
     try {
+        $bankInfo = DB::getBankInfo();
+
+        // Security: Call Monnify REST API to verify transaction. DO NOT trust frontend status.
+        $verifyResult = verifyMonnifyTransaction($refToVerify, $bankInfo);
+
         $config = DB::getConfig();
         $daysToAdd = 30;
         $currentExpiry = time();
@@ -1006,15 +1173,13 @@ if ($method === 'POST' && $path === '/api/payment/monnify-complete') {
         }
         $newExpiryDate = date(DATE_ISO8601, $currentExpiry + $daysToAdd * 24 * 60 * 60);
 
-        $refToSave = !empty($paymentReference) ? $paymentReference : $transactionReference;
-
         $updatedUser = DB::updateUser($currentUser['id'], [
             'subscriptionStatus' => 'Active',
             'accountStatus' => 'Active',
             'paymentStatus' => 'Paid',
             'subscriptionStartDate' => empty($currentUser['subscriptionStartDate']) ? date(DATE_ISO8601) : $currentUser['subscriptionStartDate'],
             'subscriptionExpiryDate' => $newExpiryDate,
-            'transactionRef' => $refToSave,
+            'transactionRef' => $refToVerify,
             'lastPaymentTime' => date(DATE_ISO8601),
             'declineReason' => null,
             'systemNotification' => 'accepted'
@@ -1055,12 +1220,85 @@ if ($method === 'POST' && $path === '/api/payment/monnify-complete') {
             }
         }
 
-        echo json_encode(['success' => true, 'user' => $updatedUser]);
+        echo json_encode(['success' => true, 'verified' => true, 'user' => $updatedUser]);
     } catch (Exception $e) {
-        http_response_code(500);
-        echo json_encode(['error' => $e->getMessage()]);
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
     }
     exit;
+}
+
+// POST /api/payment/monnify-initiate
+if ($method === 'POST' && $path === '/api/payment/monnify-initiate') {
+    header('Content-Type: application/json');
+    try {
+        $reqName = !empty($input['fullName']) ? trim($input['fullName']) : null;
+        $reqEmail = !empty($input['email']) ? trim($input['email']) : null;
+
+        if (!$currentUser && (!$reqName || !$reqEmail)) {
+            http_response_code(401);
+            echo json_encode(['success' => false, 'error' => 'Unauthorized. Please log in first.']);
+            exit;
+        }
+
+        $bankInfo = DB::getBankInfo();
+        if (!$bankInfo || empty($bankInfo['monnifyEnabled'])) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Monnify payment gateway is currently disabled by Admin.']);
+            exit;
+        }
+
+        $apiKey = trim($bankInfo['monnifyApiKey'] ?? '');
+        $contractCode = trim($bankInfo['monnifyContractCode'] ?? '');
+        $secretKey = trim($bankInfo['monnifySecretKey'] ?? '');
+        $isTestMode = getMonnifyTestMode($apiKey, $bankInfo['monnifyMode'] ?? 'test');
+
+        if (empty($apiKey) || empty($contractCode)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Monnify API Key or Contract Code is missing in Admin configuration.']);
+            exit;
+        }
+
+        // Validate merchant credentials if Secret Key is provided
+        if (!empty($secretKey)) {
+            try {
+                getMonnifyAccessToken($apiKey, $secretKey, $isTestMode);
+            } catch (Exception $authEx) {
+                // Log warning; do not block checkout modal launch if secret key check fails
+                error_log("Monnify Secret Key Pre-Validation Warning: " . $authEx->getMessage());
+            }
+        }
+
+        $subAmount = !empty($input['amount']) ? intval($input['amount']) : (!empty($bankInfo['subscriptionAmount']) ? intval($bankInfo['subscriptionAmount']) : 600);
+        $paymentRef = 'MON_' . time() . '_' . rand(10000, 99999);
+
+        $customerFullName = $reqName ?? ($currentUser['fullName'] ?? ($currentUser['username'] ?? 'Subscriber'));
+        $customerEmail = $reqEmail ?? ($currentUser['email'] ?? (($currentUser['username'] ?? 'subscriber') . '@cinjelly.com'));
+        $customerPhone = trim($input['phone'] ?? ($currentUser['phone'] ?? ''));
+
+        echo json_encode([
+            'success' => true,
+            'paymentReference' => $paymentRef,
+            'reference' => $paymentRef,
+            'amount' => $subAmount,
+            'currency' => 'NGN',
+            'customerFullName' => $customerFullName,
+            'customerName' => $customerFullName,
+            'customerEmail' => $customerEmail,
+            'customerPhoneNumber' => $customerPhone,
+            'phoneNumber' => $customerPhone,
+            'apiKey' => $apiKey,
+            'contractCode' => $contractCode,
+            'paymentDescription' => 'CINJELLY Stream 30-Day Access Renewal',
+            'isTestMode' => $isTestMode,
+            'mode' => $isTestMode ? 'TEST' : 'LIVE'
+        ]);
+        exit;
+    } catch (Throwable $e) {
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        exit;
+    }
 }
 
 // GET & POST /api/payment/monnify-webhook and /api/monnify/webhook
