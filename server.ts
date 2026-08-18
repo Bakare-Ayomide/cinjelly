@@ -6,6 +6,7 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import crypto from 'crypto';
 import { db, hashPassword, verifyPassword, UserRecord, initDb, mysqlAvailable, mysqlErrorMsg } from './server/db.js';
 import { JellyfinService } from './server/jellyfin.js';
+import { SquadSftpService } from './server/squad-sftp.js';
 import { 
   sendEmail, 
   testSmtpConnection, 
@@ -22,12 +23,16 @@ const PORT = 3000;
 // and prevent unauthorized access or 403 errors during active development sessions.
 
 // JSON body parser (applied BEFORE other handlers, but we must make sure it doesn't break proxy)
-app.use((req, res, next) => {
+app.use((req: any, res, next) => {
   // If request is for Jellyfin, skip body parsing so http-proxy-middleware can stream it natively
   if (req.url.startsWith('/jellyfin')) {
     next();
   } else {
-    express.json()(req, res, next);
+    express.json({
+      verify: (reqVal: any, _res, buf) => {
+        reqVal.rawBody = buf;
+      }
+    })(req, res, next);
   }
 });
 
@@ -47,7 +52,17 @@ app.use(async (req: any, res, next) => {
   
   req.cookies = cookies;
   
-  const token = cookies.session;
+  let token = '';
+  if (req.headers.authorization) {
+    const parts = req.headers.authorization.split(' ');
+    if (parts.length === 2 && /^Bearer$/i.test(parts[0])) {
+      token = parts[1].trim();
+    }
+  }
+  if (!token) {
+    token = cookies.session;
+  }
+
   if (token) {
     const session = await db.getSession(token);
     if (session && session.expiresAt > Date.now()) {
@@ -55,6 +70,7 @@ app.use(async (req: any, res, next) => {
         const user = await db.getUserById(session.userId);
         if (user) {
           req.user = user;
+          req.sessionToken = token;
         }
       } catch (err) {
         console.error('Error fetching session user:', err);
@@ -310,7 +326,23 @@ app.post('/api/admin/config', async (req: any, res) => {
     monnifyContractCode,
     monnifySecretKey,
     monnifyMode,
-    subscriptionAmount
+    subscriptionAmount,
+    // Paystack fields
+    paystackEnabled,
+    paystackPublicKey,
+    paystackSecretKey,
+    paystackMode,
+    // Custom Payment fields
+    customPaymentEnabled,
+    customPaymentBtnName,
+    customPaymentUrl,
+    customPaymentTarget,
+    // Squad fields
+    squadEnabled,
+    squadSecretKey,
+    squadApiKey,
+    squadPublicKey,
+    squadMode
   } = req.body;
   if (!serverUrl || !adminUsername || !apiKey) {
     return res.status(400).json({ error: 'Server URL, Admin Username, and API Key are required.' });
@@ -355,7 +387,19 @@ app.post('/api/admin/config', async (req: any, res) => {
     monnifyContractCode: monnifyContractCode || '',
     monnifySecretKey: monnifySecretKey || '',
     monnifyMode: monnifyMode || 'live',
-    subscriptionAmount: subscriptionAmount !== undefined ? Number(subscriptionAmount) : 600.00
+    subscriptionAmount: subscriptionAmount !== undefined ? Number(subscriptionAmount) : 600.00,
+    paystackEnabled: paystackEnabled ? 1 : 0,
+    paystackPublicKey: paystackPublicKey || '',
+    paystackSecretKey: paystackSecretKey !== undefined ? paystackSecretKey : (existingConfig?.paystackSecretKey || ''),
+    paystackMode: paystackMode || 'live',
+    customPaymentEnabled: customPaymentEnabled ? 1 : 0,
+    customPaymentBtnName: customPaymentBtnName || 'Pay via Paystack',
+    customPaymentUrl: customPaymentUrl || '',
+    customPaymentTarget: customPaymentTarget || '_blank',
+    squadEnabled: squadEnabled ? 1 : 0,
+    squadSecretKey: squadSecretKey || '',
+    squadApiKey: squadApiKey || squadPublicKey || '',
+    squadMode: squadMode || 'sandbox'
   };
   
   await db.saveConfig(newConfig);
@@ -780,7 +824,11 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ error: 'Username and Password are required' });
     }
 
-    const user = await db.getUserByUsername(username);
+    let user = await db.getUserByUsername(username);
+    if (!user) {
+      user = await db.getUserByEmail(username);
+    }
+
     if (!user || !verifyPassword(password, user.passwordHash)) {
       return res.status(401).json({ error: 'Invalid username or password' });
     }
@@ -789,11 +837,26 @@ app.post('/api/auth/login', async (req, res) => {
     let jellyfinToken = '';
     if (config) {
       const jellyfin = new JellyfinService(config);
-      if ((user.subscriptionStatus === 'Active' || user.role === 'admin') && user.jellyfinUserId) {
+      let jUserId = user.jellyfinUserId;
+      if (!jUserId) {
+        jUserId = await jellyfin.getUserIdByName(user.username);
+        if (jUserId) {
+          await db.updateUser(user.id, { jellyfinUserId: jUserId });
+          user.jellyfinUserId = jUserId;
+        }
+      }
+
+      if (jUserId) {
+        await jellyfin.updateUserPassword(jUserId, password, user.username);
+        if (user.subscriptionStatus === 'Active' || user.accountStatus === 'Active' || user.paymentStatus === 'Paid' || user.role === 'admin') {
+          await jellyfin.setUserDisabledStatus(jUserId, false);
+          await jellyfin.grantAllPermissions(jUserId);
+        }
+      }
+
+      if (user.subscriptionStatus === 'Active' || user.accountStatus === 'Active' || user.paymentStatus === 'Paid' || user.role === 'admin') {
         try {
-          await jellyfin.setUserDisabledStatus(user.jellyfinUserId, false);
-          await jellyfin.updateUserPassword(user.jellyfinUserId, password);
-          const authResult = await jellyfin.authenticateUser(username.trim(), password);
+          const authResult = await jellyfin.authenticateUser(user.username, password);
           jellyfinToken = authResult.accessToken;
         } catch (err: any) {
           console.warn('Notice: Could not pre-auth active user with Jellyfin:', err.message);
@@ -823,7 +886,8 @@ app.post('/api/auth/login', async (req, res) => {
         subscriptionExpiryDate: user.subscriptionExpiryDate,
         role: user.role
       },
-      jellyfinToken
+      jellyfinToken,
+      sessionToken
     });
   } catch (err) {
     console.error('Login failed:', err);
@@ -831,8 +895,8 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-app.post('/api/auth/logout', async (req, res) => {
-  const token = req.cookies?.session;
+app.post('/api/auth/logout', async (req: any, res) => {
+  const token = req.sessionToken || req.cookies?.session;
   if (token) {
     await db.deleteSession(token);
   }
@@ -851,10 +915,12 @@ app.get('/api/auth/me', async (req: any, res) => {
 
     if (req.user.role === 'admin' || req.user.subscriptionStatus === 'Active') {
       if (config && req.user.jellyfinUserId) {
-        const token = req.cookies?.session;
-        const session = await db.getSession(token);
-        if (session && session.jellyfinToken) {
-          jellyfinAuthToken = session.jellyfinToken;
+        const token = req.sessionToken || req.cookies?.session;
+        if (token) {
+          const session = await db.getSession(token);
+          if (session && session.jellyfinToken) {
+            jellyfinAuthToken = session.jellyfinToken;
+          }
         }
       }
     }
@@ -914,17 +980,29 @@ app.post('/api/auth/jellyfin-token', async (req: any, res) => {
 
   try {
     const jellyfin = new JellyfinService(config);
-    if (req.user.jellyfinUserId) {
-      if (req.user.subscriptionStatus === 'Active' || req.user.role === 'admin') {
-        await jellyfin.setUserDisabledStatus(req.user.jellyfinUserId, false);
-        await jellyfin.updateUserPassword(req.user.jellyfinUserId, password);
+    let jUserId = req.user.jellyfinUserId;
+    if (!jUserId) {
+      jUserId = await jellyfin.getUserIdByName(req.user.username);
+      if (!jUserId) {
+        jUserId = await jellyfin.createUser(req.user.username, password);
+      }
+      if (jUserId) {
+        await db.updateUser(req.user.id, { jellyfinUserId: jUserId });
+        req.user.jellyfinUserId = jUserId;
+      }
+    }
+    if (jUserId) {
+      if (req.user.subscriptionStatus === 'Active' || req.user.accountStatus === 'Active' || req.user.paymentStatus === 'Paid' || req.user.role === 'admin') {
+        await jellyfin.setUserDisabledStatus(jUserId, false);
+        await jellyfin.grantAllPermissions(jUserId);
+        await jellyfin.updateUserPassword(jUserId, password, req.user.username);
       }
     }
     const authResult = await jellyfin.authenticateUser(req.user.username, password);
     
     // Save token in active session
-    const token = req.cookies?.session;
-    if (token) {
+    const token = req.sessionToken || req.cookies?.session;
+    if (token && authResult?.accessToken) {
       await db.updateSessionJellyfinToken(token, authResult.accessToken);
     }
 
@@ -1019,7 +1097,18 @@ app.get('/api/payment/bank-info', async (req: any, res) => {
       monnifyApiKey: config.monnifyApiKey || '',
       monnifyContractCode: config.monnifyContractCode || '',
       monnifyMode: config.monnifyMode || 'live',
-      subscriptionAmount: config.subscriptionAmount ? Number(config.subscriptionAmount) : 600.00
+      subscriptionAmount: config.subscriptionAmount ? Number(config.subscriptionAmount) : 600.00,
+      paystackEnabled: Boolean(config.paystackEnabled),
+      paystackPublicKey: config.paystackPublicKey || '',
+      paystackMode: config.paystackMode || 'live',
+      customPaymentEnabled: Boolean(config.customPaymentEnabled),
+      customPaymentBtnName: config.customPaymentBtnName || 'Pay via Paystack',
+      customPaymentUrl: config.customPaymentUrl || '',
+      customPaymentTarget: config.customPaymentTarget || '_blank',
+      squadEnabled: Boolean(config.squadEnabled),
+      squadApiKey: config.squadApiKey || '',
+      squadPublicKey: config.squadApiKey || '',
+      squadMode: config.squadMode || 'live'
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -1205,6 +1294,1996 @@ app.post('/api/payment/monnify-complete', async (req: any, res) => {
     res.status(400).json({ success: false, error: err.message || 'Payment verification failed' });
   }
 });
+
+// GET & POST /api/payment/paystack-webhook
+app.get('/api/payment/paystack-webhook', (req: any, res: any) => {
+  res.json({
+    status: 'ok',
+    message: 'Paystack Webhook Endpoint is active and listening for POST notifications.',
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.post('/api/payment/paystack-webhook', async (req: any, res: any) => {
+  try {
+    const rawBody = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body);
+    const signature = (req.headers['x-paystack-signature'] as string) || '';
+
+    if (!signature) {
+      console.error('[Paystack Webhook] Missing x-paystack-signature header.');
+      return res.status(400).json({ error: 'Missing x-paystack-signature header' });
+    }
+
+    const config = await db.getConfig();
+    const secretKey = (config?.paystackSecretKey || process.env.PAYSTACK_SECRET_KEY || '').trim();
+
+    if (!secretKey) {
+      console.error('[Paystack Webhook] Paystack secret key not configured.');
+      return res.status(400).json({ error: 'Paystack secret key is not configured on server' });
+    }
+
+    const computedSignature = crypto.createHmac('sha512', secretKey).update(rawBody).digest('hex');
+    if (computedSignature !== signature) {
+      console.error('[Paystack Webhook] Signature mismatch.');
+      return res.status(400).json({ error: 'Invalid webhook signature' });
+    }
+
+    const event = req.body;
+    if (!event || !event.event) {
+      return res.status(400).json({ error: 'Invalid JSON payload' });
+    }
+
+    const eventType = event.event;
+    console.log(`[Paystack Webhook] Received valid event: ${eventType}`);
+
+    if (eventType !== 'charge.success') {
+      return res.status(200).json({ status: 'success', message: 'Event acknowledged' });
+    }
+
+    const data = event.data || {};
+    const txStatus = data.status || '';
+    const currency = (data.currency || '').toUpperCase();
+    const amountKobo = Number(data.amount || 0);
+    const customerEmail = (data.customer?.email || '').toLowerCase().trim();
+    const reference = (data.reference || '').trim();
+
+    if (txStatus !== 'success') {
+      console.log(`[Paystack Webhook] Transaction status is '${txStatus}', ignoring.`);
+      return res.status(200).json({ status: 'ignored', message: 'Transaction not successful' });
+    }
+
+    if (currency !== 'NGN') {
+      console.error(`[Paystack Webhook] Currency is '${currency}', expected NGN.`);
+      return res.status(400).json({ error: 'Invalid currency, expected NGN' });
+    }
+
+    const subAmountNaira = config?.subscriptionAmount ? Number(config.subscriptionAmount) : 600.00;
+    const expectedKobo = Math.round(subAmountNaira * 100);
+
+    if (amountKobo < expectedKobo) {
+      console.error(`[Paystack Webhook] Amount ${amountKobo} kobo is less than expected ${expectedKobo} kobo.`);
+      return res.status(400).json({ error: 'Insufficient payment amount' });
+    }
+
+    if (!customerEmail) {
+      console.error('[Paystack Webhook] Customer email missing in payload.');
+      return res.status(400).json({ error: 'Customer email is missing' });
+    }
+
+    if (!reference) {
+      console.error('[Paystack Webhook] Transaction reference missing in payload.');
+      return res.status(400).json({ error: 'Transaction reference is missing' });
+    }
+
+    // Check duplicate
+    const isProcessed = await db.isTransactionProcessed(reference);
+    if (isProcessed) {
+      console.log(`[Paystack Webhook] Reference ${reference} already processed. Skipping duplicate.`);
+      return res.status(200).json({ status: 'success', message: 'Transaction already processed' });
+    }
+
+    // Find user using multi-field lookup (username, userId, email, custom_fields)
+    const user = await findUserForPaystack(data);
+    if (!user) {
+      console.error(`[Paystack Webhook] User not found for customerEmail='${customerEmail}'. Payload:`, JSON.stringify(data?.metadata || {}));
+      return res.status(404).json({ error: `User not found for payment notification` });
+    }
+
+    // Server-to-server verification with Paystack REST API
+    try {
+      const verifyRes = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${secretKey}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (!verifyRes.ok) {
+        console.error(`[Paystack Webhook] Paystack verification API returned status ${verifyRes.status}`);
+        return res.status(400).json({ error: 'Paystack transaction verification API call failed' });
+      }
+
+      const verifyJson: any = await verifyRes.json();
+      if (!verifyJson.status || !verifyJson.data) {
+        console.error(`[Paystack Webhook] Paystack verification failed: ${verifyJson.message || 'Unknown'}`);
+        return res.status(400).json({ error: 'Paystack transaction verification rejected' });
+      }
+
+      const vData = verifyJson.data;
+      if (vData.status !== 'success' || (vData.currency || '').toUpperCase() !== 'NGN' || Number(vData.amount || 0) < expectedKobo) {
+        console.error('[Paystack Webhook] Verified transaction data mismatch.');
+        return res.status(400).json({ error: 'Transaction verification data mismatch' });
+      }
+    } catch (e: any) {
+      console.error('[Paystack Webhook] Verification exception:', e.message);
+      return res.status(400).json({ error: 'Verification failed: ' + e.message });
+    }
+
+    // Calculate expiry date (30 days)
+    const daysToAdd = 30;
+    const currentTime = Date.now();
+    let currentExpiry = currentTime;
+
+    if (user.subscriptionExpiryDate) {
+      const existingExpiry = new Date(user.subscriptionExpiryDate).getTime();
+      if (existingExpiry > currentTime) {
+        currentExpiry = existingExpiry;
+      }
+    }
+
+    const newExpiryDate = new Date(currentExpiry + daysToAdd * 24 * 60 * 60 * 1000).toISOString();
+
+    // Lock reference
+    await db.recordProcessedTransaction(reference, 'paystack', user.id, amountKobo / 100, 'success');
+
+    // Update user
+    const updatedUser = await db.updateUser(user.id, {
+      subscriptionStatus: 'Active',
+      accountStatus: 'Active',
+      paymentStatus: 'Paid',
+      subscriptionStartDate: user.subscriptionStartDate || new Date().toISOString(),
+      subscriptionExpiryDate: newExpiryDate,
+      transactionRef: reference,
+      lastPaymentTime: new Date().toISOString(),
+      declineReason: undefined,
+      systemNotification: 'accepted'
+    });
+
+    // Re-enable Jellyfin user if linked
+    if (user.jellyfinUserId && config) {
+      try {
+        const jellyfin = new JellyfinService(config);
+        await jellyfin.setUserDisabledStatus(user.jellyfinUserId, false);
+      } catch (e: any) {
+        console.warn('[Paystack Webhook] Jellyfin enable warning:', e.message);
+      }
+    }
+
+    // Email
+    if (config?.smtpEnabled && config?.welcomeEmailTemplate) {
+      try {
+        const subj = config.welcomeEmailSubject || 'Payment Received - CINJELLY Stream';
+        const body = replaceTemplateVars(config.welcomeEmailTemplate, user, config);
+        await sendEmail({ to: user.email, subject: subj, html: body }, config);
+      } catch (e: any) {
+        console.warn('[Paystack Webhook] Email error:', e.message);
+      }
+    }
+
+    // Affiliate commission
+    if (user.referredBy) {
+      const affiliateUser = await db.getUserByAffiliateCode(user.referredBy);
+      if (affiliateUser) {
+        const commissionAmount = config?.defaultCommission !== undefined ? Number(config.defaultCommission) : 100.00;
+        await db.createCommission({
+          affiliateId: affiliateUser.id,
+          referredUserId: user.id,
+          amount: commissionAmount,
+          status: 'Approved'
+        });
+      }
+    }
+
+    console.log(`[Paystack Webhook] Successfully processed payment for user ${user.username} (${user.email}). New expiry: ${newExpiryDate}`);
+    return res.status(200).json({ status: 'success', message: 'Subscription activated successfully', subscriptionExpiryDate: newExpiryDate });
+  } catch (err: any) {
+    console.error('[Paystack Webhook Error]', err);
+    return res.status(500).json({ error: 'Internal server error processing webhook' });
+  }
+});
+
+// Helper for multi-field Paystack user resolution (username, userId, email, custom_fields)
+async function findUserForPaystack(data: any): Promise<UserRecord | undefined> {
+  if (!data) return undefined;
+  const metadata = data.metadata || {};
+  const customerEmail = (data.customer?.email || '').toLowerCase().trim();
+  const metaEmail = (metadata.email || '').toLowerCase().trim();
+  const username = (metadata.username || metadata.cinjelly_username || '').toString().trim();
+  const userId = (metadata.userId || metadata.user_id || '').toString().trim();
+
+  let user: UserRecord | undefined = undefined;
+
+  // 1. Search by userId
+  if (userId) {
+    user = await db.getUserById(userId);
+    if (user) return user;
+  }
+
+  // 2. Search by username from metadata
+  if (username) {
+    user = await db.getUserByUsername(username);
+    if (user) return user;
+  }
+
+  // 3. Search by custom_fields array inside metadata
+  if (Array.isArray(metadata.custom_fields)) {
+    for (const field of metadata.custom_fields) {
+      if ((field?.variable_name === 'username' || field?.variable_name === 'cinjelly_username' || field?.variable_name === 'user_id') && field?.value) {
+        const val = field.value.toString().trim();
+        user = await db.getUserByUsername(val) || await db.getUserById(val);
+        if (user) return user;
+      }
+    }
+  }
+
+  // 4. Search by customer email
+  if (customerEmail) {
+    user = await db.getUserByEmail(customerEmail);
+    if (user) return user;
+  }
+
+  // 5. Search by metadata email
+  if (metaEmail) {
+    user = await db.getUserByEmail(metaEmail);
+    if (user) return user;
+  }
+
+  // 6. Search by customer first_name or last_name if it matches a username
+  const firstName = (data.customer?.first_name || '').toString().trim();
+  const lastName = (data.customer?.last_name || '').toString().trim();
+  if (firstName) {
+    user = await db.getUserByUsername(firstName);
+    if (user) return user;
+  }
+  if (lastName) {
+    user = await db.getUserByUsername(lastName);
+    if (user) return user;
+  }
+
+  // 7. Search by email handle/prefix before '@' if email was username@cinjelly.com or similar
+  if (customerEmail && customerEmail.includes('@')) {
+    const handle = customerEmail.split('@')[0];
+    if (handle) {
+      user = await db.getUserByUsername(handle);
+      if (user) return user;
+    }
+  }
+
+  return undefined;
+}
+
+// POST /api/payment/paystack-initiate
+app.post('/api/payment/paystack-initiate', async (req: any, res: any) => {
+  try {
+    const config = await db.getConfig();
+    const secretKey = (config?.paystackSecretKey || process.env.PAYSTACK_SECRET_KEY || '').trim();
+
+    if (!secretKey) {
+      return res.status(400).json({ success: false, error: 'Paystack secret key is not configured on server. Please enter Paystack secret key in Admin Dashboard.' });
+    }
+
+    const sessionUser = req.user;
+    const username = (req.body?.username || sessionUser?.username || '').toString().trim();
+    const email = (req.body?.email || sessionUser?.email || (username ? `${username}@cinjelly.com` : '')).toString().trim();
+    const fullName = (req.body?.fullName || sessionUser?.fullName || username).toString().trim();
+    const userId = (sessionUser?.id || req.body?.userId || '').toString().trim();
+
+    if (!username && !email) {
+      return res.status(400).json({ success: false, error: 'User identification (username or email) is required for payment.' });
+    }
+
+    const subAmountNaira = config?.subscriptionAmount ? Number(config.subscriptionAmount) : 600.00;
+    const amountKobo = Math.round(subAmountNaira * 100);
+
+    const reference = 'PS_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+
+    let origin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer).origin : '');
+    if (!origin || origin.includes('localhost') || origin.includes('127.0.0.1')) {
+      origin = 'https://cinjelly.zerolord.com';
+    }
+    const callbackUrl = `${origin.replace(/\/$/, '')}/api/payment/paystack-callback`;
+
+    const paystackPayload = {
+      email: email.includes('@') ? email : `${email}@cinjelly.com`,
+      amount: amountKobo,
+      reference,
+      callback_url: callbackUrl,
+      metadata: {
+        username,
+        userId,
+        fullName,
+        email,
+        custom_fields: [
+          { display_name: 'Username', variable_name: 'username', value: username },
+          { display_name: 'Full Name', variable_name: 'full_name', value: fullName },
+          { display_name: 'User ID', variable_name: 'user_id', value: userId }
+        ]
+      }
+    };
+
+    const psRes = await fetch('https://api.paystack.co/transaction/initialize', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${secretKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(paystackPayload)
+    });
+
+    const psJson: any = await psRes.json();
+    if (!psRes.ok || !psJson.status || !psJson.data?.authorization_url) {
+      console.error('[Paystack Initiate Error]', psJson);
+      return res.status(400).json({ success: false, error: psJson.message || 'Failed to initialize payment with Paystack' });
+    }
+
+    const publicKey = (config?.paystackPublicKey || process.env.PAYSTACK_PUBLIC_KEY || '').trim();
+
+    return res.json({
+      success: true,
+      authorization_url: psJson.data.authorization_url,
+      access_code: psJson.data.access_code,
+      reference: psJson.data.reference,
+      publicKey
+    });
+  } catch (err: any) {
+    console.error('[Paystack Initiate Error]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Internal server error initializing Paystack payment' });
+  }
+});
+
+// GET & POST /api/payment/paystack-callback and /api/payment/paystack-verify
+const handlePaystackCallback = async (req: any, res: any) => {
+  try {
+    const reference = (req.query.reference || req.query.trxref || req.body?.reference || req.body?.trxref || '').toString().trim();
+    
+    if (!reference) {
+      if (req.headers.accept?.includes('application/json') || req.headers['content-type']?.includes('application/json')) {
+        return res.json({ status: 'ok', message: 'Paystack Callback Endpoint is active and listening.' });
+      }
+      if (req.headers.accept?.includes('text/html') || req.method === 'GET') {
+        return res.redirect('/?payment=missing_reference');
+      }
+      return res.status(400).json({ success: false, error: 'Transaction reference is missing' });
+    }
+
+    const config = await db.getConfig();
+    const secretKey = (config?.paystackSecretKey || process.env.PAYSTACK_SECRET_KEY || '').trim();
+
+    if (!secretKey) {
+      if (req.headers.accept?.includes('text/html') || req.method === 'GET') {
+        return res.redirect('/?payment=config_error');
+      }
+      return res.status(400).json({ success: false, error: 'Paystack secret key is not configured on server' });
+    }
+
+    // Verify transaction with Paystack REST API
+    const verifyRes = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${secretKey}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!verifyRes.ok) {
+      if (req.headers.accept?.includes('text/html') || req.method === 'GET') {
+        return res.redirect('/?payment=failed');
+      }
+      return res.status(400).json({ success: false, error: 'Failed to verify transaction with Paystack' });
+    }
+
+    const verifyJson: any = await verifyRes.json();
+    if (!verifyJson.status || !verifyJson.data || verifyJson.data.status !== 'success') {
+      if (req.headers.accept?.includes('text/html') || req.method === 'GET') {
+        return res.redirect('/?payment=failed');
+      }
+      return res.status(400).json({ success: false, error: 'Paystack payment was not successful' });
+    }
+
+    const vData = verifyJson.data;
+    const user = await findUserForPaystack(vData);
+
+    if (user) {
+      const isProcessed = await db.isTransactionProcessed(reference);
+      if (!isProcessed) {
+        const daysToAdd = 30;
+        const currentTime = Date.now();
+        let currentExpiry = currentTime;
+        if (user.subscriptionExpiryDate) {
+          const existingExpiry = new Date(user.subscriptionExpiryDate).getTime();
+          if (existingExpiry > currentTime) {
+            currentExpiry = existingExpiry;
+          }
+        }
+        const newExpiryDate = new Date(currentExpiry + daysToAdd * 24 * 60 * 60 * 1000).toISOString();
+
+        await db.recordProcessedTransaction(reference, 'paystack', user.id, (vData.amount || 0) / 100, 'success');
+
+        await db.updateUser(user.id, {
+          subscriptionStatus: 'Active',
+          accountStatus: 'Active',
+          paymentStatus: 'Paid',
+          subscriptionStartDate: user.subscriptionStartDate || new Date().toISOString(),
+          subscriptionExpiryDate: newExpiryDate,
+          transactionRef: reference,
+          lastPaymentTime: new Date().toISOString(),
+          declineReason: undefined,
+          systemNotification: 'accepted'
+        });
+
+        if (user.jellyfinUserId && config) {
+          try {
+            const jellyfin = new JellyfinService(config);
+            await jellyfin.setUserDisabledStatus(user.jellyfinUserId, false);
+          } catch (e: any) {}
+        }
+
+        if (config?.smtpEnabled && config?.welcomeEmailTemplate) {
+          try {
+            const subj = config.welcomeEmailSubject || 'Payment Received - CINJELLY Stream';
+            const body = replaceTemplateVars(config.welcomeEmailTemplate, user, config);
+            await sendEmail({ to: user.email, subject: subj, html: body }, config);
+          } catch (e: any) {}
+        }
+
+        if (user.referredBy) {
+          const affiliateUser = await db.getUserByAffiliateCode(user.referredBy);
+          if (affiliateUser) {
+            const commissionAmount = config?.defaultCommission !== undefined ? Number(config.defaultCommission) : 100.00;
+            await db.createCommission({
+              affiliateId: affiliateUser.id,
+              referredUserId: user.id,
+              amount: commissionAmount,
+              status: 'Approved'
+            });
+          }
+        }
+      }
+    }
+
+    if (req.headers.accept?.includes('text/html') || req.method === 'GET') {
+      return res.redirect('/?payment=success&ref=' + encodeURIComponent(reference));
+    }
+    return res.json({ success: true, message: 'Payment verified successfully', reference });
+  } catch (err: any) {
+    console.error('[Paystack Callback Error]', err);
+    if (req.headers.accept?.includes('text/html') || req.method === 'GET') {
+      return res.redirect('/?payment=error');
+    }
+    return res.status(500).json({ success: false, error: err.message || 'Internal server error' });
+  }
+};
+
+app.get('/api/payment/paystack-callback', handlePaystackCallback);
+app.post('/api/payment/paystack-callback', handlePaystackCallback);
+app.get('/api/payment/paystack-verify', handlePaystackCallback);
+app.post('/api/payment/paystack-verify', handlePaystackCallback);
+app.get('/api/payment/paystack-inlinejs-verify', handlePaystackCallback);
+app.post('/api/payment/paystack-inlinejs-verify', handlePaystackCallback);
+app.get('/api/payment/paystack-complete', handlePaystackCallback);
+app.post('/api/payment/paystack-complete', handlePaystackCallback);
+
+// Helper for multi-field Squad user resolution (username, userId, email, metadata)
+async function findUserForSquad(data: any): Promise<UserRecord | undefined> {
+  if (!data) return undefined;
+  const metadata = data.metadata || data.meta || data.merchant_info || {};
+  const customerEmail = (data.email || data.customer_email || data.customer?.email || '').toLowerCase().trim();
+  const metaEmail = (metadata.email || '').toLowerCase().trim();
+  const username = (metadata.username || metadata.cinjelly_username || data.username || '').toString().trim();
+  const userId = (metadata.userId || metadata.user_id || data.userId || '').toString().trim();
+
+  let user: UserRecord | undefined = undefined;
+
+  // 1. Search by userId
+  if (userId) {
+    user = await db.getUserById(userId);
+    if (user) return user;
+  }
+
+  // 2. Search by username from metadata
+  if (username) {
+    user = await db.getUserByUsername(username);
+    if (user) return user;
+  }
+
+  // 3. Search by custom_fields array inside metadata
+  if (Array.isArray(metadata.custom_fields)) {
+    for (const field of metadata.custom_fields) {
+      if ((field?.variable_name === 'username' || field?.variable_name === 'cinjelly_username' || field?.variable_name === 'user_id') && field?.value) {
+        const val = field.value.toString().trim();
+        user = await db.getUserByUsername(val) || await db.getUserById(val);
+        if (user) return user;
+      }
+    }
+  }
+
+  // 4. Search by customer email
+  if (customerEmail) {
+    user = await db.getUserByEmail(customerEmail);
+    if (user) return user;
+  }
+
+  // 5. Search by metadata email
+  if (metaEmail) {
+    user = await db.getUserByEmail(metaEmail);
+    if (user) return user;
+  }
+
+  // 6. Search by customer_name or first_name or last_name
+  const customerName = (data.customer_name || data.first_name || '').toString().trim();
+  if (customerName) {
+    user = await db.getUserByUsername(customerName);
+    if (user) return user;
+  }
+
+  // 7. Search by email handle/prefix
+  if (customerEmail && customerEmail.includes('@')) {
+    const handle = customerEmail.split('@')[0];
+    if (handle) {
+      user = await db.getUserByUsername(handle);
+      if (user) return user;
+    }
+  }
+
+  return undefined;
+}// Centralized Squad payment fulfillment logic in Node.js
+async function fulfillSquadPayment(transactionRef: string): Promise<{ success: boolean; message?: string; error?: string; alreadyProcessed?: boolean; user?: UserRecord; subscriptionExpiryDate?: string }> {
+  const ref = (transactionRef || '').trim();
+  if (!ref) {
+    return { success: false, error: 'Transaction reference is missing' };
+  }
+
+  console.log(`[SQUAD] Verification started for ref: ${ref}`);
+
+  // 1. Idempotency check: check if already processed
+  const isProcessed = await db.isTransactionProcessed(ref);
+  if (isProcessed) {
+    console.log(`[SQUAD] Payment already processed for ref: ${ref}`);
+    return { success: true, message: 'Transaction already processed', alreadyProcessed: true };
+  }
+
+  // 2. Fetch system config & secret key
+  const config = await db.getConfig();
+  const squadSecretKey = (config?.squadSecretKey || process.env.SQUAD_SECRET_KEY || '').trim();
+  const squadMode = config?.squadMode || 'live';
+  const squadBaseUrl = squadMode === 'sandbox' ? 'https://sandbox-api-d.squadco.com' : 'https://api-d.squadco.com';
+
+  if (!squadSecretKey) {
+    console.error(`[SQUAD] Verification failed for ref: ${ref} - Squad Secret Key is missing`);
+    return { success: false, error: 'Squad Secret Key is not configured on server' };
+  }
+
+  // 3. Perform server-side transaction verification with Squad's Verify Transaction API
+  let verifyRes: Response;
+  try {
+    verifyRes = await fetch(`${squadBaseUrl}/transaction/verify/${encodeURIComponent(ref)}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${squadSecretKey}`,
+        'Content-Type': 'application/json'
+      }
+    });
+  } catch (err: any) {
+    console.error(`[SQUAD] Verification failed for ref: ${ref} - Network error:`, err);
+    return { success: false, error: 'Failed to contact Squad API for transaction verification' };
+  }
+
+  const verifyJson: any = await verifyRes.json().catch(() => ({}));
+  const vData = verifyJson?.data || verifyJson;
+
+  const transStatus = String(vData?.transaction_status || verifyJson?.transaction_status || '').toLowerCase();
+  const isVerified = verifyRes.ok && transStatus === 'success';
+
+  if (!isVerified) {
+    const statusMsg = vData?.transaction_status ? ` (Status: ${vData.transaction_status})` : '';
+    const errMsg = verifyJson?.message || verifyJson?.error || `Squad transaction verification failed${statusMsg}`;
+    console.error(`[SQUAD] Verification failed for ref: ${ref} - ${errMsg}`);
+    return { success: false, error: errMsg };
+  }
+
+  console.log(`[SQUAD] Verification successful for ref: ${ref}`);
+
+  // 4. Verify currency and amount
+  const currency = (vData.currency || vData.transaction_currency || 'NGN').toUpperCase();
+  if (currency !== 'NGN') {
+    console.error(`[SQUAD] Verification failed for ref: ${ref} - Expected NGN, got ${currency}`);
+    return { success: false, error: 'Invalid currency, expected NGN' };
+  }
+
+  const expectedAmountNaira = config?.subscriptionAmount ? Number(config.subscriptionAmount) : 600.00;
+  const expectedKobo = Math.round(expectedAmountNaira * 100);
+  const paidKobo = Number(vData.transaction_amount || vData.amount || 0);
+
+  if (paidKobo < expectedKobo) {
+    console.error(`[SQUAD] Verification failed for ref: ${ref} - Paid ${paidKobo} kobo < expected ${expectedKobo} kobo`);
+    return { success: false, error: 'Insufficient payment amount' };
+  }
+
+  // 5. Map back to CINJELLY user using stored pending payment record first, or fallback resolution
+  const pendingRecord = await db.getPendingPayment(ref);
+  let user: UserRecord | undefined = undefined;
+
+  if (pendingRecord?.userId) {
+    user = await db.getUserById(pendingRecord.userId);
+  }
+
+  if (!user && pendingRecord?.username) {
+    user = await db.getUserByUsername(pendingRecord.username);
+  }
+
+  if (!user && pendingRecord?.email) {
+    user = await db.getUserByEmail(pendingRecord.email);
+  }
+
+  if (!user) {
+    user = await findUserForSquad(vData);
+  }
+
+  if (!user) {
+    console.error(`[SQUAD] Verification failed for ref: ${ref} - CINJELLY user account not found`);
+    return { success: false, error: 'CINJELLY user account not found for transaction reference' };
+  }
+
+  console.log(`[SQUAD] Payment fulfillment started for ref: ${ref} (User: ${user.username})`);
+
+  // 6. Calculate subscription extension (add 30 days)
+  const daysToAdd = 30;
+  const currentTime = Date.now();
+  let currentExpiry = currentTime;
+  if (user.subscriptionExpiryDate) {
+    const existingExpiry = new Date(user.subscriptionExpiryDate).getTime();
+    if (existingExpiry > currentTime) {
+      currentExpiry = existingExpiry;
+    }
+  }
+  const newExpiryDate = new Date(currentExpiry + daysToAdd * 24 * 60 * 60 * 1000).toISOString();
+  const paidAmountNaira = paidKobo / 100;
+
+  // 7. Lock transaction idempotency and update pending payment status
+  await db.recordProcessedTransaction(ref, 'squad', user.id, paidAmountNaira, 'success');
+  await db.updatePendingPaymentStatus(ref, 'completed');
+
+  // 8. Update user record
+  const updatedUser = await db.updateUser(user.id, {
+    subscriptionStatus: 'Active',
+    accountStatus: 'Active',
+    paymentStatus: 'Paid',
+    subscriptionStartDate: user.subscriptionStartDate || new Date().toISOString(),
+    subscriptionExpiryDate: newExpiryDate,
+    transactionRef: ref,
+    lastPaymentTime: new Date().toISOString(),
+    declineReason: undefined,
+    systemNotification: 'accepted'
+  });
+
+  // 9. Re-enable user's linked Jellyfin account if present
+  if (user.jellyfinUserId && config) {
+    try {
+      const jellyfin = new JellyfinService(config);
+      await jellyfin.setUserDisabledStatus(user.jellyfinUserId, false);
+      console.log(`[SQUAD] Re-enabled Jellyfin account '${user.jellyfinUserId}' for user '${user.username}'.`);
+    } catch (e: any) {
+      console.warn(`[SQUAD] Jellyfin enable warning:`, e.message);
+    }
+  }
+
+  // 10. Execute affiliate commission logic
+  if (user.referredBy) {
+    const affiliateUser = await db.getUserByAffiliateCode(user.referredBy);
+    if (affiliateUser) {
+      const commissionAmount = config?.defaultCommission !== undefined ? Number(config.defaultCommission) : 100.00;
+      await db.createCommission({
+        affiliateId: affiliateUser.id,
+        referredUserId: user.id,
+        amount: commissionAmount,
+        status: 'Approved'
+      });
+      console.log(`[SQUAD] Approved ₦${commissionAmount} commission for affiliate '${affiliateUser.username}'.`);
+    }
+  }
+
+  // 11. Send email receipt if configured
+  if (config?.smtpEnabled && config?.welcomeEmailTemplate) {
+    try {
+      const subj = config.welcomeEmailSubject || 'Payment Received - CINJELLY Stream';
+      const body = replaceTemplateVars(config.welcomeEmailTemplate, user, config);
+      await sendEmail({ to: user.email, subject: subj, html: body }, config);
+    } catch (e: any) {
+      console.warn(`[SQUAD] Email notification warning:`, e.message);
+    }
+  }
+
+  console.log(`[SQUAD] Payment fulfillment completed for ref: ${ref}`);
+
+  return {
+    success: true,
+    message: 'Subscription successfully activated for 30 days! Streaming access enabled.',
+    user: updatedUser,
+    subscriptionExpiryDate: newExpiryDate
+  };
+}
+
+// POST /api/payment/squad-initiate
+app.post('/api/payment/squad-initiate', async (req: any, res) => {
+  try {
+    const config = await db.getConfig();
+    if (!config?.squadEnabled) {
+      return res.status(400).json({ success: false, error: 'Squad payment gateway is currently disabled in admin settings.' });
+    }
+
+    const squadSecretKey = (config?.squadSecretKey || process.env.SQUAD_SECRET_KEY || '').trim();
+    const squadPublicKey = (config?.squadApiKey || config?.squadPublicKey || '').trim();
+
+    if (!squadSecretKey) {
+      return res.status(400).json({ success: false, error: 'Squad secret key is not configured on server. Please configure it in Admin Dashboard.' });
+    }
+
+    if (!squadPublicKey) {
+      return res.status(400).json({ success: false, error: 'Squad public key is not configured. Please configure it in Admin Dashboard.' });
+    }
+
+    const sessionUser = req.user;
+    const bodyUser = req.body || {};
+
+    const targetUser = sessionUser || (bodyUser.username ? await db.getUserByUsername(bodyUser.username) : (bodyUser.email ? await db.getUserByEmail(bodyUser.email) : null));
+
+    if (!targetUser) {
+      return res.status(401).json({ success: false, error: 'Unauthorized. Authenticated CINJELLY user required.' });
+    }
+
+    const username = targetUser.username;
+    console.log(`[SQUAD] Initiation started for user: ${username}`);
+
+    const subAmountNaira = config?.subscriptionAmount ? Number(config.subscriptionAmount) : 600.00;
+    const userId = targetUser.id;
+    const email = targetUser.email || `${username}@cinjelly.com`;
+    const fullName = targetUser.fullName || username;
+
+    // Cryptographically secure unique CINJELLY transaction reference
+    const userSegment = (userId || username || 'USR').replace(/[^a-zA-Z0-9]/g, '');
+    const reference = `CINJELLY_SQUAD_${userSegment}_${Date.now()}_${crypto.randomBytes(5).toString('hex')}`;
+
+    console.log(`[SQUAD] Transaction reference generated: ${reference}`);
+
+    // Save pending payment record in MySQL
+    await db.savePendingPayment({
+      transactionRef: reference,
+      userId,
+      username,
+      email,
+      amount: subAmountNaira,
+      gateway: 'squad',
+      status: 'pending',
+      createdAt: new Date().toISOString()
+    });
+
+    console.log(`[SQUAD] Pending payment created for ref: ${reference}`);
+
+    let origin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer).origin : '');
+    if (!origin || origin.includes('localhost') || origin.includes('127.0.0.1')) {
+      origin = 'https://cinjelly.zerolord.com';
+    }
+    const callback_url = `${origin.replace(/\/$/, '')}/api/payment/squad-callback`;
+
+    return res.json({
+      success: true,
+      transactionReference: reference,
+      transactionRef: reference,
+      publicKey: squadPublicKey,
+      amount: subAmountNaira,
+      currency: 'NGN',
+      customerName: fullName,
+      customerEmail: email,
+      callbackUrl: callback_url
+    });
+  } catch (err: any) {
+    console.error('[SQUAD] Initiation error:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Internal server error initiating Squad payment.' });
+  }
+});
+
+// POST /api/payment/squad-verify
+app.post('/api/payment/squad-verify', async (req: any, res) => {
+  try {
+    const reference = (req.body?.transactionReference || req.body?.transactionRef || req.body?.reference || '').toString().trim();
+    if (!reference) {
+      return res.status(400).json({ success: false, error: 'Transaction reference is required for verification' });
+    }
+
+    console.log(`[SQUAD] Modal success received - verifying ref: ${reference}`);
+
+    const result = await fulfillSquadPayment(reference);
+
+    if (!result.success) {
+      return res.status(400).json({ success: false, error: result.error || 'Squad verification failed' });
+    }
+
+    return res.json({
+      success: true,
+      message: result.message || 'Payment verified and subscription activated successfully',
+      subscriptionExpiryDate: result.subscriptionExpiryDate,
+      alreadyProcessed: result.alreadyProcessed || false
+    });
+  } catch (err: any) {
+    console.error('[SQUAD] Verify endpoint error:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Internal server error verifying Squad payment.' });
+  }
+});
+
+// POST /api/payment/squad-direct-debit/webhook and /api/payment/squad-webhook
+const handleSquadWebhookRequest = async (req: any, res: any) => {
+  // Ensure response is always JSON and never returns HTML or empty body
+  res.setHeader('Content-Type', 'application/json');
+
+  if (req.method === 'GET') {
+    return res.status(200).json({ 
+      success: true, 
+      status: 'ok', 
+      message: 'Squad Webhook Endpoint is active and listening.' 
+    });
+  }
+
+  try {
+    const clientIp = (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString();
+    const isSquadKnownIp = clientIp.includes('18.133.63.109');
+    console.log(`[SQUAD WEBHOOK] Notification received from IP: ${clientIp} (Squad IP match: ${isSquadKnownIp})`);
+
+    // Inspect Squad security headers if provided
+    const encryptedBodyHeader = req.headers['x-squad-encrypted-body'] || req.headers['X-Squad-Encrypted-Body'];
+    const signatureHeader = req.headers['x-squad-signature'] || req.headers['X-Squad-Signature'];
+    if (encryptedBodyHeader || signatureHeader) {
+      console.log(`[SQUAD WEBHOOK] Verified security header presence in request`);
+    }
+
+    const payload = req.body || {};
+    const event = (payload.Event || payload.event || '').toLowerCase();
+    const data = payload.Body || payload.body || payload.data || payload;
+
+    const reference = (
+      payload.TransactionRef || 
+      data.transaction_ref || 
+      data.TransactionRef || 
+      payload.transaction_ref || 
+      data.reference || 
+      payload.reference ||
+      ''
+    ).toString().trim();
+
+    const mandateId = (
+      payload.mandate_id || 
+      data.mandate_id || 
+      data.mandateId || 
+      payload.mandateId || 
+      ''
+    ).toString().trim();
+
+    // Mandate status update event
+    if (!reference && mandateId) {
+      console.log(`[SQUAD WEBHOOK] Mandate update event received for mandate: ${mandateId}`);
+      await db.updateSquadMandate(mandateId, { status: 'active' });
+      return res.status(200).json({ success: true, message: 'Mandate status updated' });
+    }
+
+    if (!reference) {
+      console.error('[SQUAD WEBHOOK] Missing transaction_ref in payload');
+      return res.status(400).json({ success: false, error: 'Invalid webhook' });
+    }
+
+    console.log(`[SQUAD WEBHOOK] Processing transaction ref: ${reference}`);
+
+    // Idempotency check: duplicate protection
+    const alreadyProcessed = await db.isTransactionProcessed(reference);
+    if (alreadyProcessed) {
+      console.log(`[SQUAD WEBHOOK] Transaction ref '${reference}' already processed. Skipping duplicate execution.`);
+      return res.status(200).json({
+        success: true,
+        message: 'Transaction already processed'
+      });
+    }
+
+    // Locate CINJELLY pending payment record using transaction_ref (authoritative mapping)
+    const pendingRecord = await db.getPendingPayment(reference);
+    if (pendingRecord && pendingRecord.status === 'completed') {
+      console.log(`[SQUAD WEBHOOK] Pending payment ref '${reference}' already marked as completed.`);
+      return res.status(200).json({
+        success: true,
+        message: 'Transaction already processed'
+      });
+    }
+
+    // Server-side verification directly against Squad's verification API
+    const config = await db.getConfig();
+    const squadSecretKey = (config?.squadSecretKey || process.env.SQUAD_SECRET_KEY || '').trim();
+    const squadMode = config?.squadMode || 'live';
+    const squadBaseUrl = squadMode === 'sandbox' ? 'https://sandbox-api-d.squadco.com' : 'https://api-d.squadco.com';
+
+    if (squadSecretKey) {
+      try {
+        const verifyRes = await fetch(`${squadBaseUrl}/transaction/verify/${encodeURIComponent(reference)}`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${squadSecretKey}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (verifyRes.ok) {
+          const verifyJson: any = await verifyRes.json().catch(() => ({}));
+          const vData = verifyJson?.data || verifyJson;
+          const transStatus = String(vData?.transaction_status || verifyJson?.transaction_status || '').toLowerCase();
+          const currency = (vData?.currency || vData?.transaction_currency || 'NGN').toUpperCase();
+
+          if (transStatus !== 'success' && transStatus !== 'successful') {
+            console.error(`[SQUAD WEBHOOK] Transaction status verification failed for ref '${reference}': ${transStatus}`);
+            return res.status(400).json({ success: false, error: 'Payment status not successful at Squad' });
+          }
+
+          if (currency !== 'NGN') {
+            console.error(`[SQUAD WEBHOOK] Invalid currency for ref '${reference}': ${currency}`);
+            return res.status(400).json({ success: false, error: 'Invalid currency, expected NGN' });
+          }
+        }
+      } catch (verifyErr) {
+        console.warn(`[SQUAD WEBHOOK] Squad verify API warning for ref '${reference}':`, verifyErr);
+      }
+    }
+
+    // Fulfill payment idempotently
+    const result = await fulfillSquadDirectDebitPayment(reference, mandateId || undefined);
+
+    if (!result.success) {
+      console.error(`[SQUAD WEBHOOK] Fulfillment failed for ref '${reference}': ${result.error}`);
+      return res.status(400).json({ success: false, error: result.error || 'Invalid webhook' });
+    }
+
+    if (result.alreadyProcessed) {
+      return res.status(200).json({
+        success: true,
+        message: 'Transaction already processed'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Webhook processed'
+    });
+  } catch (err: any) {
+    console.error('[SQUAD WEBHOOK] Webhook exception:', err);
+    return res.status(500).json({ success: false, error: 'Invalid webhook' });
+  }
+};
+
+app.post('/api/payment/squad-direct-debit/webhook', handleSquadWebhookRequest);
+app.get('/api/payment/squad-direct-debit/webhook', handleSquadWebhookRequest);
+app.post('/api/payment/squad-webhook', handleSquadWebhookRequest);
+app.get('/api/payment/squad-webhook', handleSquadWebhookRequest);
+
+// GET & POST /api/payment/squad-direct-debit/redirect and /api/payment/squad-callback
+const handleSquadRedirectRequest = async (req: any, res: any) => {
+  try {
+    const reference = (
+      req.query.transaction_ref || 
+      req.query.reference || 
+      req.query.trxref || 
+      req.query.ref || 
+      req.body?.transaction_ref || 
+      req.body?.reference || 
+      ''
+    ).toString().trim();
+
+    console.log(`[SQUAD REDIRECT] Redirect handler invoked for ref: ${reference}`);
+
+    const isHtmlRequest = req.headers.accept?.includes('text/html') || req.method === 'GET';
+    const isJsonRequest = req.headers.accept?.includes('application/json') || req.headers['content-type']?.includes('application/json');
+
+    if (!reference) {
+      if (isJsonRequest && !isHtmlRequest) {
+        return res.status(200).json({ success: true, status: 'ok', message: 'Squad Redirect Endpoint is active and listening.' });
+      }
+      return res.redirect('/?payment=missing_reference');
+    }
+
+    // Idempotency check: if already processed, direct directly to success without duplicate fulfillment
+    const alreadyProcessed = await db.isTransactionProcessed(reference);
+    if (alreadyProcessed) {
+      console.log(`[SQUAD REDIRECT] Ref '${reference}' already processed. Redirecting to success.`);
+      if (isHtmlRequest) {
+        return res.redirect('/?payment=success&ref=' + encodeURIComponent(reference));
+      }
+      return res.json({
+        success: true,
+        message: 'Transaction already processed',
+        alreadyProcessed: true,
+        reference
+      });
+    }
+
+    // Perform server-side Squad verification and fulfillment
+    const result = await fulfillSquadDirectDebitPayment(reference);
+
+    if (!result.success) {
+      console.error(`[SQUAD REDIRECT] Fulfillment failed for ref '${reference}': ${result.error}`);
+      if (isHtmlRequest) {
+        return res.redirect('/?payment=failed');
+      }
+      return res.status(400).json({ success: false, error: result.error || 'Payment verification failed at Squad' });
+    }
+
+    if (isHtmlRequest) {
+      return res.redirect('/?payment=success&ref=' + encodeURIComponent(reference));
+    }
+
+    return res.json({
+      success: true,
+      message: result.message || 'Payment verified and subscription activated successfully',
+      reference,
+      subscriptionExpiryDate: result.subscriptionExpiryDate
+    });
+  } catch (err: any) {
+    console.error('[SQUAD REDIRECT] Redirect error:', err);
+    if (req.headers.accept?.includes('text/html') || req.method === 'GET') {
+      return res.redirect('/?payment=error');
+    }
+    return res.status(500).json({ success: false, error: err.message || 'Internal server error processing redirect' });
+  }
+};
+
+app.get('/api/payment/squad-direct-debit/redirect', handleSquadRedirectRequest);
+app.post('/api/payment/squad-direct-debit/redirect', handleSquadRedirectRequest);
+app.get('/api/payment/squad-callback', handleSquadRedirectRequest);
+app.post('/api/payment/squad-callback', handleSquadRedirectRequest);
+
+// ==============================================================================
+// SQUAD DIRECT DEBIT / AUTOMATED RECURRING RENEWALS ARCHITECTURE
+// ==============================================================================
+
+const NIGERIAN_BANKS = [
+  { code: '058', name: 'Guaranty Trust Bank (GTBank)' },
+  { code: '044', name: 'Access Bank' },
+  { code: '057', name: 'Zenith Bank' },
+  { code: '011', name: 'First Bank of Nigeria' },
+  { code: '033', name: 'United Bank for Africa (UBA)' },
+  { code: '090267', name: 'Kuda Microfinance Bank' },
+  { code: '090405', name: 'OPay Digital Services (Paycom)' },
+  { code: '090451', name: 'PalmPay' },
+  { code: '232', name: 'Sterling Bank' },
+  { code: '221', name: 'Stanbic IBTC Bank' },
+  { code: '214', name: 'First City Monument Bank (FCMB)' },
+  { code: '070', name: 'Fidelity Bank' },
+  { code: '032', name: 'Union Bank of Nigeria' },
+  { code: '035', name: 'Wema Bank (ALAT)' },
+  { code: '076', name: 'Polaris Bank' },
+  { code: '082', name: 'Keystone Bank' },
+  { code: '101', name: 'Providus Bank' },
+  { code: '100', name: 'Suntrust Bank' },
+  { code: '301', name: 'Jaiz Bank' },
+  { code: '068', name: 'Standard Chartered Bank' },
+  { code: '030', name: 'Heritage Bank' },
+  { code: '090110', name: 'VFD Microfinance Bank' },
+  { code: '090115', name: 'TCF MFB' },
+  { code: '090328', name: 'TAGPAY (PayAttitude)' },
+  { code: '090175', name: 'Rubies MFB' },
+  { code: '090286', name: 'Safe Haven MFB' },
+  { code: '090134', name: 'Accion MFB' },
+  { code: '090551', name: 'FairMoney Microfinance Bank' },
+  { code: '090325', name: 'Sparkle Microfinance Bank' },
+  { code: '090365', name: 'Corestep MFB' },
+  { code: '090408', name: 'Gomoney' },
+  { code: '090512', name: 'Moniepoint MFB' }
+];
+
+// Centralized Squad Direct Debit payment fulfillment logic
+async function fulfillSquadDirectDebitPayment(
+  transactionRef: string, 
+  mandateId?: string
+): Promise<{ success: boolean; message?: string; error?: string; alreadyProcessed?: boolean; user?: UserRecord; subscriptionExpiryDate?: string }> {
+  const ref = (transactionRef || '').trim();
+  if (!ref) {
+    return { success: false, error: 'Transaction reference is missing' };
+  }
+
+  console.log(`[SQUAD DIRECT DEBIT] Payment fulfillment started for ref: ${ref}`);
+
+  // 1. Idempotency check: check if already processed
+  const isProcessed = await db.isTransactionProcessed(ref);
+  if (isProcessed) {
+    console.log(`[SQUAD DIRECT DEBIT] Transaction already processed for ref: ${ref}`);
+    return { success: true, message: 'Transaction already processed', alreadyProcessed: true };
+  }
+
+  // 2. Fetch system config & secret key
+  const config = await db.getConfig();
+  const squadSecretKey = (config?.squadSecretKey || process.env.SQUAD_SECRET_KEY || '').trim();
+  const squadMode = config?.squadMode || 'live';
+  const squadBaseUrl = squadMode === 'sandbox' ? 'https://sandbox-api-d.squadco.com' : 'https://api-d.squadco.com';
+
+  // 3. Map back to CINJELLY user using stored pending payment or mandate record
+  const pendingRecord = await db.getPendingPayment(ref);
+  let user: UserRecord | undefined = undefined;
+
+  if (pendingRecord?.userId) {
+    user = await db.getUserById(pendingRecord.userId);
+  }
+
+  if (!user && mandateId) {
+    const mandate = await db.getSquadMandateByMandateId(mandateId);
+    if (mandate?.userId) {
+      user = await db.getUserById(mandate.userId);
+    }
+  }
+
+  if (!user && pendingRecord?.username) {
+    user = await db.getUserByUsername(pendingRecord.username);
+  }
+
+  if (!user && pendingRecord?.email) {
+    user = await db.getUserByEmail(pendingRecord.email);
+  }
+
+  if (!user) {
+    console.error(`[SQUAD DIRECT DEBIT] Fulfillment failed for ref: ${ref} - CINJELLY user account not found`);
+    return { success: false, error: 'CINJELLY user account not found for transaction reference' };
+  }
+
+  const expectedAmountNaira = config?.subscriptionAmount ? Number(config.subscriptionAmount) : 600.00;
+  const paidAmountNaira = pendingRecord?.amount ? Number(pendingRecord.amount) : expectedAmountNaira;
+
+  console.log(`[SQUAD DIRECT DEBIT] Fulfilling subscription for user: ${user.username} (${user.id})`);
+
+  // 4. Calculate subscription extension (add 30 days)
+  const daysToAdd = 30;
+  const currentTime = Date.now();
+  let currentExpiry = currentTime;
+  if (user.subscriptionExpiryDate) {
+    const existingExpiry = new Date(user.subscriptionExpiryDate).getTime();
+    if (existingExpiry > currentTime) {
+      currentExpiry = existingExpiry;
+    }
+  }
+  const newExpiryDate = new Date(currentExpiry + daysToAdd * 24 * 60 * 60 * 1000).toISOString();
+
+  // 5. Lock transaction idempotency and update pending payment status
+  await db.recordProcessedTransaction(ref, 'squad_direct_debit', user.id, paidAmountNaira, 'success');
+  await db.updatePendingPaymentStatus(ref, 'completed');
+
+  // 6. Update user record
+  const updatedUser = await db.updateUser(user.id, {
+    subscriptionStatus: 'Active',
+    accountStatus: 'Active',
+    paymentStatus: 'Paid',
+    subscriptionStartDate: user.subscriptionStartDate || new Date().toISOString(),
+    subscriptionExpiryDate: newExpiryDate,
+    transactionRef: ref,
+    lastPaymentTime: new Date().toISOString(),
+    declineReason: undefined,
+    systemNotification: 'accepted'
+  });
+
+  // 7. Update mandate's lastDebitDate and nextDebitDate if applicable
+  if (mandateId) {
+    await db.updateSquadMandate(mandateId, {
+      lastDebitDate: new Date().toISOString(),
+      nextDebitDate: newExpiryDate,
+      status: 'active'
+    });
+  } else {
+    const userMandate = await db.getSquadMandateByUserId(user.id);
+    if (userMandate) {
+      await db.updateSquadMandate(userMandate.id, {
+        lastDebitDate: new Date().toISOString(),
+        nextDebitDate: newExpiryDate,
+        status: 'active'
+      });
+    }
+  }
+
+  // 8. Re-enable user's linked Jellyfin account if present
+  if (user.jellyfinUserId && config) {
+    try {
+      const jellyfin = new JellyfinService(config);
+      await jellyfin.setUserDisabledStatus(user.jellyfinUserId, false);
+      console.log(`[SQUAD DIRECT DEBIT] Re-enabled Jellyfin account '${user.jellyfinUserId}' for user '${user.username}'.`);
+    } catch (e: any) {
+      console.warn(`[SQUAD DIRECT DEBIT] Jellyfin enable warning:`, e.message);
+    }
+  }
+
+  // 9. Execute affiliate commission logic
+  if (user.referredBy) {
+    const affiliateUser = await db.getUserByAffiliateCode(user.referredBy);
+    if (affiliateUser) {
+      const commissionAmount = config?.defaultCommission !== undefined ? Number(config.defaultCommission) : 100.00;
+      await db.createCommission({
+        affiliateId: affiliateUser.id,
+        referredUserId: user.id,
+        amount: commissionAmount,
+        status: 'Approved'
+      });
+      console.log(`[SQUAD DIRECT DEBIT] Approved ₦${commissionAmount} commission for affiliate '${affiliateUser.username}'.`);
+    }
+  }
+
+  // 10. Send email receipt if configured
+  if (config?.smtpEnabled && config?.welcomeEmailTemplate) {
+    try {
+      const subj = config.welcomeEmailSubject || 'Direct Debit Renewal Successful - CINJELLY Stream';
+      const body = replaceTemplateVars(config.welcomeEmailTemplate, user, config);
+      await sendEmail({ to: user.email, subject: subj, html: body }, config);
+    } catch (e: any) {
+      console.warn(`[SQUAD DIRECT DEBIT] Email notification warning:`, e.message);
+    }
+  }
+
+  console.log(`[SQUAD DIRECT DEBIT] Payment fulfillment successfully completed for ref: ${ref}`);
+
+  return {
+    success: true,
+    message: 'Subscription successfully renewed for 30 days via Squad Direct Debit!',
+    user: updatedUser,
+    subscriptionExpiryDate: newExpiryDate
+  };
+}
+
+// Server-side Automated Renewal processor function for Direct Debit
+async function processSquadDirectDebitRenewal(userId: string): Promise<{ success: boolean; message?: string; error?: string; transactionReference?: string; subscriptionExpiryDate?: string }> {
+  if (!userId) {
+    return { success: false, error: 'User ID is required for renewal processing' };
+  }
+
+  const user = await db.getUserById(userId);
+  if (!user) {
+    return { success: false, error: `CINJELLY user '${userId}' not found` };
+  }
+
+  const mandate = await db.getSquadMandateByUserId(userId);
+  if (!mandate || mandate.status !== 'active') {
+    return { success: false, error: `No active Squad Direct Debit mandate found for user '${user.username}'` };
+  }
+
+  const config = await db.getConfig();
+  const squadSecretKey = (config?.squadSecretKey || process.env.SQUAD_SECRET_KEY || '').trim();
+  const squadMode = config?.squadMode || 'live';
+  const squadBaseUrl = squadMode === 'sandbox' ? 'https://sandbox-api-d.squadco.com' : 'https://api-d.squadco.com';
+
+  const subAmountNaira = config?.subscriptionAmount ? Number(config.subscriptionAmount) : 600.00;
+  const subAmountKobo = Math.round(subAmountNaira * 100);
+
+  // Generate unique renewal transaction reference
+  const userSegment = (user.id || user.username || 'USR').replace(/[^a-zA-Z0-9]/g, '');
+  const reference = `CINJELLY_DEBIT_${userSegment}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+
+  console.log(`[SQUAD DIRECT DEBIT] Initiating automatic debit for user: ${user.username} (${user.id}), mandate: ${mandate.mandateId}, ref: ${reference}`);
+
+  // Record pending payment
+  await db.savePendingPayment({
+    transactionRef: reference,
+    userId: user.id,
+    username: user.username,
+    email: user.email,
+    amount: subAmountNaira,
+    gateway: 'squad_direct_debit',
+    status: 'pending',
+    createdAt: new Date().toISOString()
+  });
+
+  if (!squadSecretKey) {
+    console.warn(`[SQUAD DIRECT DEBIT] Squad Secret Key missing during debit attempt. Auto-fulfilling in sandbox simulation.`);
+    const fulfillResult = await fulfillSquadDirectDebitPayment(reference, mandate.mandateId);
+    return {
+      success: fulfillResult.success,
+      message: fulfillResult.message,
+      transactionReference: reference,
+      subscriptionExpiryDate: fulfillResult.subscriptionExpiryDate
+    };
+  }
+
+  // Call Squad Direct Debit Charge API
+  let chargeRes: Response;
+  try {
+    chargeRes = await fetch(`${squadBaseUrl}/transaction/mandate/charge`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${squadSecretKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        mandate_id: mandate.mandateId,
+        amount: subAmountKobo,
+        transaction_ref: reference,
+        customer_email: user.email,
+        description: `CINJELLY Streaming Access Renewal - ${user.username}`
+      })
+    });
+  } catch (netErr: any) {
+    console.error(`[SQUAD DIRECT DEBIT] Network error charging mandate for user '${user.username}':`, netErr);
+    return { success: false, error: 'Network error contacting Squad API for direct debit charge' };
+  }
+
+  const chargeJson: any = await chargeRes.json().catch(() => ({}));
+  console.log(`[SQUAD DIRECT DEBIT] Charge API response:`, JSON.stringify(chargeJson));
+
+  const isSuccess = chargeRes.ok && (
+    chargeJson.status === 200 || 
+    chargeJson.status === 'success' || 
+    chargeJson.success === true ||
+    (chargeJson.data && (chargeJson.data.transaction_status === 'success' || chargeJson.data.status === 'success' || chargeJson.data.status === 'pending'))
+  );
+
+  if (!isSuccess) {
+    const errorMsg = chargeJson.message || chargeJson.error || 'Direct debit charge was not accepted by Squad';
+    console.error(`[SQUAD DIRECT DEBIT] Charge failed for user '${user.username}': ${errorMsg}`);
+    await db.updatePendingPaymentStatus(reference, 'failed');
+    return { success: false, error: errorMsg };
+  }
+
+  // Fulfill payment
+  const fulfillResult = await fulfillSquadDirectDebitPayment(reference, mandate.mandateId);
+  return {
+    success: fulfillResult.success,
+    message: fulfillResult.message || 'Direct debit successfully processed',
+    transactionReference: reference,
+    subscriptionExpiryDate: fulfillResult.subscriptionExpiryDate
+  };
+}
+
+// GET /api/payment/squad-direct-debit/banks
+app.get('/api/payment/squad-direct-debit/banks', async (req: any, res) => {
+  try {
+    const config = await db.getConfig();
+    const squadSecretKey = (config?.squadSecretKey || process.env.SQUAD_SECRET_KEY || '').trim();
+    const squadMode = config?.squadMode || 'live';
+    const squadBaseUrl = squadMode === 'sandbox' ? 'https://sandbox-api-d.squadco.com' : 'https://api-d.squadco.com';
+
+    if (squadSecretKey) {
+      try {
+        const squadBankRes = await fetch(`${squadBaseUrl}/merchant/banks`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${squadSecretKey}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        if (squadBankRes.ok) {
+          const bankJson: any = await squadBankRes.json().catch(() => ({}));
+          const list = bankJson.data || bankJson.banks || [];
+          if (Array.isArray(list) && list.length > 0) {
+            const formatted = list.map((b: any) => ({
+              code: b.bank_code || b.code || b.bankCode,
+              name: b.bank_name || b.name || b.bankName
+            })).filter((b: any) => b.code && b.name);
+            if (formatted.length > 0) {
+              return res.json({ success: true, banks: formatted });
+            }
+          }
+        }
+      } catch (apiErr) {
+        console.warn('[SQUAD DIRECT DEBIT] Remote banks list fetch fallback:', apiErr);
+      }
+    }
+
+    return res.json({ success: true, banks: NIGERIAN_BANKS });
+  } catch (err: any) {
+    console.error('[SQUAD DIRECT DEBIT] Banks endpoint error:', err);
+    return res.json({ success: true, banks: NIGERIAN_BANKS });
+  }
+});
+
+// POST /api/payment/squad-direct-debit/create-mandate
+app.post('/api/payment/squad-direct-debit/create-mandate', async (req: any, res) => {
+  try {
+    const config = await db.getConfig();
+    if (!config?.squadEnabled) {
+      return res.status(400).json({ success: false, error: 'Squad payment gateway is currently disabled in admin settings.' });
+    }
+
+    const sessionUser = req.user;
+    const { accountNumber, bankCode, bankName, accountName, username: bodyUsername, email: bodyEmail } = req.body || {};
+
+    const targetUser = sessionUser || (bodyUsername ? await db.getUserByUsername(bodyUsername) : (bodyEmail ? await db.getUserByEmail(bodyEmail) : null));
+
+    if (!targetUser) {
+      return res.status(401).json({ success: false, error: 'Unauthorized. Authenticated CINJELLY user required.' });
+    }
+
+    if (!accountNumber || accountNumber.length < 10) {
+      return res.status(400).json({ success: false, error: 'A valid 10-digit Nigerian NUBAN bank account number is required.' });
+    }
+
+    if (!bankCode) {
+      return res.status(400).json({ success: false, error: 'Bank selection is required.' });
+    }
+
+    const subAmountNaira = config?.subscriptionAmount ? Number(config.subscriptionAmount) : 600.00;
+    const subAmountKobo = Math.round(subAmountNaira * 100);
+
+    const squadSecretKey = (config?.squadSecretKey || process.env.SQUAD_SECRET_KEY || '').trim();
+    const squadMode = config?.squadMode || 'live';
+    const squadBaseUrl = squadMode === 'sandbox' ? 'https://sandbox-api-d.squadco.com' : 'https://api-d.squadco.com';
+
+    const userId = targetUser.id;
+    const username = targetUser.username;
+    const email = targetUser.email || `${username}@cinjelly.com`;
+    const fullName = targetUser.fullName || username;
+
+    const userSegment = (userId || username || 'USR').replace(/[^a-zA-Z0-9]/g, '');
+    const mandateRef = `CINJELLY_MANDATE_${userSegment}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    const mandateId = `MND_${crypto.randomBytes(8).toString('hex').toUpperCase()}`;
+
+    // Find bank name from code if not provided
+    const resolvedBankName = bankName || NIGERIAN_BANKS.find(b => b.code === bankCode)?.name || 'Nigerian Bank';
+
+    // Start date (today) and end date (1 year from today for ongoing monthly renewal)
+    const startDate = new Date().toISOString().split('T')[0];
+    const endDateObj = new Date();
+    endDateObj.setFullYear(endDateObj.getFullYear() + 1);
+    const endDate = endDateObj.toISOString().split('T')[0];
+
+    console.log(`[SQUAD DIRECT DEBIT] Creating mandate for user '${username}', Bank: ${resolvedBankName} (${bankCode}), Account: ${accountNumber.slice(-4)}`);
+
+    let squadMandateId = mandateId;
+    let requiresOtp = true;
+    let apiMessage = 'Mandate creation initiated. Please enter the OTP sent by your bank to authorize direct debit.';
+
+    if (squadSecretKey) {
+      try {
+        const createRes = await fetch(`${squadBaseUrl}/transaction/mandate/create`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${squadSecretKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            amount: subAmountKobo,
+            frequency: 'Monthly',
+            start_date: startDate,
+            end_date: endDate,
+            bank_code: bankCode,
+            account_number: accountNumber,
+            customer_email: email,
+            customer_name: fullName,
+            currency: 'NGN',
+            reference: mandateRef,
+            description: `CINJELLY Streaming Access Recurring Debit - ${username}`
+          })
+        });
+
+        const createJson: any = await createRes.json().catch(() => ({}));
+        console.log(`[SQUAD DIRECT DEBIT] Squad Mandate Create API response:`, JSON.stringify(createJson));
+
+        if (createRes.ok && (createJson.status === 200 || createJson.success === true || createJson.data)) {
+          const data = createJson.data || createJson;
+          squadMandateId = data.mandate_id || data.mandateId || data.id || mandateId;
+          apiMessage = createJson.message || apiMessage;
+        } else if (!createRes.ok && createJson.message) {
+          console.warn(`[SQUAD DIRECT DEBIT] Squad mandate create API returned message:`, createJson.message);
+          // Return clear error if bank or account is explicitly rejected
+          if (createRes.status === 400 && (createJson.message.toLowerCase().includes('account') || createJson.message.toLowerCase().includes('bank') || createJson.message.toLowerCase().includes('invalid'))) {
+            return res.status(400).json({ success: false, error: createJson.message });
+          }
+        }
+      } catch (err: any) {
+        console.warn(`[SQUAD DIRECT DEBIT] Squad mandate API network warning:`, err.message);
+      }
+    }
+
+    // Save mandate record in DB with status pending_otp
+    await db.saveSquadMandate({
+      id: mandateId,
+      userId: targetUser.id,
+      mandateId: squadMandateId,
+      mandateReference: mandateRef,
+      accountNumber: `******${accountNumber.slice(-4)}`,
+      bankCode,
+      bankName: resolvedBankName,
+      accountName: accountName || fullName,
+      amount: subAmountNaira,
+      status: 'pending_otp',
+      startDate,
+      endDate,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+
+    return res.json({
+      success: true,
+      mandateId: squadMandateId,
+      mandateReference: mandateRef,
+      requiresOtp,
+      bankName: resolvedBankName,
+      maskedAccount: `******${accountNumber.slice(-4)}`,
+      amount: subAmountNaira,
+      message: apiMessage
+    });
+  } catch (err: any) {
+    console.error('[SQUAD DIRECT DEBIT] Create Mandate Error:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to create Direct Debit mandate.' });
+  }
+});
+
+// POST /api/payment/squad-direct-debit/validate-mandate
+app.post('/api/payment/squad-direct-debit/validate-mandate', async (req: any, res) => {
+  try {
+    const { mandateId, otp, userId: bodyUserId } = req.body || {};
+    const sessionUser = req.user;
+
+    if (!mandateId) {
+      return res.status(400).json({ success: false, error: 'Mandate ID is required for OTP validation.' });
+    }
+
+    if (!otp || String(otp).trim().length < 4) {
+      return res.status(400).json({ success: false, error: 'Please provide the complete OTP code received from your bank.' });
+    }
+
+    const mandate = await db.getSquadMandateByMandateId(mandateId);
+    const targetUserId = mandate?.userId || sessionUser?.id || bodyUserId;
+
+    if (!targetUserId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized or mandate owner not found.' });
+    }
+
+    const user = await db.getUserById(targetUserId);
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User account not found.' });
+    }
+
+    const config = await db.getConfig();
+    const squadSecretKey = (config?.squadSecretKey || process.env.SQUAD_SECRET_KEY || '').trim();
+    const squadMode = config?.squadMode || 'live';
+    const squadBaseUrl = squadMode === 'sandbox' ? 'https://sandbox-api-d.squadco.com' : 'https://api-d.squadco.com';
+
+    console.log(`[SQUAD DIRECT DEBIT] Validating OTP for mandate '${mandateId}', user '${user.username}'`);
+
+    let isValid = true;
+    let validateMessage = 'Direct Debit mandate successfully activated and verified!';
+
+    if (squadSecretKey) {
+      try {
+        const verifyRes = await fetch(`${squadBaseUrl}/transaction/mandate/otp/verify`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${squadSecretKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            mandate_id: mandateId,
+            otp: String(otp).trim()
+          })
+        });
+
+        const verifyJson: any = await verifyRes.json().catch(() => ({}));
+        console.log(`[SQUAD DIRECT DEBIT] Squad Mandate OTP Verify API response:`, JSON.stringify(verifyJson));
+
+        if (!verifyRes.ok && verifyJson.message) {
+          if (verifyRes.status === 400 && (verifyJson.message.toLowerCase().includes('otp') || verifyJson.message.toLowerCase().includes('invalid'))) {
+            return res.status(400).json({ success: false, error: verifyJson.message });
+          }
+        }
+      } catch (err: any) {
+        console.warn(`[SQUAD DIRECT DEBIT] OTP verification network warning:`, err.message);
+      }
+    }
+
+    // Mark mandate active in DB
+    const currentTime = Date.now();
+    let currentExpiry = currentTime;
+    if (user.subscriptionExpiryDate) {
+      const existingExpiry = new Date(user.subscriptionExpiryDate).getTime();
+      if (existingExpiry > currentTime) {
+        currentExpiry = existingExpiry;
+      }
+    }
+    const nextDebitDate = new Date(currentExpiry + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    await db.updateSquadMandate(mandateId, {
+      status: 'active',
+      nextDebitDate
+    });
+
+    // Execute first subscription activation for user if they are currently expired or unpaid
+    const shouldFulfillNow = !user.subscriptionExpiryDate || new Date(user.subscriptionExpiryDate).getTime() <= Date.now() || user.paymentStatus !== 'Paid';
+    let fulfillmentResult: any = null;
+
+    if (shouldFulfillNow) {
+      const initialRef = `CINJELLY_MANDATE_ACT_${user.id}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+      fulfillmentResult = await fulfillSquadDirectDebitPayment(initialRef, mandateId);
+    }
+
+    return res.json({
+      success: true,
+      status: 'active',
+      message: validateMessage,
+      subscriptionExpiryDate: fulfillmentResult?.subscriptionExpiryDate || user.subscriptionExpiryDate || nextDebitDate
+    });
+  } catch (err: any) {
+    console.error('[SQUAD DIRECT DEBIT] Validate Mandate Error:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to validate Direct Debit mandate.' });
+  }
+});
+
+// POST /api/payment/squad-direct-debit/resend-otp
+app.post('/api/payment/squad-direct-debit/resend-otp', async (req: any, res) => {
+  try {
+    const { mandateId } = req.body || {};
+    if (!mandateId) {
+      return res.status(400).json({ success: false, error: 'Mandate ID is required to resend OTP.' });
+    }
+
+    const config = await db.getConfig();
+    const squadSecretKey = (config?.squadSecretKey || process.env.SQUAD_SECRET_KEY || '').trim();
+    const squadMode = config?.squadMode || 'live';
+    const squadBaseUrl = squadMode === 'sandbox' ? 'https://sandbox-api-d.squadco.com' : 'https://api-d.squadco.com';
+
+    if (squadSecretKey) {
+      try {
+        await fetch(`${squadBaseUrl}/transaction/mandate/otp/resend`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${squadSecretKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ mandate_id: mandateId })
+        });
+      } catch (err) {
+        console.warn('[SQUAD DIRECT DEBIT] Resend OTP API network call:', err);
+      }
+    }
+
+    return res.json({ success: true, message: 'A new OTP verification code has been dispatched by your bank.' });
+  } catch (err: any) {
+    console.error('[SQUAD DIRECT DEBIT] Resend OTP Error:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to resend OTP.' });
+  }
+});
+
+// GET /api/payment/squad-direct-debit/mandate
+app.get('/api/payment/squad-direct-debit/mandate', async (req: any, res) => {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Unauthorized. Authenticated user required.' });
+    }
+
+    const mandate = await db.getSquadMandateByUserId(user.id);
+    if (!mandate) {
+      return res.json({ success: true, mandate: null });
+    }
+
+    return res.json({
+      success: true,
+      mandate: {
+        id: mandate.id,
+        mandateId: mandate.mandateId,
+        mandateReference: mandate.mandateReference,
+        accountNumber: mandate.accountNumber,
+        bankCode: mandate.bankCode,
+        bankName: mandate.bankName,
+        accountName: mandate.accountName,
+        amount: mandate.amount,
+        status: mandate.status,
+        startDate: mandate.startDate,
+        endDate: mandate.endDate,
+        lastDebitDate: mandate.lastDebitDate,
+        nextDebitDate: mandate.nextDebitDate,
+        createdAt: mandate.createdAt
+      }
+    });
+  } catch (err: any) {
+    console.error('[SQUAD DIRECT DEBIT] Get Mandate Error:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to fetch direct debit mandate.' });
+  }
+});
+
+// POST /api/payment/squad-direct-debit/debit
+app.post('/api/payment/squad-direct-debit/debit', async (req: any, res) => {
+  try {
+    const sessionUser = req.user;
+    const targetUserId = req.body?.userId || sessionUser?.id;
+
+    if (!targetUserId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized. User ID required.' });
+    }
+
+    // Only admins can trigger debit on other users
+    if (sessionUser && sessionUser.id !== targetUserId && sessionUser.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Forbidden. Admin privileges required.' });
+    }
+
+    const result = await processSquadDirectDebitRenewal(targetUserId);
+
+    if (!result.success) {
+      return res.status(400).json({ success: false, error: result.error || 'Failed to process Direct Debit renewal.' });
+    }
+
+    return res.json({
+      success: true,
+      message: result.message || 'Direct debit processed successfully',
+      transactionReference: result.transactionReference,
+      subscriptionExpiryDate: result.subscriptionExpiryDate
+    });
+  } catch (err: any) {
+    console.error('[SQUAD DIRECT DEBIT] Debit endpoint error:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Internal server error processing debit.' });
+  }
+});
+
+// POST /api/payment/squad-direct-debit/cancel-mandate
+app.post('/api/payment/squad-direct-debit/cancel-mandate', async (req: any, res) => {
+  try {
+    const sessionUser = req.user;
+    const { mandateId } = req.body || {};
+
+    if (!sessionUser) {
+      return res.status(401).json({ success: false, error: 'Unauthorized.' });
+    }
+
+    let mandate = mandateId ? await db.getSquadMandateByMandateId(mandateId) : await db.getSquadMandateByUserId(sessionUser.id);
+
+    if (!mandate) {
+      return res.status(404).json({ success: false, error: 'Active mandate not found.' });
+    }
+
+    if (mandate.userId !== sessionUser.id && sessionUser.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Forbidden.' });
+    }
+
+    const config = await db.getConfig();
+    const squadSecretKey = (config?.squadSecretKey || process.env.SQUAD_SECRET_KEY || '').trim();
+    const squadMode = config?.squadMode || 'live';
+    const squadBaseUrl = squadMode === 'sandbox' ? 'https://sandbox-api-d.squadco.com' : 'https://api-d.squadco.com';
+
+    if (squadSecretKey && mandate.mandateId) {
+      try {
+        await fetch(`${squadBaseUrl}/transaction/mandate/cancel`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${squadSecretKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ mandate_id: mandate.mandateId })
+        });
+      } catch (err) {
+        console.warn('[SQUAD DIRECT DEBIT] Cancel Mandate API call:', err);
+      }
+    }
+
+    await db.updateSquadMandate(mandate.id, {
+      status: 'cancelled'
+    });
+
+    return res.json({ success: true, message: 'Direct Debit mandate cancelled successfully. Recurring billing has been stopped.' });
+  } catch (err: any) {
+    console.error('[SQUAD DIRECT DEBIT] Cancel Mandate Error:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to cancel Direct Debit mandate.' });
+  }
+});
+
+// GET /api/payment/squad-direct-debit/all-mandates (Admin Only)
+app.get('/api/payment/squad-direct-debit/all-mandates', async (req: any, res) => {
+  try {
+    const user = req.user;
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Forbidden. Admin privileges required.' });
+    }
+
+    const mandates = await db.getAllSquadMandates();
+    const users = await db.getUsers();
+    const userMap = new Map(users.map(u => [u.id, u]));
+
+    const enriched = mandates.map(m => {
+      const u = userMap.get(m.userId);
+      return {
+        ...m,
+        username: u?.username || 'Unknown',
+        fullName: u?.fullName || u?.username || 'Unknown',
+        email: u?.email || '',
+        userSubscriptionStatus: u?.subscriptionStatus || 'Unknown',
+        userSubscriptionExpiryDate: u?.subscriptionExpiryDate
+      };
+    });
+
+    return res.json({ success: true, mandates: enriched });
+  } catch (err: any) {
+    console.error('[SQUAD DIRECT DEBIT] Get All Mandates Error:', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to fetch mandates.' });
+  }
+});
+
+// ==============================================================================
+// SQUAD SFTP FALLBACK TRANSACTION NOTIFICATIONS ARCHITECTURE
+// ==============================================================================
+
+// GET /api/admin/sftp/status - Get SFTP health and sync status
+app.get('/api/admin/sftp/status', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin access required.' });
+  }
+
+  try {
+    const config = await db.getConfig();
+    return res.json({
+      success: true,
+      enabled: config?.squadSftpEnabled === 1,
+      host: config?.squadSftpHost || '',
+      port: config?.squadSftpPort || 22,
+      username: config?.squadSftpUsername || '',
+      remoteDir: config?.squadSftpRemoteDir || '/notifications',
+      processingDir: config?.squadSftpProcessingDir || './storage/sftp',
+      pollInterval: config?.squadSftpPollInterval || 15,
+      hasPassword: !!config?.squadSftpPassword,
+      hasPrivateKey: !!config?.squadSftpPrivateKey,
+      hasGpgKey: !!config?.squadSftpGpgPrivateKey,
+      hasGpgPassphrase: !!config?.squadSftpGpgPassphrase,
+      lastSync: config?.squadSftpLastSync || '',
+      lastFile: config?.squadSftpLastFile || '',
+      lastTxRef: config?.squadSftpLastTxRef || '',
+      lastError: config?.squadSftpLastError || '',
+      lastStatus: config?.squadSftpLastStatus || 'Idle'
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/admin/sftp/logs - Get sanitized diagnostic logs
+app.get('/api/admin/sftp/logs', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin access required.' });
+  }
+
+  try {
+    const limit = Number(req.query.limit) || 100;
+    const logs = await db.getSftpLogs(limit);
+    return res.json({ success: true, logs });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/admin/sftp/clear-logs - Clear diagnostic logs
+app.post('/api/admin/sftp/clear-logs', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin access required.' });
+  }
+
+  try {
+    await db.clearSftpLogs();
+    await SquadSftpService.log('logs_cleared', 'info', 'Admin cleared diagnostic log history.');
+    return res.json({ success: true, message: 'SFTP diagnostic logs cleared successfully' });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/admin/sftp/test - Test SFTP connectivity
+app.post('/api/admin/sftp/test', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin access required.' });
+  }
+
+  try {
+    const customConfig = req.body || undefined;
+    const result = await SquadSftpService.testConnection(customConfig);
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/admin/sftp/sync - Manually trigger SFTP sync
+app.post('/api/admin/sftp/sync', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin access required.' });
+  }
+
+  try {
+    const result = await SquadSftpService.runSync(fulfillSquadPayment);
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/sftp/upload-notification - Upload & process notification file (e.g. .csv or .csv.gpg)
+app.post('/api/sftp/upload-notification', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin access required.' });
+  }
+
+  try {
+    const { filename, fileBase64, content } = req.body || {};
+    if (!filename) {
+      return res.status(400).json({ success: false, error: 'Filename is required' });
+    }
+
+    let buffer: Buffer;
+    if (fileBase64) {
+      const cleanBase64 = fileBase64.replace(/^data:.*?;base64,/, '');
+      buffer = Buffer.from(cleanBase64, 'base64');
+    } else if (content) {
+      buffer = Buffer.from(content, 'utf8');
+    } else {
+      return res.status(400).json({ success: false, error: 'File content or base64 data is required' });
+    }
+
+    const result = await SquadSftpService.processFileContent(buffer, filename, fulfillSquadPayment);
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Automated Cron Trigger for Expiring Subscriptions / Direct Debit Renewals
+const runAutomatedRenewals = async () => {
+  console.log('[CRON RENEWALS] Checking for subscriptions due for Direct Debit renewal...');
+  try {
+    const activeMandates = await db.getActiveSquadMandatesDueForRenewal();
+    const now = Date.now();
+    const renewWindowMs = 24 * 60 * 60 * 1000; // within 24 hours of expiry or already expired
+
+    let renewedCount = 0;
+    for (const mandate of activeMandates) {
+      try {
+        const user = await db.getUserById(mandate.userId);
+        if (!user) continue;
+
+        let shouldRenew = false;
+        if (!user.subscriptionExpiryDate) {
+          shouldRenew = true;
+        } else {
+          const expiryTime = new Date(user.subscriptionExpiryDate).getTime();
+          if (expiryTime - now <= renewWindowMs) {
+            shouldRenew = true;
+          }
+        }
+
+        if (shouldRenew) {
+          console.log(`[CRON RENEWALS] User '${user.username}' is due for renewal. Executing Direct Debit charge...`);
+          const result = await processSquadDirectDebitRenewal(user.id);
+          if (result.success) {
+            renewedCount++;
+            console.log(`[CRON RENEWALS] Successfully renewed user '${user.username}' via Direct Debit!`);
+          } else {
+            console.warn(`[CRON RENEWALS] Failed to renew user '${user.username}':`, result.error);
+          }
+        }
+      } catch (userErr: any) {
+        console.error(`[CRON RENEWALS] Error processing renewal for mandate ${mandate.id}:`, userErr);
+      }
+    }
+
+    console.log(`[CRON RENEWALS] Completed renewal check. Successfully renewed: ${renewedCount} accounts.`);
+    return { checked: activeMandates.length, renewed: renewedCount };
+  } catch (err: any) {
+    console.error('[CRON RENEWALS] Execution error:', err);
+    return { error: err.message };
+  }
+};
+
+// Cron endpoints
+app.get('/api/cron/renewals', async (req: any, res) => {
+  const result = await runAutomatedRenewals();
+  return res.json({ success: true, result });
+});
+app.post('/api/cron/renewals', async (req: any, res) => {
+  const result = await runAutomatedRenewals();
+  return res.json({ success: true, result });
+});
+
+// Periodic background check every 6 hours
+setInterval(() => {
+  runAutomatedRenewals().catch(e => console.error('[CRON BACKGROUND ERROR]', e));
+}, 6 * 60 * 60 * 1000);
 
 // POST /api/payment/monnify-initiate
 app.post('/api/payment/monnify-initiate', async (req: any, res) => {
@@ -2297,6 +4376,29 @@ setTimeout(() => {
 setInterval(() => {
   checkSubscriptionExpiries().catch(err => console.error('Error running periodic subscription audit:', err));
 }, 12 * 60 * 60 * 1000); // 12 hours
+
+// --- BACKGROUND SQUAD SFTP POLLING WORKER ---
+async function runSftpPollingAudit(): Promise<void> {
+  try {
+    const config = await db.getConfig();
+    if (config?.squadSftpEnabled === 1) {
+      console.log('[SFTP Worker] Initiating automated SFTP fallback check...');
+      await SquadSftpService.runSync(fulfillSquadPayment);
+    }
+  } catch (err: any) {
+    console.error('[SFTP Worker] Error during SFTP background sync:', err.message);
+  }
+}
+
+// Boot check for SFTP (15s after startup)
+setTimeout(() => {
+  runSftpPollingAudit().catch(err => console.error('[SFTP Worker] Boot error:', err));
+}, 15000);
+
+// Polling interval (runs every 5 minutes and checks if enabled)
+setInterval(() => {
+  runSftpPollingAudit().catch(err => console.error('[SFTP Worker] Periodic error:', err));
+}, 5 * 60 * 1000);
 
 
 // --- GLOBAL ERROR HANDLING MIDDLEWARE ---

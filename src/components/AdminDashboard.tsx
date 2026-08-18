@@ -4,9 +4,11 @@ import {
   ArrowLeft, Loader2, Ban, PlusCircle, Activity, UserCheck, Tv,
   TrendingUp, DollarSign, Percent, Settings, Award, ShieldAlert, Edit, Check, Calendar, ArrowRight,
   Trash2, ChevronLeft, ChevronRight, UserPlus, Info, CalendarDays, MessageSquare, Phone,
-  CreditCard, X, Smartphone, Download, Mail, Send, Code, FileText, Lock, Eye, RotateCcw, Layout, Maximize2, Monitor, HelpCircle, Copy
+  CreditCard, X, Smartphone, Download, Mail, Send, Code, FileText, Lock, Eye, RotateCcw, Layout, Maximize2, Monitor, HelpCircle, Copy, ExternalLink, Landmark,
+  Server, Key, FileSpreadsheet, UploadCloud, FolderSync, Shield, Terminal, CheckSquare, Globe, EyeOff, HardDrive, Link
 } from 'lucide-react';
-import { User } from '../types';
+import { User, SquadSftpLog, SquadSftpStatus } from '../types';
+import { apiFetch } from '../lib/api';
 import { 
   DEFAULT_VERIFICATION_SUBJECT, 
   DEFAULT_VERIFICATION_TEMPLATE,
@@ -76,7 +78,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
     setTestingTemplate(type);
     try {
       const isVerif = type === 'verif';
-      const response = await fetch('/api/admin/smtp-test', {
+      const response = await apiFetch('/api/admin/smtp-test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -200,7 +202,55 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   };
 
   // Tab navigation state
-  const [activeTab, setActiveTab] = useState<'subscriptions' | 'payment_settings' | 'support_config' | 'mobile_app' | 'affiliates' | 'commissions' | 'reports' | 'payments' | 'affiliates_dashboard' | 'media_requests' | 'notifications' | 'smtp_email'>('subscriptions');
+  const [activeTab, setActiveTab] = useState<'subscriptions' | 'payment_settings' | 'support_config' | 'mobile_app' | 'affiliates' | 'commissions' | 'reports' | 'payments' | 'affiliates_dashboard' | 'media_requests' | 'notifications' | 'smtp_email' | 'cpanel_deploy'>('subscriptions');
+
+  // Production cPanel FTP Credentials & Deployment state
+  const [showFtpPassword, setShowFtpPassword] = useState(false);
+  const [copiedFtpHost, setCopiedFtpHost] = useState(false);
+  const [copiedFtpPort, setCopiedFtpPort] = useState(false);
+  const [copiedFtpUser, setCopiedFtpUser] = useState(false);
+  const [copiedFtpPass, setCopiedFtpPass] = useState(false);
+  const [copiedFtpTarget, setCopiedFtpTarget] = useState(false);
+  const [copiedFtpUrl, setCopiedFtpUrl] = useState(false);
+  const [copiedFtpAll, setCopiedFtpAll] = useState(false);
+  const [copiedDeployCmd, setCopiedDeployCmd] = useState(false);
+
+  const handleCopyFtpField = (text: string, fieldType: 'host' | 'port' | 'user' | 'pass' | 'target' | 'url' | 'all' | 'cmd') => {
+    navigator.clipboard.writeText(text);
+    if (fieldType === 'host') {
+      setCopiedFtpHost(true);
+      setTimeout(() => setCopiedFtpHost(false), 2000);
+      showToast('FTP Host (ftp.zerolord.com) copied to clipboard!', 'success');
+    } else if (fieldType === 'port') {
+      setCopiedFtpPort(true);
+      setTimeout(() => setCopiedFtpPort(false), 2000);
+      showToast('FTP Port (21) copied to clipboard!', 'success');
+    } else if (fieldType === 'user') {
+      setCopiedFtpUser(true);
+      setTimeout(() => setCopiedFtpUser(false), 2000);
+      showToast('FTP Username (cinjelly@zerolord.com) copied to clipboard!', 'success');
+    } else if (fieldType === 'pass') {
+      setCopiedFtpPass(true);
+      setTimeout(() => setCopiedFtpPass(false), 2000);
+      showToast('FTP Password copied to clipboard!', 'success');
+    } else if (fieldType === 'target') {
+      setCopiedFtpTarget(true);
+      setTimeout(() => setCopiedFtpTarget(false), 2000);
+      showToast('Target remote directories copied to clipboard!', 'success');
+    } else if (fieldType === 'url') {
+      setCopiedFtpUrl(true);
+      setTimeout(() => setCopiedFtpUrl(false), 2000);
+      showToast('Full FTP Connection URL copied to clipboard!', 'success');
+    } else if (fieldType === 'all') {
+      setCopiedFtpAll(true);
+      setTimeout(() => setCopiedFtpAll(false), 2000);
+      showToast('Complete cPanel FTP credentials copied to clipboard!', 'success');
+    } else if (fieldType === 'cmd') {
+      setCopiedDeployCmd(true);
+      setTimeout(() => setCopiedDeployCmd(false), 2000);
+      showToast('Build & Deploy Command copied to clipboard!', 'success');
+    }
+  };
 
   // Affiliate Dashboard tab state
   const [affiliates, setAffiliates] = useState<any[]>([]);
@@ -224,6 +274,289 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   const [loadingSentNotifications, setLoadingSentNotifications] = useState(false);
 
   const [copiedWebhook, setCopiedWebhook] = useState(false);
+  const [copiedPaystackCallback, setCopiedPaystackCallback] = useState(false);
+  const [copiedPaystackWebhook, setCopiedPaystackWebhook] = useState(false);
+  const [copiedSquadCallback, setCopiedSquadCallback] = useState(false);
+  const [copiedSquadWebhook, setCopiedSquadWebhook] = useState(false);
+
+  // Paystack & Squad Endpoint Diagnostics State
+  const [diagnosticLoading, setDiagnosticLoading] = useState(false);
+  const [diagnosticResult, setDiagnosticResult] = useState<{ webhook: boolean; callback: boolean; details?: string } | null>(null);
+
+  const [squadDiagnosticLoading, setSquadDiagnosticLoading] = useState(false);
+  const [squadDiagnosticResult, setSquadDiagnosticResult] = useState<{ webhook: boolean; callback: boolean; details?: string } | null>(null);
+
+  const testSquadEndpoints = async () => {
+    setSquadDiagnosticLoading(true);
+    setSquadDiagnosticResult(null);
+    try {
+      const webhookRes = await apiFetch('/api/payment/squad-direct-debit/webhook', {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' }
+      });
+      const callbackRes = await apiFetch('/api/payment/squad-direct-debit/redirect', {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' }
+      });
+
+      setSquadDiagnosticResult({
+        webhook: webhookRes.ok,
+        callback: callbackRes.ok,
+        details: `Webhook (${webhookRes.status} OK) | Redirect (${callbackRes.status} OK)`
+      });
+      showToast('Squad diagnostic test complete! Endpoints are online.', 'success');
+    } catch (err: any) {
+      setSquadDiagnosticResult({
+        webhook: false,
+        callback: false,
+        details: err.message || 'Network error reaching endpoints'
+      });
+      showToast('Diagnostic check encountered a network error', 'error');
+    } finally {
+      setSquadDiagnosticLoading(false);
+    }
+  };
+
+  // Squad Direct Debit Mandates State & Handlers
+  const [mandates, setMandates] = useState<any[]>([]);
+  const [loadingMandates, setLoadingMandates] = useState(false);
+  const [debitingUserId, setDebitingUserId] = useState<string | null>(null);
+  const [cancellingMandateId, setCancellingMandateId] = useState<string | null>(null);
+
+  const fetchMandates = async () => {
+    setLoadingMandates(true);
+    try {
+      const res = await apiFetch('/api/payment/squad-direct-debit/all-mandates');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.mandates)) {
+          setMandates(data.mandates);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching direct debit mandates:', err);
+    } finally {
+      setLoadingMandates(false);
+    }
+  };
+
+  const handleAdminTriggerDebit = async (userId: string, username: string) => {
+    const confirmDebit = window.confirm(`Trigger automated renewal Direct Debit charge (₦600) now for user @${username}?`);
+    if (!confirmDebit) return;
+
+    setDebitingUserId(userId);
+    try {
+      const res = await apiFetch('/api/payment/squad-direct-debit/debit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast(`Direct debit charged successfully for @${username}! 30 days added.`, 'success');
+        fetchMandates();
+        fetchUsers();
+      } else {
+        showToast(data.error || 'Failed to trigger direct debit charge', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Network error processing direct debit', 'error');
+    } finally {
+      setDebitingUserId(null);
+    }
+  };
+
+  const handleAdminCancelMandate = async (mandateId: string, username: string) => {
+    const confirmCancel = window.confirm(`Cancel active Direct Debit mandate for user @${username}?`);
+    if (!confirmCancel) return;
+
+    setCancellingMandateId(mandateId);
+    try {
+      const res = await apiFetch('/api/payment/squad-direct-debit/cancel-mandate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mandateId })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast(`Mandate cancelled successfully for @${username}`, 'success');
+        fetchMandates();
+      } else {
+        showToast(data.error || 'Failed to cancel mandate', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Network error cancelling mandate', 'error');
+    } finally {
+      setCancellingMandateId(null);
+    }
+  };
+
+  // Squad SFTP Fallback Handlers
+  const fetchSftpStatus = async () => {
+    try {
+      const res = await apiFetch('/api/admin/sftp/status');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.status) {
+          setSftpStatus(data.status);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching SFTP status:', err);
+    }
+  };
+
+  const fetchSftpLogs = async () => {
+    setSftpLoadingLogs(true);
+    try {
+      const res = await apiFetch('/api/admin/sftp/logs?limit=50');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.logs)) {
+          setSftpLogs(data.logs);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching SFTP logs:', err);
+    } finally {
+      setSftpLoadingLogs(false);
+    }
+  };
+
+  const handleClearSftpLogs = async () => {
+    if (!window.confirm('Are you sure you want to clear all Squad SFTP audit logs?')) return;
+    try {
+      const res = await apiFetch('/api/admin/sftp/clear-logs', { method: 'POST' });
+      if (res.ok) {
+        setSftpLogs([]);
+        showToast('SFTP audit logs cleared successfully!', 'success');
+      } else {
+        showToast('Failed to clear logs', 'error');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Error clearing logs', 'error');
+    }
+  };
+
+  const handleTestSftpConnection = async () => {
+    setSftpTesting(true);
+    setSftpTestResult(null);
+    try {
+      const res = await apiFetch('/api/admin/sftp/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          host: squadSftpHost,
+          port: Number(squadSftpPort),
+          username: squadSftpUsername,
+          password: squadSftpPassword || undefined,
+          privateKey: squadSftpPrivateKey || undefined,
+          remoteDir: squadSftpRemoteDir,
+          gpgPrivateKey: squadSftpGpgPrivateKey || undefined,
+          gpgPassphrase: squadSftpGpgPassphrase || undefined
+        })
+      });
+      const data = await res.json();
+      setSftpTestResult(data);
+      if (res.ok && data.success) {
+        showToast('SFTP Connection & GPG tests PASSED successfully!', 'success');
+      } else {
+        showToast(data.message || data.error || 'SFTP Connection test failed', 'error');
+      }
+      fetchSftpLogs();
+      fetchSftpStatus();
+    } catch (err: any) {
+      setSftpTestResult({ success: false, message: err.message || 'Network error during SFTP test' });
+      showToast(err.message || 'Network error testing SFTP', 'error');
+    } finally {
+      setSftpTesting(false);
+    }
+  };
+
+  const handleTriggerSftpSync = async () => {
+    setSftpSyncing(true);
+    try {
+      const res = await apiFetch('/api/admin/sftp/sync', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast(`SFTP Sync finished: ${data.message}`, 'success');
+      } else {
+        showToast(data.message || data.error || 'SFTP Sync returned warnings/errors', 'error');
+      }
+      fetchSftpLogs();
+      fetchSftpStatus();
+      fetchUsers();
+    } catch (err: any) {
+      showToast(err.message || 'Error triggering SFTP sync', 'error');
+    } finally {
+      setSftpSyncing(false);
+    }
+  };
+
+  const handleUploadSftpNotificationFile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sftpManualFile) {
+      showToast('Please select a .csv or .csv.gpg file to upload', 'error');
+      return;
+    }
+    setSftpManualUploading(true);
+    setSftpManualResult(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', sftpManualFile);
+      const res = await apiFetch('/api/sftp/upload-notification', {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      setSftpManualResult(data);
+      if (res.ok && data.success) {
+        showToast(`File processed! Found ${data.summary?.totalRecords || 0} records, ${data.summary?.verifiedSuccessful || 0} verified & activated.`, 'success');
+        setSftpManualFile(null);
+      } else {
+        showToast(data.message || data.error || 'Failed to process uploaded file', 'error');
+      }
+      fetchSftpLogs();
+      fetchSftpStatus();
+      fetchUsers();
+    } catch (err: any) {
+      setSftpManualResult({ success: false, message: err.message || 'Network error uploading file' });
+      showToast(err.message || 'Network error uploading file', 'error');
+    } finally {
+      setSftpManualUploading(false);
+    }
+  };
+
+  const testPaystackEndpoints = async () => {
+    setDiagnosticLoading(true);
+    setDiagnosticResult(null);
+    try {
+      const webhookRes = await apiFetch('/api/payment/paystack-webhook', {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' }
+      });
+      const callbackRes = await apiFetch('/api/payment/paystack-callback', {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' }
+      });
+
+      setDiagnosticResult({
+        webhook: webhookRes.ok,
+        callback: callbackRes.ok,
+        details: `Webhook status: ${webhookRes.status} | Callback status: ${callbackRes.status}`
+      });
+      showToast('Paystack diagnostic test complete! Endpoints are online.', 'success');
+    } catch (err: any) {
+      setDiagnosticResult({
+        webhook: false,
+        callback: false,
+        details: err.message || 'Network error reaching endpoints'
+      });
+      showToast('Diagnostic check encountered a network error', 'error');
+    } finally {
+      setDiagnosticLoading(false);
+    }
+  };
 
   const getFullWebhookUrl = () => {
     let base = typeof window !== 'undefined' ? window.location.origin : '';
@@ -236,19 +569,91 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
     return `${base}/api/payment/monnify-webhook`;
   };
 
-  const handleCopyWebhook = () => {
-    const url = getFullWebhookUrl();
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(url);
-      setCopiedWebhook(true);
-      setTimeout(() => setCopiedWebhook(false), 2500);
+  const getPaystackBaseUrl = () => {
+    if (typeof window !== 'undefined' && window.location && window.location.origin && !window.location.origin.includes('localhost') && !window.location.origin.includes('127.0.0.1')) {
+      return window.location.origin.replace(/\/$/, '');
     }
+    if (serverUrl && serverUrl.startsWith('http') && !serverUrl.includes('localhost')) {
+      return serverUrl.replace(/\/$/, '');
+    }
+    return 'https://cinjelly.zerolord.com';
+  };
+
+  const getPaystackCallbackUrl = () => `${getPaystackBaseUrl()}/api/payment/paystack-callback`;
+  const getPaystackWebhookUrl = () => `${getPaystackBaseUrl()}/api/payment/paystack-webhook`;
+
+  const getSquadCallbackUrl = () => `${getPaystackBaseUrl()}/api/payment/squad-direct-debit/redirect`;
+  const getSquadRedirectUrl = () => `${getPaystackBaseUrl()}/api/payment/squad-direct-debit/redirect`;
+  const getSquadWebhookUrl = () => `${getPaystackBaseUrl()}/api/payment/squad-direct-debit/webhook`;
+
+  const copyTextToClipboard = async (text: string) => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (e) {}
+    try {
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-999999px';
+      textArea.style.top = '-999999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      const successful = document.execCommand('copy');
+      textArea.remove();
+      return successful;
+    } catch (err) {
+      return false;
+    }
+  };
+
+  const handleCopyWebhook = async () => {
+    const url = getFullWebhookUrl();
+    await copyTextToClipboard(url);
+    setCopiedWebhook(true);
+    showToast('Webhook URL copied to clipboard!', 'success');
+    setTimeout(() => setCopiedWebhook(false), 2500);
+  };
+
+  const handleCopyPaystackCallback = async () => {
+    const url = getPaystackCallbackUrl();
+    await copyTextToClipboard(url);
+    setCopiedPaystackCallback(true);
+    showToast('Paystack Callback URL copied to clipboard!', 'success');
+    setTimeout(() => setCopiedPaystackCallback(false), 2500);
+  };
+
+  const handleCopyPaystackWebhook = async () => {
+    const url = getPaystackWebhookUrl();
+    await copyTextToClipboard(url);
+    setCopiedPaystackWebhook(true);
+    showToast('Paystack Webhook URL copied to clipboard!', 'success');
+    setTimeout(() => setCopiedPaystackWebhook(false), 2500);
+  };
+
+  const handleCopySquadCallback = async () => {
+    const url = getSquadRedirectUrl();
+    await copyTextToClipboard(url);
+    setCopiedSquadCallback(true);
+    showToast('Squad Callback URL copied to clipboard!', 'success');
+    setTimeout(() => setCopiedSquadCallback(false), 2500);
+  };
+
+  const handleCopySquadWebhook = async () => {
+    const url = getSquadWebhookUrl();
+    await copyTextToClipboard(url);
+    setCopiedSquadWebhook(true);
+    showToast('Squad Webhook URL copied to clipboard!', 'success');
+    setTimeout(() => setCopiedSquadWebhook(false), 2500);
   };
 
   const fetchSentNotifications = async () => {
     setLoadingSentNotifications(true);
     try {
-      const res = await fetch('/api/admin/notifications/all');
+      const res = await apiFetch('/api/admin/notifications/all');
       if (res.ok) {
         const data = await res.json();
         setSentNotifications(data);
@@ -263,7 +668,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   const fetchAffiliates = async () => {
     setAffiliatesLoading(true);
     try {
-      const res = await fetch('/api/admin/affiliates');
+      const res = await apiFetch('/api/admin/affiliates');
       if (res.ok) {
         const data = await res.json();
         setAffiliates(data);
@@ -278,7 +683,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   const fetchMediaRequests = async () => {
     setRequestsLoading(true);
     try {
-      const res = await fetch('/api/media/requests');
+      const res = await apiFetch('/api/media/requests');
       if (res.ok) {
         const data = await res.json();
         setMediaRequests(data);
@@ -292,7 +697,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
   const handleUpdateRequestStatus = async (id: string, status: 'Approved' | 'Declined') => {
     try {
-      const res = await fetch(`/api/admin/media/requests/${id}`, {
+      const res = await apiFetch(`/api/admin/media/requests/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status })
@@ -329,7 +734,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
         reader.readAsDataURL(notifImageFile);
         const base64Data = await base64Promise;
 
-        const uploadRes = await fetch('/api/admin/notifications/upload', {
+        const uploadRes = await apiFetch('/api/admin/notifications/upload', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ base64Data, fileName: notifImageFile.name })
@@ -341,7 +746,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
         finalImageUrl = uploadData.url;
       }
 
-      const res = await fetch('/api/admin/notifications/broadcast', {
+      const res = await apiFetch('/api/admin/notifications/broadcast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -386,7 +791,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
     setError(null);
     setSuccess(null);
     try {
-      const response = await fetch('/api/admin/payments/verify', {
+      const response = await apiFetch('/api/admin/payments/verify', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -470,6 +875,50 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   const [monnifyMode, setMonnifyMode] = useState<'live' | 'test'>('live');
   const [subscriptionAmount, setSubscriptionAmount] = useState('600.00');
 
+  // Dedicated Paystack InlineJS Payment Gateway config states
+  const [paystackEnabled, setPaystackEnabled] = useState(false);
+  const [paystackPublicKey, setPaystackPublicKey] = useState('');
+  const [paystackSecretKey, setPaystackSecretKey] = useState('');
+  const [paystackMode, setPaystackMode] = useState<'live' | 'test'>('live');
+  const [showPaystackSecretKey, setShowPaystackSecretKey] = useState(false);
+
+  // Custom Payment Link / Paystack Button config states (Fallback / Alternative)
+  const [customPaymentEnabled, setCustomPaymentEnabled] = useState(false);
+  const [customPaymentBtnName, setCustomPaymentBtnName] = useState('Pay via Paystack');
+  const [customPaymentUrl, setCustomPaymentUrl] = useState('');
+  const [customPaymentTarget, setCustomPaymentTarget] = useState<'_blank' | '_self'>('_blank');
+
+  // Squad Payment Gateway config states
+  const [squadEnabled, setSquadEnabled] = useState(false);
+  const [squadSecretKey, setSquadSecretKey] = useState('');
+  const [squadApiKey, setSquadApiKey] = useState('');
+  const [squadMode, setSquadMode] = useState<'sandbox' | 'live'>('sandbox');
+
+  // Squad SFTP Fallback Gateway config states
+  const [squadSftpEnabled, setSquadSftpEnabled] = useState(false);
+  const [squadSftpHost, setSquadSftpHost] = useState('');
+  const [squadSftpPort, setSquadSftpPort] = useState(22);
+  const [squadSftpUsername, setSquadSftpUsername] = useState('');
+  const [squadSftpPassword, setSquadSftpPassword] = useState('');
+  const [squadSftpPrivateKey, setSquadSftpPrivateKey] = useState('');
+  const [squadSftpRemoteDir, setSquadSftpRemoteDir] = useState('/squad_notifications');
+  const [squadSftpProcessingDir, setSquadSftpProcessingDir] = useState('/squad_notifications/processed');
+  const [squadSftpGpgPrivateKey, setSquadSftpGpgPrivateKey] = useState('');
+  const [squadSftpGpgPassphrase, setSquadSftpGpgPassphrase] = useState('');
+  const [squadSftpPollInterval, setSquadSftpPollInterval] = useState(5);
+  const [sftpConfigFlags, setSftpConfigFlags] = useState<{ hasPassword?: boolean; hasPrivateKey?: boolean; hasGpgKey?: boolean; hasGpgPassphrase?: boolean }>({});
+
+  // SFTP status and audit logs state
+  const [sftpStatus, setSftpStatus] = useState<SquadSftpStatus | null>(null);
+  const [sftpLogs, setSftpLogs] = useState<SquadSftpLog[]>([]);
+  const [sftpLoadingLogs, setSftpLoadingLogs] = useState(false);
+  const [sftpTesting, setSftpTesting] = useState(false);
+  const [sftpSyncing, setSftpSyncing] = useState(false);
+  const [sftpTestResult, setSftpTestResult] = useState<{ success: boolean; message: string; details?: any } | null>(null);
+  const [sftpManualFile, setSftpManualFile] = useState<File | null>(null);
+  const [sftpManualUploading, setSftpManualUploading] = useState(false);
+  const [sftpManualResult, setSftpManualResult] = useState<{ success: boolean; message: string; summary?: any } | null>(null);
+
   // Chatbot & Contact config states
   const [chatbotInfo, setChatbotInfo] = useState('');
   const [chatbotInstructions, setChatbotInstructions] = useState('');
@@ -488,7 +937,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`/api/admin/users?search=${encodeURIComponent(searchQuery)}`);
+      const response = await apiFetch(`/api/admin/users?search=${encodeURIComponent(searchQuery)}`);
       
       const contentType = response.headers.get('content-type');
       if (!response.ok) {
@@ -520,7 +969,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
     setConfigLoading(true);
     setConfigError(null);
     try {
-      const response = await fetch('/api/admin/config');
+      const response = await apiFetch('/api/admin/config');
       if (response.ok) {
         const data = await response.json();
         setServerUrl(data.serverUrl || '');
@@ -567,6 +1016,39 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
         setMonnifySecretKey(data.monnifySecretKey || '');
         setMonnifyMode(data.monnifyMode || 'live');
         setSubscriptionAmount(data.subscriptionAmount ? String(data.subscriptionAmount) : '600.00');
+
+        // Paystack InlineJS settings
+        setPaystackEnabled(!!data.paystackEnabled);
+        setPaystackPublicKey(data.paystackPublicKey || '');
+        setPaystackSecretKey(data.paystackSecretKey || '');
+        setPaystackMode(data.paystackMode || 'live');
+
+        // Custom Payment / Paystack Button settings (Fallback / Alternative)
+        setCustomPaymentEnabled(!!data.customPaymentEnabled);
+        setCustomPaymentBtnName(data.customPaymentBtnName || 'Pay via Paystack');
+        setCustomPaymentUrl(data.customPaymentUrl || '');
+        setCustomPaymentTarget(data.customPaymentTarget === '_self' ? '_self' : '_blank');
+
+        // Squad settings
+        setSquadEnabled(!!data.squadEnabled);
+        setSquadSecretKey(data.squadSecretKey || '');
+        setSquadApiKey(data.squadApiKey || data.squadPublicKey || '');
+        setSquadMode(data.squadMode || 'sandbox');
+
+        // Squad SFTP settings
+        setSquadSftpEnabled(!!data.squadSftpEnabled);
+        setSquadSftpHost(data.squadSftpHost || '');
+        setSquadSftpPort(data.squadSftpPort ? Number(data.squadSftpPort) : 22);
+        setSquadSftpUsername(data.squadSftpUsername || '');
+        setSquadSftpRemoteDir(data.squadSftpRemoteDir || '/squad_notifications');
+        setSquadSftpProcessingDir(data.squadSftpProcessingDir || '/squad_notifications/processed');
+        setSquadSftpPollInterval(data.squadSftpPollInterval ? Number(data.squadSftpPollInterval) : 5);
+        setSftpConfigFlags({
+          hasPassword: !!data.hasSftpPassword,
+          hasPrivateKey: !!data.hasSftpPrivateKey,
+          hasGpgKey: !!data.hasSftpGpgKey,
+          hasGpgPassphrase: !!data.hasSftpGpgPassphrase
+        });
       }
     } catch (err: any) {
       setConfigError('Could not load active Jellyfin server settings.');
@@ -578,7 +1060,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   const fetchCommissions = async () => {
     setCommissionsLoading(true);
     try {
-      const response = await fetch('/api/admin/commissions');
+      const response = await apiFetch('/api/admin/commissions');
       if (response.ok) {
         const data = await response.json();
         setCommissions(data);
@@ -604,6 +1086,10 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       fetchMediaRequests();
     } else if (activeTab === 'notifications') {
       fetchSentNotifications();
+    } else if (activeTab === 'payment_settings') {
+      fetchMandates();
+      fetchSftpStatus();
+      fetchSftpLogs();
     }
   }, [activeTab]);
 
@@ -613,7 +1099,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
     setConfigSuccess(null);
     setConfigSaving(true);
     try {
-      const response = await fetch('/api/admin/config', {
+      const response = await apiFetch('/api/admin/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -654,7 +1140,31 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
           monnifyContractCode,
           monnifySecretKey,
           monnifyMode,
-          subscriptionAmount
+          subscriptionAmount,
+          paystackEnabled,
+          paystackPublicKey,
+          paystackSecretKey: paystackSecretKey || undefined,
+          paystackMode,
+          customPaymentEnabled,
+          customPaymentBtnName,
+          customPaymentUrl,
+          customPaymentTarget,
+          squadEnabled,
+          squadSecretKey,
+          squadApiKey,
+          squadPublicKey: squadApiKey,
+          squadMode,
+          squadSftpEnabled,
+          squadSftpHost,
+          squadSftpPort: Number(squadSftpPort) || 22,
+          squadSftpUsername,
+          squadSftpPassword: squadSftpPassword || undefined,
+          squadSftpPrivateKey: squadSftpPrivateKey || undefined,
+          squadSftpRemoteDir,
+          squadSftpProcessingDir,
+          squadSftpGpgPrivateKey: squadSftpGpgPrivateKey || undefined,
+          squadSftpGpgPassphrase: squadSftpGpgPassphrase || undefined,
+          squadSftpPollInterval: Number(squadSftpPollInterval) || 5
         })
       });
       const data = await response.json();
@@ -664,6 +1174,8 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       setConfigSuccess('System settings, SMTP & Email Verification options saved successfully!');
       showToast('Configuration settings saved successfully!', 'success');
       fetchUsers();
+      fetchConfig();
+      fetchSftpStatus();
     } catch (err: any) {
       setConfigError(err.message || 'Verification failed.');
       showToast(err.message || 'Failed to save configuration.', 'error');
@@ -681,7 +1193,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
     setSmtpTesting(true);
     try {
-      const response = await fetch('/api/admin/smtp-test', {
+      const response = await apiFetch('/api/admin/smtp-test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -714,7 +1226,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
     setError(null);
     setSuccess(null);
     try {
-      const response = await fetch(`/api/admin/users/${userId}/subscription`, {
+      const response = await apiFetch(`/api/admin/users/${userId}/subscription`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action })
@@ -739,7 +1251,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
     setError(null);
     setSuccess(null);
     try {
-      const response = await fetch('/api/admin/run-expiry-check', { method: 'POST' });
+      const response = await apiFetch('/api/admin/run-expiry-check', { method: 'POST' });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Audit check failed');
 
@@ -762,7 +1274,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
     setError(null);
     setSuccess(null);
     try {
-      const response = await fetch(`/api/admin/users/${editingAffiliateUser.id}/affiliate`, {
+      const response = await apiFetch(`/api/admin/users/${editingAffiliateUser.id}/affiliate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -790,7 +1302,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
     setError(null);
     setSuccess(null);
     try {
-      const response = await fetch(`/api/admin/commissions/${id}/status`, {
+      const response = await apiFetch(`/api/admin/commissions/${id}/status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus })
@@ -860,7 +1372,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
     setCrudLoading(true);
     setCrudError(null);
     try {
-      const response = await fetch('/api/admin/users', {
+      const response = await apiFetch('/api/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -903,7 +1415,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
     setCrudLoading(true);
     setCrudError(null);
     try {
-      const response = await fetch(`/api/admin/users/${targetUser.id}`, {
+      const response = await apiFetch(`/api/admin/users/${targetUser.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -945,7 +1457,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
     setCrudLoading(true);
     setCrudError(null);
     try {
-      const response = await fetch(`/api/admin/users/${targetUser.id}`, {
+      const response = await apiFetch(`/api/admin/users/${targetUser.id}`, {
         method: 'DELETE'
       });
 
@@ -1226,6 +1738,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'smtp_email' ? 'border-purple-500 text-purple-400 bg-purple-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
           >
             <Mail className="w-4 h-4" /> SMTP & Verification
+          </button>
+          <button
+            onClick={() => setActiveTab('cpanel_deploy')}
+            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'cpanel_deploy' ? 'border-amber-500 text-amber-400 bg-amber-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
+          >
+            <Server className="w-4 h-4 text-amber-400" /> Production FTP & Deploy
           </button>
         </div>        {/* TAB 1: SUBSCRIPTION CONTROL */}
         {activeTab === 'subscriptions' && (
@@ -1890,6 +2408,1174 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   <Check className="w-3.5 h-3.5" /> Save Banking Info
                 </button>
               </div>
+            </div>
+
+            {/* Paystack Payment Link / External Checkout Page Configuration */}
+            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-[3px] bg-emerald-500"></div>
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
+                    <ExternalLink className="w-4.5 h-4.5 text-emerald-400" />
+                    <span>Paystack Payment Link / External Checkout Page</span>
+                  </h3>
+                  <p className="text-slate-400 text-xs mt-1 leading-relaxed max-w-2xl">
+                    Configure a standalone Paystack Payment Link or external payment page URL button. This is an independent payment gateway option from the Paystack InlineJS SDK popup.
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input 
+                    type="checkbox" 
+                    className="sr-only peer" 
+                    checked={customPaymentEnabled} 
+                    onChange={(e) => setCustomPaymentEnabled(e.target.checked)} 
+                  />
+                  <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                  <span className="ml-2.5 text-xs font-bold text-slate-300">
+                    {customPaymentEnabled ? 'Link Active' : 'Disabled'}
+                  </span>
+                </label>
+              </div>
+
+              <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Button Text / Label</label>
+                  <input 
+                    type="text" 
+                    placeholder="e.g. Pay via Paystack Payment Page" 
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-emerald-500 transition"
+                    value={customPaymentBtnName}
+                    onChange={(e) => setCustomPaymentBtnName(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Payment Page / Checkout Link URL</label>
+                  <input 
+                    type="url" 
+                    placeholder="e.g. https://paystack.com/pay/your-page" 
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-emerald-500 transition"
+                    value={customPaymentUrl}
+                    onChange={(e) => setCustomPaymentUrl(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="mt-4 space-y-1">
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Link Click Behavior</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-md">
+                  <label className={`flex items-center gap-2 p-3 rounded-xl border text-xs cursor-pointer transition ${customPaymentTarget === '_blank' ? 'bg-emerald-500/10 border-emerald-500/50 text-white font-bold' : 'bg-[#07080c] border-slate-800 text-slate-400'}`}>
+                    <input 
+                    type="radio" 
+                    name="customPaymentTarget" 
+                    value="_blank" 
+                    checked={customPaymentTarget === '_blank'} 
+                    onChange={() => setCustomPaymentTarget('_blank')}
+                    className="accent-emerald-500"
+                  />
+                  <span>Open in New Tab / Window</span>
+                </label>
+                <label className={`flex items-center gap-2 p-3 rounded-xl border text-xs cursor-pointer transition ${customPaymentTarget === '_self' ? 'bg-emerald-500/10 border-emerald-500/50 text-white font-bold' : 'bg-[#07080c] border-slate-800 text-slate-400'}`}>
+                  <input 
+                    type="radio" 
+                    name="customPaymentTarget" 
+                    value="_self" 
+                    checked={customPaymentTarget === '_self'} 
+                    onChange={() => setCustomPaymentTarget('_self')}
+                    className="accent-emerald-500"
+                  />
+                  <span>Open in Same Tab / Page</span>
+                </label>
+              </div>
+            </div>
+
+            <div className="mt-4 flex justify-end">
+              <button
+                onClick={handleSaveConfig}
+                disabled={configSaving}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 px-5 rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 h-[36px]"
+              >
+                {configSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                <span>Save Payment Link Settings</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Dedicated Paystack InlineJS Payment Integration & Settings */}
+          <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-[3px] bg-emerald-500"></div>
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-4 mb-5">
+              <div>
+                <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
+                  <CreditCard className="w-4.5 h-4.5 text-emerald-400" />
+                  <span>Paystack InlineJS SDK Modal Integration</span>
+                </h3>
+                <p className="text-slate-400 text-xs mt-1 leading-relaxed max-w-2xl">
+                  Configure Paystack InlineJS modal popup checkout (embedded directly in the app) and server-side secret credentials for verification. Operates independently from the Payment Link.
+                </p>
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={paystackEnabled}
+                      onChange={(e) => setPaystackEnabled(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                    <span className="ml-2.5 text-xs font-bold text-slate-200">
+                      {paystackEnabled ? (
+                        <span className="text-emerald-400">Paystack Active</span>
+                      ) : (
+                        <span className="text-slate-500">Disabled</span>
+                      )}
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="space-y-5">
+                {/* Paystack Webhook & Callback URLs - Highlighted at the top for easy copying */}
+                <div className="p-4 rounded-xl bg-emerald-950/20 border border-emerald-500/30 space-y-3">
+                  <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
+                    <span className="text-xs font-extrabold text-emerald-400 uppercase tracking-wider flex items-center gap-2">
+                      <Link className="w-4 h-4 text-emerald-400" />
+                      <span>Paystack Dashboard Configuration URLs</span>
+                    </span>
+                    <span className="text-[10px] bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-bold">
+                      Copy &amp; Paste in Paystack Dashboard
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-300">
+                    Paste these URLs into your <strong className="text-white">Paystack Dashboard &rarr; Settings &rarr; Preferences / API Keys &amp; Webhooks</strong>:
+                  </p>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                    {/* Callback URL Box */}
+                    <div className="p-3 rounded-lg bg-[#030407] border border-slate-800 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                          <ExternalLink className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Callback URL</span>
+                        </label>
+                        <span className="text-[10px] text-slate-500">Redirect after payment</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          readOnly
+                          value={getPaystackCallbackUrl()}
+                          className="w-full bg-[#0d101d] border border-slate-800 text-emerald-300 text-xs font-mono py-2 px-2.5 rounded-lg focus:outline-none select-all"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleCopyPaystackCallback}
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                          title="Copy Callback URL"
+                        >
+                          {copiedPaystackCallback ? (
+                            <>
+                              <Check className="w-3.5 h-3.5 text-white" />
+                              <span className="text-white">Copied!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3.5 h-3.5 text-white" />
+                              <span>Copy</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Webhook URL Box */}
+                    <div className="p-3 rounded-lg bg-[#030407] border border-slate-800 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                          <Code className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Webhook URL</span>
+                        </label>
+                        <span className="text-[10px] text-slate-500">Instant server notification</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          readOnly
+                          value={getPaystackWebhookUrl()}
+                          className="w-full bg-[#0d101d] border border-slate-800 text-emerald-300 text-xs font-mono py-2 px-2.5 rounded-lg focus:outline-none select-all"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleCopyPaystackWebhook}
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                          title="Copy Webhook URL"
+                        >
+                          {copiedPaystackWebhook ? (
+                            <>
+                              <Check className="w-3.5 h-3.5 text-white" />
+                              <span className="text-white">Copied!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3.5 h-3.5 text-white" />
+                              <span>Copy</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Paystack Mode Selector */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-300">Environment Mode</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setPaystackMode('live')}
+                        className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 border cursor-pointer ${
+                          paystackMode === 'live'
+                            ? 'bg-emerald-600/20 border-emerald-500 text-emerald-400'
+                            : 'bg-[#030407] border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <span className={`w-2 h-2 rounded-full ${paystackMode === 'live' ? 'bg-emerald-400' : 'bg-slate-600'}`}></span>
+                        <span>Live Production</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPaystackMode('test')}
+                        className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 border cursor-pointer ${
+                          paystackMode === 'test'
+                            ? 'bg-amber-600/20 border-amber-500 text-amber-400'
+                            : 'bg-[#030407] border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <span className={`w-2 h-2 rounded-full ${paystackMode === 'test' ? 'bg-amber-400' : 'bg-slate-600'}`}></span>
+                        <span>Test / Sandbox</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-300">
+                      Paystack Public Key (Client-Side)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder={paystackMode === 'test' ? 'pk_test_...' : 'pk_live_...'}
+                      value={paystackPublicKey}
+                      onChange={(e) => setPaystackPublicKey(e.target.value)}
+                      className="w-full bg-[#030407] border border-slate-800 text-slate-200 text-xs font-mono py-2.5 px-3 rounded-xl focus:border-emerald-500 focus:outline-none placeholder-slate-600"
+                    />
+                    <p className="text-[10px] text-slate-500">
+                      Passed to Paystack InlineJS popup on user checkout.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Paystack Secret Key */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                      <span>Paystack Secret Key (Server-Side Only)</span>
+                      <span className="text-[10px] bg-rose-500/10 text-rose-400 border border-rose-500/20 px-2 py-0.5 rounded-md font-bold uppercase">
+                        Encrypted / Server-Side Only
+                      </span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setShowPaystackSecretKey(!showPaystackSecretKey)}
+                      className="text-[11px] text-slate-400 hover:text-emerald-400 transition cursor-pointer flex items-center gap-1"
+                    >
+                      {showPaystackSecretKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      <span>{showPaystackSecretKey ? 'Hide Secret' : 'Show Secret'}</span>
+                    </button>
+                  </div>
+                  <div className="relative">
+                    <input
+                      type={showPaystackSecretKey ? 'text' : 'password'}
+                      placeholder={paystackMode === 'test' ? 'sk_test_...' : 'sk_live_...'}
+                      value={paystackSecretKey}
+                      onChange={(e) => setPaystackSecretKey(e.target.value)}
+                      className="w-full bg-[#030407] border border-slate-800 text-slate-200 text-xs font-mono py-2.5 px-3 rounded-xl focus:border-emerald-500 focus:outline-none placeholder-slate-600"
+                    />
+                  </div>
+                  <p className="text-[10px] text-slate-500">
+                    Used exclusively on the server to verify transactions and process webhook callbacks. Never transmitted to the browser.
+                  </p>
+                </div>
+
+                <div className="pt-2 flex justify-end">
+                  <button
+                    onClick={handleSaveConfig}
+                    disabled={configSaving}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 px-6 rounded-xl text-xs transition cursor-pointer flex items-center gap-2 h-[38px] shadow-lg shadow-emerald-950/40"
+                  >
+                    {configSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                    <span>Save Paystack Gateway Settings</span>
+                  </button>
+                </div>
+
+                {/* Diagnostic Status Header */}
+                <div className="p-4 rounded-xl bg-[#080a12] border border-slate-800 space-y-3 mt-4">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+                    <span className="text-xs font-extrabold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                      <Activity className="w-4 h-4 text-emerald-400 animate-pulse" />
+                      <span>Live Diagnostic Status</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={testPaystackEndpoints}
+                      disabled={diagnosticLoading}
+                      className="bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-400 font-bold py-1.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-2"
+                    >
+                      {diagnosticLoading ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+                          <span>Pinging Server...</span>
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Run Diagnostic Status Check</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#030407] border border-slate-800/80">
+                      <span className="text-xs font-semibold text-slate-300">Paystack Webhook:</span>
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold border ${diagnosticResult ? (diagnosticResult.webhook ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border-rose-500/30') : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${diagnosticResult ? (diagnosticResult.webhook ? 'bg-emerald-400 animate-ping' : 'bg-rose-400') : 'bg-emerald-400 animate-ping'}`}></span>
+                        {diagnosticResult ? (diagnosticResult.webhook ? 'Online' : 'Offline') : 'Online'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#030407] border border-slate-800/80">
+                      <span className="text-xs font-semibold text-slate-300">Paystack Callback:</span>
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold border ${diagnosticResult ? (diagnosticResult.callback ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border-rose-500/30') : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${diagnosticResult ? (diagnosticResult.callback ? 'bg-emerald-400 animate-ping' : 'bg-rose-400') : 'bg-emerald-400 animate-ping'}`}></span>
+                        {diagnosticResult ? (diagnosticResult.callback ? 'Online' : 'Offline') : 'Online'}
+                      </span>
+                    </div>
+                  </div>
+                  {diagnosticResult?.details && (
+                    <p className="text-[10px] font-mono text-slate-400 pt-1">
+                      {diagnosticResult.details}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Dedicated Squad Payment Integration & Settings */}
+            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-[3px] bg-purple-500"></div>
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-4 mb-5">
+                <div>
+                  <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
+                    <CreditCard className="w-4.5 h-4.5 text-purple-400" />
+                    <span>Squad Payment Gateway (HabariPay)</span>
+                  </h3>
+                  <p className="text-slate-400 text-xs mt-1 leading-relaxed max-w-2xl">
+                    Configure your Squad API keys, environment mode, and system endpoints for automated payment collection and subscription activation.
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input 
+                    type="checkbox" 
+                    className="sr-only peer" 
+                    checked={squadEnabled} 
+                    onChange={(e) => setSquadEnabled(e.target.checked)} 
+                  />
+                  <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                  <span className="ml-2.5 text-xs font-bold text-slate-300">
+                    {squadEnabled ? 'Active' : 'Disabled'}
+                  </span>
+                </label>
+              </div>
+
+              <div className="space-y-5">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-1 md:col-span-1">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Environment Mode</label>
+                    <select
+                      value={squadMode}
+                      onChange={(e) => setSquadMode(e.target.value as 'sandbox' | 'live')}
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition cursor-pointer"
+                    >
+                      <option value="sandbox">Sandbox / Test Mode (sandbox-api-d.squadco.com)</option>
+                      <option value="live">Live / Production Mode (api-d.squadco.com)</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1 md:col-span-1">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Squad Secret Key (Required)</label>
+                    <input 
+                      type="password" 
+                      placeholder="e.g. sandbox_sk_... or secret_sk_..." 
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-purple-500 transition"
+                      value={squadSecretKey}
+                      onChange={(e) => setSquadSecretKey(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1 md:col-span-1">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Squad Public Key / API Key</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. sandbox_pk_... or pk_..." 
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-purple-500 transition"
+                      value={squadApiKey}
+                      onChange={(e) => setSquadApiKey(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {/* Diagnostic Status Header for Squad */}
+                <div className="p-4 rounded-xl bg-[#080a12] border border-slate-800 space-y-3">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+                    <span className="text-xs font-extrabold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                      <Activity className="w-4 h-4 text-purple-400 animate-pulse" />
+                      <span>Live Diagnostic Status</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={testSquadEndpoints}
+                      disabled={squadDiagnosticLoading}
+                      className="bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-400 font-bold py-1.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-2"
+                    >
+                      {squadDiagnosticLoading ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-400" />
+                          <span>Pinging Server...</span>
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 text-purple-400" />
+                          <span>Run Squad Endpoint Check</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#030407] border border-slate-800/80">
+                      <span className="text-xs font-semibold text-slate-300">Squad Webhook:</span>
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold border ${squadDiagnosticResult ? (squadDiagnosticResult.webhook ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border-rose-500/30') : 'bg-purple-500/10 text-purple-400 border-purple-500/30'}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${squadDiagnosticResult ? (squadDiagnosticResult.webhook ? 'bg-emerald-400 animate-ping' : 'bg-rose-400') : 'bg-purple-400 animate-ping'}`}></span>
+                        {squadDiagnosticResult ? (squadDiagnosticResult.webhook ? 'Online' : 'Offline') : 'Online'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#030407] border border-slate-800/80">
+                      <span className="text-xs font-semibold text-slate-300">Squad Redirect:</span>
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold border ${squadDiagnosticResult ? (squadDiagnosticResult.callback ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border-rose-500/30') : 'bg-purple-500/10 text-purple-400 border-purple-500/30'}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${squadDiagnosticResult ? (squadDiagnosticResult.callback ? 'bg-emerald-400 animate-ping' : 'bg-rose-400') : 'bg-purple-400 animate-ping'}`}></span>
+                        {squadDiagnosticResult ? (squadDiagnosticResult.callback ? 'Online' : 'Offline') : 'Online'}
+                      </span>
+                    </div>
+                  </div>
+                  {squadDiagnosticResult?.details && (
+                    <p className="text-[10px] font-mono text-slate-400 pt-1">
+                      {squadDiagnosticResult.details}
+                    </p>
+                  )}
+                </div>
+
+                {/* Squad Webhook URL Field */}
+                <div className="p-4 rounded-xl bg-[#080a12] border border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold text-purple-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <Code className="w-3.5 h-3.5 text-purple-400" />
+                      <span>Squad Webhook URL</span>
+                    </label>
+                    <span className="text-[10px] text-slate-500">Production Webhook Endpoint</span>
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={getSquadWebhookUrl()}
+                      className="w-full bg-[#030407] border border-slate-800 text-slate-200 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all cursor-default"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleCopySquadWebhook}
+                      className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 px-4 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                    >
+                      {copiedSquadWebhook ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          <span className="text-emerald-400">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5 text-slate-300" />
+                          <span>Copy Webhook URL</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-normal">
+                    <strong className="text-slate-200">Webhook URL:</strong> Server-to-server notification endpoint. Squad sends real-time POST notifications (with <code className="text-purple-300">x-squad-encrypted-body</code>) here when successful transactions occur.
+                  </p>
+                </div>
+
+                {/* Squad Redirect URL Field */}
+                <div className="p-4 rounded-xl bg-[#080a12] border border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold text-purple-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <ExternalLink className="w-3.5 h-3.5 text-purple-400" />
+                      <span>Squad Redirect URL</span>
+                    </label>
+                    <span className="text-[10px] text-slate-500">Customer Return Destination</span>
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={getSquadRedirectUrl()}
+                      className="w-full bg-[#030407] border border-slate-800 text-slate-200 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all cursor-default"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleCopySquadCallback}
+                      className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 px-4 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                    >
+                      {copiedSquadCallback ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          <span className="text-emerald-400">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5 text-slate-300" />
+                          <span>Copy Redirect URL</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-normal">
+                    <strong className="text-slate-200">Redirect URL:</strong> Customer/browser destination after payment. Squad returns users here to verify payment state and redirect to the application.
+                  </p>
+                </div>
+
+                <div className="mt-4 flex justify-end">
+                  <button
+                    onClick={handleSaveConfig}
+                    disabled={configSaving}
+                    className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-5 rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 h-[36px]"
+                  >
+                    {configSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                    <span>Save Squad Settings</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Direct Debit Mandates Registry Card */}
+            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-[3px] bg-purple-500"></div>
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-4 mb-4">
+                <div>
+                  <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
+                    <Landmark className="w-4.5 h-4.5 text-purple-400" />
+                    <span>Squad Direct Debit Mandates & Automated Renewals</span>
+                  </h3>
+                  <p className="text-slate-400 text-xs mt-1">
+                    Manage active customer bank debit authorizations for automatic monthly subscription renewals (₦600/month).
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={fetchMandates}
+                  disabled={loadingMandates}
+                  className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-1.5 px-3 rounded-lg text-xs transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loadingMandates ? 'animate-spin' : ''}`} />
+                  <span>Refresh Mandates</span>
+                </button>
+              </div>
+
+              {loadingMandates ? (
+                <div className="py-12 flex justify-center items-center">
+                  <Loader2 className="w-6 h-6 animate-spin text-purple-400" />
+                </div>
+              ) : mandates.length === 0 ? (
+                <div className="text-center py-10 bg-[#07080c] rounded-xl border border-slate-800/60">
+                  <Landmark className="w-10 h-10 text-slate-600 mx-auto mb-2" />
+                  <p className="text-slate-300 text-sm font-semibold">No Direct Debit Mandates registered yet.</p>
+                  <p className="text-slate-500 text-xs mt-1">
+                    When subscribers set up automatic renewals via Squad Direct Debit, their mandates and renewal schedules will appear here.
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs text-slate-300">
+                    <thead className="bg-[#080a12] text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800 font-bold">
+                      <tr>
+                        <th className="py-3 px-4">Subscriber</th>
+                        <th className="py-3 px-4">Bank & Account</th>
+                        <th className="py-3 px-4">Mandate ID</th>
+                        <th className="py-3 px-4">Amount</th>
+                        <th className="py-3 px-4">Status</th>
+                        <th className="py-3 px-4">Next Scheduled Debit</th>
+                        <th className="py-3 px-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {mandates.map((m) => (
+                        <tr key={m.id} className="hover:bg-slate-900/40 transition">
+                          <td className="py-3 px-4 font-medium text-white">
+                            <div>@{m.username}</div>
+                            {m.email && <div className="text-[10px] text-slate-500">{m.email}</div>}
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="font-semibold text-slate-200">{m.bankName || 'Nigerian Bank'}</div>
+                            <div className="font-mono text-[10px] text-purple-400">
+                              {m.accountNumber ? `******${m.accountNumber.slice(-4)}` : '••••••••'}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 font-mono text-[10px] text-slate-400">
+                            {m.mandateId}
+                          </td>
+                          <td className="py-3 px-4 font-bold text-white">
+                            ₦{m.amount}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              m.status === 'active' 
+                                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/25'
+                                : m.status === 'pending_otp'
+                                ? 'bg-amber-500/10 text-amber-400 border border-amber-500/25'
+                                : 'bg-slate-800 text-slate-400'
+                            }`}>
+                              {m.status.toUpperCase()}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 font-medium text-slate-300">
+                            {m.nextDebitDate ? (
+                              <span className="flex items-center gap-1">
+                                <Calendar className="w-3 h-3 text-purple-400" />
+                                {new Date(m.nextDebitDate).toLocaleDateString()}
+                              </span>
+                            ) : (
+                              <span className="text-slate-600">—</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {m.status === 'active' && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAdminTriggerDebit(m.userId, m.username)}
+                                    disabled={debitingUserId === m.userId}
+                                    title="Trigger immediate renewal charge"
+                                    className="bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/30 px-2.5 py-1 rounded-lg text-[10px] font-bold transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                  >
+                                    {debitingUserId === m.userId ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                                    <span>Charge Now</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAdminCancelMandate(m.mandateId, m.username)}
+                                    disabled={cancellingMandateId === m.mandateId}
+                                    title="Cancel mandate"
+                                    className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 px-2.5 py-1 rounded-lg text-[10px] font-bold transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                  >
+                                    {cancellingMandateId === m.mandateId ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
+                                    <span>Cancel</span>
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* SQUAD SFTP FALLBACK GATEWAY & NOTIFICATION PROCESSOR CARD */}
+            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-[3px] bg-sky-500"></div>
+              
+              {/* Header */}
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-4 mb-5">
+                <div>
+                  <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
+                    <Server className="w-4.5 h-4.5 text-sky-400" />
+                    <span>Squad SFTP Fallback Notification Gateway & GPG Decryption</span>
+                  </h3>
+                  <p className="text-slate-400 text-xs mt-1 leading-relaxed max-w-3xl">
+                    Automated secondary fallback confirmation mechanism for Squad payments. Squad delivers encrypted notification files (<code className="text-sky-300">.csv.gpg</code>) via SFTP to reconcile any missed webhooks without duplicate activations.
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input 
+                    type="checkbox" 
+                    className="sr-only peer" 
+                    checked={squadSftpEnabled} 
+                    onChange={(e) => setSquadSftpEnabled(e.target.checked)} 
+                  />
+                  <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-600"></div>
+                  <span className="ml-2.5 text-xs font-bold text-slate-300">
+                    {squadSftpEnabled ? 'Fallback Poller Active' : 'Fallback Poller Disabled'}
+                  </span>
+                </label>
+              </div>
+
+              {/* Architecture Protocol Summary Banner */}
+              <div className="p-3.5 rounded-xl bg-[#080a14] border border-sky-500/20 text-xs space-y-1.5 mb-6">
+                <div className="flex items-center gap-2 text-sky-400 font-bold uppercase text-[10px] tracking-wider">
+                  <ShieldCheck className="w-4 h-4 text-sky-400 shrink-0" />
+                  <span>Squad 4-Tier Payment Confirmation Protocol</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 pt-1 text-[11px]">
+                  <div className="bg-[#0e1222] p-2 rounded-lg border border-slate-800">
+                    <span className="text-purple-400 font-bold block">1. Squad Webhook</span>
+                    <span className="text-slate-400 text-[10px]">Primary instant notification</span>
+                  </div>
+                  <div className="bg-[#0e1222] p-2 rounded-lg border border-slate-800">
+                    <span className="text-sky-400 font-bold block">2. Squad SFTP</span>
+                    <span className="text-slate-400 text-[10px]">Fallback reconciler for missed events</span>
+                  </div>
+                  <div className="bg-[#0e1222] p-2 rounded-lg border border-slate-800">
+                    <span className="text-emerald-400 font-bold block">3. Transaction Verify API</span>
+                    <span className="text-slate-400 text-[10px]">Mandatory server-side status verification</span>
+                  </div>
+                  <div className="bg-[#0e1222] p-2 rounded-lg border border-slate-800">
+                    <span className="text-amber-400 font-bold block">4. Redirect URL</span>
+                    <span className="text-slate-400 text-[10px]">Customer navigation only</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* SFTP Connection Diagnostics & Status Bar */}
+              <div className="p-4 rounded-xl bg-[#080a12] border border-slate-800 space-y-3 mb-6">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+                  <span className="text-xs font-extrabold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-sky-400 animate-pulse" />
+                    <span>SFTP Live Status & Poller Telemetry</span>
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleTriggerSftpSync}
+                      disabled={sftpSyncing}
+                      className="bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/30 text-sky-300 font-bold py-1.5 px-3 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      {sftpSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FolderSync className="w-3.5 h-3.5" />}
+                      <span>Sync & Poll Now</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleTestSftpConnection}
+                      disabled={sftpTesting}
+                      className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold py-1.5 px-3 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                    >
+                      {sftpTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Terminal className="w-3.5 h-3.5 text-sky-400" />}
+                      <span>Test Connection & Keys</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+                  <div className="p-2.5 rounded-lg bg-[#030407] border border-slate-800/80">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Poller Status</span>
+                    <span className={`inline-flex items-center gap-1.5 text-xs font-bold mt-0.5 ${squadSftpEnabled ? 'text-emerald-400' : 'text-slate-400'}`}>
+                      <span className={`w-2 h-2 rounded-full ${squadSftpEnabled ? 'bg-emerald-400 animate-ping' : 'bg-slate-600'}`}></span>
+                      {squadSftpEnabled ? `Active (Every ${squadSftpPollInterval}m)` : 'Disabled'}
+                    </span>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-[#030407] border border-slate-800/80">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Last Sync Cycle</span>
+                    <span className="text-xs font-mono text-slate-300 block truncate mt-0.5">
+                      {sftpStatus?.lastSync ? new Date(sftpStatus.lastSync).toLocaleString() : 'No sync recorded'}
+                    </span>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-[#030407] border border-slate-800/80">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Last Processed File</span>
+                    <span className="text-xs font-mono text-sky-300 block truncate mt-0.5" title={sftpStatus?.lastFile || ''}>
+                      {sftpStatus?.lastFile || 'None yet'}
+                    </span>
+                  </div>
+
+                  <div className="p-2.5 rounded-lg bg-[#030407] border border-slate-800/80">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Last Verified Tx Ref</span>
+                    <span className="text-xs font-mono text-purple-300 block truncate mt-0.5" title={sftpStatus?.lastTxRef || ''}>
+                      {sftpStatus?.lastTxRef || 'None yet'}
+                    </span>
+                  </div>
+                </div>
+
+                {sftpTestResult && (
+                  <div className={`p-3 rounded-lg border text-xs font-mono mt-2 ${sftpTestResult.success ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'}`}>
+                    <div className="font-bold mb-1 flex items-center gap-1.5">
+                      {sftpTestResult.success ? <CheckCircle className="w-4 h-4 text-emerald-400" /> : <AlertTriangle className="w-4 h-4 text-rose-400" />}
+                      <span>Diagnostic Output: {sftpTestResult.message}</span>
+                    </div>
+                    {sftpTestResult.details && (
+                      <div className="text-[11px] text-slate-300 space-y-0.5 pl-5">
+                        {sftpTestResult.details.sftpConnection && <div>• SFTP Connection: {sftpTestResult.details.sftpConnection}</div>}
+                        {sftpTestResult.details.remoteDirectory && <div>• Remote Directory: {sftpTestResult.details.remoteDirectory}</div>}
+                        {sftpTestResult.details.filesFound !== undefined && <div>• Files Found: {sftpTestResult.details.filesFound}</div>}
+                        {sftpTestResult.details.gpgKeyValid !== undefined && <div>• GPG Key Valid: {sftpTestResult.details.gpgKeyValid ? 'YES' : 'NO'}</div>}
+                        {sftpTestResult.details.gpgKeyIds && <div>• GPG Key IDs: {sftpTestResult.details.gpgKeyIds.join(', ')}</div>}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* SFTP Server Configuration Settings */}
+              <div className="space-y-4">
+                <h4 className="text-xs font-extrabold text-slate-300 uppercase tracking-wider flex items-center gap-1.5 border-b border-slate-800 pb-2">
+                  <Server className="w-3.5 h-3.5 text-sky-400" />
+                  <span>SFTP Server & Authentication Details</span>
+                </h4>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-1 md:col-span-2">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">SFTP Host / Server Address</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. sftp.squadco.com or sftp.zerolord.com" 
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
+                      value={squadSftpHost}
+                      onChange={(e) => setSquadSftpHost(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">SFTP Port</label>
+                    <input 
+                      type="number" 
+                      placeholder="22" 
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
+                      value={squadSftpPort}
+                      onChange={(e) => setSquadSftpPort(Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">SFTP Username</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. squad_cinjelly or sftp_user" 
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
+                      value={squadSftpUsername}
+                      onChange={(e) => setSquadSftpUsername(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">SFTP Password / Passphrase</label>
+                      {sftpConfigFlags.hasPassword && (
+                        <span className="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.2 rounded font-bold">
+                          Configured
+                        </span>
+                      )}
+                    </div>
+                    <input 
+                      type="password" 
+                      placeholder={sftpConfigFlags.hasPassword ? '•••••••••••• (Leave blank to keep existing)' : 'Enter SFTP password'} 
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
+                      value={squadSftpPassword}
+                      onChange={(e) => setSquadSftpPassword(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-1">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Remote Polling Directory</label>
+                    <input 
+                      type="text" 
+                      placeholder="/squad_notifications" 
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
+                      value={squadSftpRemoteDir}
+                      onChange={(e) => setSquadSftpRemoteDir(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Processed / Archive Directory</label>
+                    <input 
+                      type="text" 
+                      placeholder="/squad_notifications/processed" 
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
+                      value={squadSftpProcessingDir}
+                      onChange={(e) => setSquadSftpProcessingDir(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Poll Interval (Minutes)</label>
+                    <input 
+                      type="number" 
+                      min={1}
+                      max={1440}
+                      placeholder="5" 
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
+                      value={squadSftpPollInterval}
+                      onChange={(e) => setSquadSftpPollInterval(Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                      SSH Private Key (Optional for Key-based SFTP auth)
+                    </label>
+                    {sftpConfigFlags.hasPrivateKey && (
+                      <span className="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.2 rounded font-bold">
+                        SSH Key Saved
+                      </span>
+                    )}
+                  </div>
+                  <textarea 
+                    rows={3}
+                    placeholder={sftpConfigFlags.hasPrivateKey ? '-----BEGIN OPENSSH PRIVATE KEY-----\n•••••••••••••••••••••••••••••••••••••••••••••\n(Leave blank to keep existing SSH key)' : '-----BEGIN OPENSSH PRIVATE KEY-----\n... paste OpenSSH / RSA private key here ...'} 
+                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-sky-300 text-[11px] font-mono focus:outline-none focus:border-sky-500 transition resize-none"
+                    value={squadSftpPrivateKey}
+                    onChange={(e) => setSquadSftpPrivateKey(e.target.value)}
+                  />
+                </div>
+
+                {/* GPG / PGP Decryption Configuration */}
+                <h4 className="text-xs font-extrabold text-slate-300 uppercase tracking-wider flex items-center gap-1.5 border-b border-slate-800 pb-2 pt-2">
+                  <Lock className="w-3.5 h-3.5 text-purple-400" />
+                  <span>OpenPGP / GPG Decryption Configuration (.csv.gpg files)</span>
+                </h4>
+
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                        GPG Private Key (ASCII Armored Block)
+                      </label>
+                      {sftpConfigFlags.hasGpgKey && (
+                        <span className="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.2 rounded font-bold">
+                          GPG Key Saved
+                        </span>
+                      )}
+                    </div>
+                    <textarea 
+                      rows={4}
+                      placeholder={sftpConfigFlags.hasGpgKey ? '-----BEGIN PGP PRIVATE KEY BLOCK-----\n•••••••••••••••••••••••••••••••••••••••••••••\n(Leave blank to keep existing GPG private key)' : '-----BEGIN PGP PRIVATE KEY BLOCK-----\nVersion: ...\n\n... paste ASCII armored private key ...\n-----END PGP PRIVATE KEY BLOCK-----'} 
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-purple-300 text-[11px] font-mono focus:outline-none focus:border-purple-500 transition resize-none"
+                      value={squadSftpGpgPrivateKey}
+                      onChange={(e) => setSquadSftpGpgPrivateKey(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="space-y-1 max-w-md">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">GPG Key Passphrase (If encrypted)</label>
+                      {sftpConfigFlags.hasGpgPassphrase && (
+                        <span className="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.2 rounded font-bold">
+                          Passphrase Saved
+                        </span>
+                      )}
+                    </div>
+                    <input 
+                      type="password" 
+                      placeholder={sftpConfigFlags.hasGpgPassphrase ? '•••••••••••• (Leave blank to keep existing)' : 'Enter GPG passphrase'} 
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-purple-500 transition"
+                      value={squadSftpGpgPassphrase}
+                      onChange={(e) => setSquadSftpGpgPassphrase(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-4 flex justify-end">
+                  <button
+                    onClick={handleSaveConfig}
+                    disabled={configSaving}
+                    className="bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-5 rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 h-[36px]"
+                  >
+                    {configSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                    <span>Save SFTP & Decryption Configuration</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* MANUAL SFTP NOTIFICATION FILE UPLOADER & RECONCILER */}
+              <div className="mt-8 border-t border-slate-800/80 pt-6">
+                <div className="bg-[#07080c] border border-slate-800 rounded-xl p-4 space-y-4">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-xs font-extrabold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                        <UploadCloud className="w-4 h-4 text-sky-400" />
+                        <span>Manual Notification File Reconciler (.csv or .csv.gpg)</span>
+                      </h4>
+                      <p className="text-slate-400 text-[11px] mt-0.5">
+                        Manually upload a Squad transaction notification file to test parsing, run GPG decryption, verify references via Squad API, and fulfill payments.
+                      </p>
+                    </div>
+                  </div>
+
+                  <form onSubmit={handleUploadSftpNotificationFile} className="space-y-3">
+                    <div className="flex flex-col sm:flex-row items-center gap-3">
+                      <input 
+                        type="file" 
+                        accept=".csv,.gpg,.pgp,.txt"
+                        onChange={(e) => setSftpManualFile(e.target.files?.[0] || null)}
+                        className="w-full sm:flex-1 bg-[#11131e] border border-slate-800 rounded-xl py-2 px-3 text-slate-300 text-xs file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-sky-600/20 file:text-sky-300 hover:file:bg-sky-600/30 cursor-pointer"
+                      />
+                      <button
+                        type="submit"
+                        disabled={sftpManualUploading || !sftpManualFile}
+                        className="w-full sm:w-auto bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white font-bold py-2.5 px-5 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shrink-0"
+                      >
+                        {sftpManualUploading ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Processing & Verifying...</span>
+                          </>
+                        ) : (
+                          <>
+                            <UploadCloud className="w-3.5 h-3.5" />
+                            <span>Upload & Reconcile</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {sftpManualResult && (
+                      <div className={`p-3 rounded-lg border text-xs font-mono ${sftpManualResult.success ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'}`}>
+                        <div className="font-bold mb-1 flex items-center gap-1.5">
+                          {sftpManualResult.success ? <CheckCircle className="w-4 h-4 text-emerald-400" /> : <AlertTriangle className="w-4 h-4 text-rose-400" />}
+                          <span>{sftpManualResult.message}</span>
+                        </div>
+                        {sftpManualResult.summary && (
+                          <div className="text-[11px] text-slate-300 space-y-0.5 pl-5">
+                            <div>• Total Records Parsed: {sftpManualResult.summary.totalRecords}</div>
+                            <div>• Already Processed (Idempotent): {sftpManualResult.summary.alreadyProcessed}</div>
+                            <div>• Verified & Activated: {sftpManualResult.summary.verifiedSuccessful}</div>
+                            <div>• Failed / Pending: {sftpManualResult.summary.failedOrPending}</div>
+                            <div>• Unmatched User Records: {sftpManualResult.summary.unmatchedRecords}</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </form>
+                </div>
+              </div>
+            </div>
+
+            {/* SQUAD SFTP PROCESSING LOGS & AUDIT TRAIL TABLE */}
+            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-[3px] bg-sky-500"></div>
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-4 mb-4">
+                <div>
+                  <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
+                    <FileSpreadsheet className="w-4.5 h-4.5 text-sky-400" />
+                    <span>Squad SFTP Audit Trail & Reconciliation Logs</span>
+                  </h3>
+                  <p className="text-slate-400 text-xs mt-1">
+                    Complete immutable log of SFTP file downloads, decryption operations, transaction verifications, and subscription renewals.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={fetchSftpLogs}
+                    disabled={sftpLoadingLogs}
+                    className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-1.5 px-3 rounded-lg text-xs transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${sftpLoadingLogs ? 'animate-spin' : ''}`} />
+                    <span>Refresh Logs</span>
+                  </button>
+                  {sftpLogs.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleClearSftpLogs}
+                      className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-bold py-1.5 px-3 rounded-lg text-xs transition flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Clear Logs</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {sftpLoadingLogs ? (
+                <div className="py-12 flex justify-center items-center">
+                  <Loader2 className="w-6 h-6 animate-spin text-sky-400" />
+                </div>
+              ) : sftpLogs.length === 0 ? (
+                <div className="text-center py-10 bg-[#07080c] rounded-xl border border-slate-800/60">
+                  <FileSpreadsheet className="w-10 h-10 text-slate-600 mx-auto mb-2" />
+                  <p className="text-slate-300 text-sm font-semibold">No SFTP reconciliation events logged yet.</p>
+                  <p className="text-slate-500 text-xs mt-1">
+                    When the background poller scans remote SFTP directories or parses files, detailed logs will appear here.
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs text-slate-300">
+                    <thead className="bg-[#080a12] text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800 font-bold">
+                      <tr>
+                        <th className="py-3 px-4">Timestamp</th>
+                        <th className="py-3 px-4">Action</th>
+                        <th className="py-3 px-4">Status</th>
+                        <th className="py-3 px-4">File / Reference</th>
+                        <th className="py-3 px-4">Message Details</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {sftpLogs.map((log) => (
+                        <tr key={log.id} className="hover:bg-slate-900/40 transition">
+                          <td className="py-3 px-4 font-mono text-[10px] text-slate-400 whitespace-nowrap">
+                            {new Date(log.createdAt).toLocaleString()}
+                          </td>
+                          <td className="py-3 px-4 font-mono text-[11px] text-slate-200">
+                            {log.action}
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              log.status === 'success' 
+                                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/25'
+                                : log.status === 'error'
+                                ? 'bg-rose-500/10 text-rose-400 border border-rose-500/25'
+                                : log.status === 'warning'
+                                ? 'bg-amber-500/10 text-amber-400 border border-amber-500/25'
+                                : 'bg-sky-500/10 text-sky-400 border border-sky-500/25'
+                            }`}>
+                              {log.status.toUpperCase()}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 font-mono text-[11px]">
+                            {log.filename && <div className="text-sky-300 truncate max-w-[200px]" title={log.filename}>{log.filename}</div>}
+                            {log.txRef && <div className="text-purple-300 text-[10px]">{log.txRef}</div>}
+                            {!log.filename && !log.txRef && <span className="text-slate-600">—</span>}
+                          </td>
+                          <td className="py-3 px-4 text-slate-300">
+                            <div>{log.message}</div>
+                            {log.metadata && (
+                              <pre className="text-[10px] font-mono text-slate-500 mt-1 max-w-md overflow-x-auto whitespace-pre-wrap">
+                                {log.metadata}
+                              </pre>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -3603,6 +5289,430 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               </div>
 
             </form>
+          </div>
+        )}
+
+        {/* TAB: CPANEL PRODUCTION FTP & DEPLOYMENT */}
+        {activeTab === 'cpanel_deploy' && (
+          <div className="space-y-6" id="cpanel-deploy-panel">
+            
+            {/* Header Hero Banner */}
+            <div className="bg-[#11131e] border border-amber-500/30 rounded-2xl p-6 sm:p-8 shadow-2xl relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-full h-[3px] bg-gradient-to-r from-amber-500 via-rose-500 to-purple-500"></div>
+              
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+                <div className="space-y-2 max-w-3xl">
+                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-bold uppercase tracking-wider">
+                    <Server className="w-3.5 h-3.5" />
+                    <span>Production cPanel Deployment Gateway</span>
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-display font-extrabold text-white tracking-tight">
+                    cPanel Production FTP & Automated Deployment Console
+                  </h2>
+                  <p className="text-slate-400 text-xs sm:text-sm leading-relaxed">
+                    View, copy, and manage the live production FTP connection credentials, serverless PHP backend bridge, and deployment scripts for hosting on cPanel (<code className="text-amber-300 font-mono">ftp.zerolord.com</code>).
+                  </p>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleCopyFtpField(
+                      `=== CINJELLY cPanel Production FTP Credentials ===\nHost / Server: ftp.zerolord.com\nPort: 21\nProtocol: FTP (Plain / Explicit TLS)\nUsername: cinjelly@zerolord.com\nPassword: @f33rinimi\nTarget Root Path: /\nTarget Subdirectories: /assets, /backend, /php-backend\nConnection URL: ftp://cinjelly%40zerolord.com:@f33rinimi@ftp.zerolord.com:21/\nBuild & Deploy Command: npm run build && python3 deploy_via_ftp.py`,
+                      'all'
+                    )}
+                    className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold py-3 px-5 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20"
+                  >
+                    {copiedFtpAll ? (
+                      <>
+                        <Check className="w-4 h-4 text-slate-950 font-bold" />
+                        <span>All Credentials Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-4 h-4" />
+                        <span>Copy All FTP Credentials</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleCopyFtpField('npm run build && python3 deploy_via_ftp.py', 'cmd')}
+                    className="bg-slate-900 hover:bg-slate-800 border border-slate-700 text-white font-bold py-3 px-4 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-md font-mono"
+                  >
+                    {copiedDeployCmd ? (
+                      <>
+                        <Check className="w-4 h-4 text-emerald-400" />
+                        <span className="text-emerald-400">Command Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Terminal className="w-4 h-4 text-amber-400" />
+                        <span>Copy Deploy CLI Command</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Status Ribbon */}
+              <div className="mt-6 pt-5 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="bg-[#07080c] p-3 rounded-xl border border-slate-800/80 flex items-center gap-3">
+                  <div className="p-2 bg-emerald-500/10 text-emerald-400 rounded-lg">
+                    <CheckCircle className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold block">Status</span>
+                    <span className="text-xs font-extrabold text-emerald-400">Live & Deployed</span>
+                  </div>
+                </div>
+
+                <div className="bg-[#07080c] p-3 rounded-xl border border-slate-800/80 flex items-center gap-3">
+                  <div className="p-2 bg-amber-500/10 text-amber-400 rounded-lg">
+                    <Server className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold block">Host Server</span>
+                    <span className="text-xs font-bold text-white font-mono">ftp.zerolord.com</span>
+                  </div>
+                </div>
+
+                <div className="bg-[#07080c] p-3 rounded-xl border border-slate-800/80 flex items-center gap-3">
+                  <div className="p-2 bg-purple-500/10 text-purple-400 rounded-lg">
+                    <Users className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold block">Account</span>
+                    <span className="text-xs font-bold text-purple-300 font-mono truncate max-w-[140px] block">cinjelly@zerolord.com</span>
+                  </div>
+                </div>
+
+                <div className="bg-[#07080c] p-3 rounded-xl border border-slate-800/80 flex items-center gap-3">
+                  <div className="p-2 bg-sky-500/10 text-sky-400 rounded-lg">
+                    <Globe className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold block">Web Protocol</span>
+                    <span className="text-xs font-bold text-sky-300">HTTPS + mod_rewrite</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* FTP Credentials Individual Cards Grid */}
+            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl">
+              <div>
+                <h3 className="text-base sm:text-lg font-display font-extrabold text-white flex items-center gap-2">
+                  <Key className="w-5 h-5 text-amber-400" />
+                  <span>Production FTP Connection Parameters</span>
+                </h3>
+                <p className="text-slate-400 text-xs mt-1">
+                  Individual credentials for FileZilla, WinSCP, Cyberduck, cPanel FTP Accounts, or automated deployment scripts.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                
+                {/* 1. Host */}
+                <div className="bg-[#07080c] border border-slate-800/80 rounded-xl p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <Server className="w-3.5 h-3.5 text-amber-400" />
+                      <span>FTP Host / Server Address</span>
+                    </label>
+                    <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded">Active</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value="ftp.zerolord.com"
+                      className="w-full bg-[#11131e] border border-slate-800 text-amber-300 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleCopyFtpField('ftp.zerolord.com', 'host')}
+                      className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                    >
+                      {copiedFtpHost ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-300" />}
+                      <span>{copiedFtpHost ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 2. Port */}
+                <div className="bg-[#07080c] border border-slate-800/80 rounded-xl p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <HardDrive className="w-3.5 h-3.5 text-sky-400" />
+                      <span>FTP Port & Protocol</span>
+                    </label>
+                    <span className="text-[10px] text-slate-500">Standard FTP / TLS</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value="21 (Protocol: FTP / Explicit TLS)"
+                      className="w-full bg-[#11131e] border border-slate-800 text-white text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleCopyFtpField('21', 'port')}
+                      className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                    >
+                      {copiedFtpPort ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-300" />}
+                      <span>{copiedFtpPort ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 3. Username */}
+                <div className="bg-[#07080c] border border-slate-800/80 rounded-xl p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <Users className="w-3.5 h-3.5 text-purple-400" />
+                      <span>FTP Username / Target Login</span>
+                    </label>
+                    <span className="text-[10px] text-purple-400 font-bold bg-purple-500/10 px-2 py-0.5 rounded">cPanel Account</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value="cinjelly@zerolord.com"
+                      className="w-full bg-[#11131e] border border-slate-800 text-purple-200 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleCopyFtpField('cinjelly@zerolord.com', 'user')}
+                      className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                    >
+                      {copiedFtpUser ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-300" />}
+                      <span>{copiedFtpUser ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 4. Password */}
+                <div className="bg-[#07080c] border border-slate-800/80 rounded-xl p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <Lock className="w-3.5 h-3.5 text-rose-400" />
+                      <span>FTP Account Password</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setShowFtpPassword(!showFtpPassword)}
+                      className="text-[10px] text-slate-400 hover:text-white flex items-center gap-1 transition cursor-pointer"
+                    >
+                      {showFtpPassword ? <EyeOff className="w-3 h-3 text-rose-400" /> : <Eye className="w-3 h-3 text-slate-400" />}
+                      <span>{showFtpPassword ? 'Hide' : 'Reveal'}</span>
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type={showFtpPassword ? 'text' : 'password'}
+                      readOnly
+                      value="@f33rinimi"
+                      className="w-full bg-[#11131e] border border-slate-800 text-rose-300 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleCopyFtpField('@f33rinimi', 'pass')}
+                      className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                    >
+                      {copiedFtpPass ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-300" />}
+                      <span>{copiedFtpPass ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 5. Target Directories */}
+                <div className="bg-[#07080c] border border-slate-800/80 rounded-xl p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <FolderSync className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Remote Target Directories</span>
+                    </label>
+                    <span className="text-[10px] text-slate-500">public_html root</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value="/ (Root: index.html, .htaccess), /assets, /backend, /php-backend"
+                      className="w-full bg-[#11131e] border border-slate-800 text-emerald-300 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleCopyFtpField('/, /assets, /backend, /php-backend', 'target')}
+                      className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                    >
+                      {copiedFtpTarget ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-300" />}
+                      <span>{copiedFtpTarget ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 6. Complete FTP Connection URL */}
+                <div className="bg-[#07080c] border border-slate-800/80 rounded-xl p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <Code className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Complete FTP Connection String</span>
+                    </label>
+                    <span className="text-[10px] text-amber-400 font-mono">1-Click Client URL</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value="ftp://cinjelly%40zerolord.com:@f33rinimi@ftp.zerolord.com:21/"
+                      className="w-full bg-[#11131e] border border-slate-800 text-amber-200 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleCopyFtpField('ftp://cinjelly%40zerolord.com:@f33rinimi@ftp.zerolord.com:21/', 'url')}
+                      className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                    >
+                      {copiedFtpUrl ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-300" />}
+                      <span>{copiedFtpUrl ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+            {/* CLI Build & Automated Deployment Terminal Box */}
+            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-base sm:text-lg font-display font-extrabold text-white flex items-center gap-2">
+                    <Terminal className="w-5 h-5 text-amber-400" />
+                    <span>Automated CLI Build & Deployment Pipeline</span>
+                  </h3>
+                  <p className="text-slate-400 text-xs mt-1">
+                    Execute the production compilation and deploy all assets directly to cPanel via Python FTP in a single step.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => handleCopyFtpField('npm run build && python3 deploy_via_ftp.py', 'cmd')}
+                  className="bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-300 font-bold py-2 px-4 rounded-xl text-xs transition cursor-pointer flex items-center gap-2 shrink-0"
+                >
+                  {copiedDeployCmd ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                  <span>{copiedDeployCmd ? 'Command Copied!' : 'Copy Shell Command'}</span>
+                </button>
+              </div>
+
+              {/* Terminal Code Display */}
+              <div className="bg-[#05060a] border border-slate-800 rounded-xl p-4 sm:p-5 font-mono text-xs text-slate-200 overflow-x-auto space-y-3">
+                <div className="flex items-center gap-2 text-slate-500 pb-2 border-b border-slate-800/60">
+                  <div className="w-2.5 h-2.5 rounded-full bg-rose-500"></div>
+                  <div className="w-2.5 h-2.5 rounded-full bg-amber-500"></div>
+                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-500"></div>
+                  <span className="text-[11px] ml-2 text-slate-400">bash — production build & deploy</span>
+                </div>
+                
+                <div className="text-amber-400 font-bold flex items-center gap-2 select-all">
+                  <span className="text-slate-600">$</span> npm run build && python3 deploy_via_ftp.py
+                </div>
+
+                <div className="text-slate-400 text-[11px] space-y-1 pt-2 border-t border-slate-800/40">
+                  <div className="text-emerald-400">✓ vite build — Compiles React frontend into /dist</div>
+                  <div className="text-emerald-400">✓ esbuild server.ts — Compiles Node/Express fallback bundle</div>
+                  <div className="text-emerald-400">✓ ftplib.FTP.connect — Logs into ftp.zerolord.com (cinjelly@zerolord.com)</div>
+                  <div className="text-emerald-400">✓ Deploy Step 1: Uploads dist/index.html to /index.html</div>
+                  <div className="text-emerald-400">✓ Deploy Step 2: Cleans & uploads static assets to /assets</div>
+                  <div className="text-emerald-400">✓ Deploy Step 3: Deploys PHP backend to /backend and /php-backend</div>
+                  <div className="text-emerald-400">✓ Deploy Step 4: Deploys root .htaccess with Apache mod_rewrite rules</div>
+                  <div className="text-amber-300 font-bold pt-1">🎉 FTP Deployment completed successfully!</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Architecture & .htaccess Reference */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              
+              {/* Architecture Details */}
+              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 space-y-4 shadow-xl">
+                <h4 className="text-sm font-bold text-white flex items-center gap-2 font-display">
+                  <Globe className="w-4 h-4 text-sky-400" />
+                  <span>cPanel Production Architecture</span>
+                </h4>
+                <p className="text-slate-400 text-xs leading-relaxed">
+                  The application operates as a high-performance hybrid deployment on cPanel:
+                </p>
+
+                <div className="space-y-2.5 text-xs">
+                  <div className="p-3 bg-[#07080c] rounded-xl border border-slate-800/80">
+                    <div className="font-bold text-white flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                      <span>Frontend Client (React 18 + Vite)</span>
+                    </div>
+                    <p className="text-slate-400 text-[11px] mt-1">
+                      Rendered statically from <code className="text-amber-300">/index.html</code> and <code className="text-amber-300">/assets/*</code> with client-side SPA routing fallback.
+                    </p>
+                  </div>
+
+                  <div className="p-3 bg-[#07080c] rounded-xl border border-slate-800/80">
+                    <div className="font-bold text-white flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-purple-500"></span>
+                      <span>Backend Engine (Serverless PHP 8+)</span>
+                    </div>
+                    <p className="text-slate-400 text-[11px] mt-1">
+                      Located in <code className="text-amber-300">/php-backend/</code> and <code className="text-amber-300">/backend/</code>. Handles all auth, SQLite database, payments, and Jellyfin proxy.
+                    </p>
+                  </div>
+
+                  <div className="p-3 bg-[#07080c] rounded-xl border border-slate-800/80">
+                    <div className="font-bold text-white flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                      <span>Daily Expiry Cron Job</span>
+                    </div>
+                    <p className="text-slate-400 text-[11px] mt-1">
+                      Run daily via cPanel Cron: <code className="text-emerald-300">/usr/local/bin/php /home/cinjelly/public_html/php-backend/expiry-cron.php</code>
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Root .htaccess Preview */}
+              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 space-y-4 shadow-xl">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-bold text-white flex items-center gap-2 font-display">
+                    <Code className="w-4 h-4 text-emerald-400" />
+                    <span>Root Apache .htaccess Mod_Rewrite</span>
+                  </h4>
+                  <span className="text-[10px] text-slate-500 font-mono">public_html/.htaccess</span>
+                </div>
+                <p className="text-slate-400 text-xs leading-relaxed">
+                  Directs all <code className="text-sky-300">/api/*</code> and <code className="text-sky-300">/jellyfin/*</code> traffic to PHP while serving React on client paths:
+                </p>
+
+                <div className="bg-[#05060a] border border-slate-800 rounded-xl p-3.5 font-mono text-[11px] text-slate-300 overflow-x-auto leading-relaxed select-all">
+                  <div>&lt;IfModule mod_rewrite.c&gt;</div>
+                  <div className="pl-4">RewriteEngine On</div>
+                  <div className="pl-4">RewriteBase /</div>
+                  <div className="pl-4 text-slate-500"># API &amp; Jellyfin reverse proxy routes</div>
+                  <div className="pl-4 text-amber-300">RewriteRule ^api(/.*)?$ php-backend/index.php [QSA,L]</div>
+                  <div className="pl-4 text-amber-300">RewriteRule ^jellyfin(/.*)?$ php-backend/index.php [QSA,L]</div>
+                  <div className="pl-4 text-amber-300">RewriteRule ^php-backend(/.*)?$ php-backend/index.php [QSA,L]</div>
+                  <div className="pl-4 text-amber-300">RewriteRule ^backend(/.*)?$ php-backend/index.php [QSA,L]</div>
+                  <div className="pl-4 text-slate-500"># React Router fallback</div>
+                  <div className="pl-4">RewriteCond %&#123;REQUEST_FILENAME&#125; !-f</div>
+                  <div className="pl-4">RewriteCond %&#123;REQUEST_FILENAME&#125; !-d</div>
+                  <div className="pl-4 text-emerald-400">RewriteRule . index.html [L]</div>
+                  <div>&lt;/IfModule&gt;</div>
+                </div>
+              </div>
+
+            </div>
+
           </div>
         )}
 

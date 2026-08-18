@@ -10,10 +10,11 @@ HTACCESS_CONTENT = """<IfModule mod_rewrite.c>
     RewriteEngine On
     RewriteBase /
 
-    # Route /api, /jellyfin, /php-backend, and /backend requests directly to backend/index.php
-    RewriteRule ^api/(.*)$ backend/index.php [QSA,L]
-    RewriteRule ^jellyfin/(.*)$ backend/index.php [QSA,L]
-    RewriteRule ^php-backend/(.*)$ backend/index.php [QSA,L]
+    # Route /api, /jellyfin, /php-backend, and /backend requests directly to php-backend/index.php
+    RewriteRule ^api(/.*)?$ php-backend/index.php [QSA,L]
+    RewriteRule ^jellyfin(/.*)?$ php-backend/index.php [QSA,L]
+    RewriteRule ^php-backend(/.*)?$ php-backend/index.php [QSA,L]
+    RewriteRule ^backend(/.*)?$ php-backend/index.php [QSA,L]
 
     # Standard React Router fallback for clean client URLs
     RewriteCond %{REQUEST_FILENAME} !-f

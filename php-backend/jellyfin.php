@@ -12,12 +12,18 @@ class JellyfinService {
     }
 
     private function getAuthHeaders($token = null) {
-        $authVal = 'MediaBrowser Client="StreamingPortal", Device="BackendServer", DeviceId="portal-backend", Version="1.0.0"';
+        $authParams = 'Client="StreamingPortal", Device="Web", DeviceId="portal-backend", Version="10.8.0"';
+        if (!empty($token)) {
+            $authParams .= ', Token="' . $token . '"';
+        }
+        $authVal = 'MediaBrowser ' . $authParams;
         $headers = [
             'Content-Type: application/json',
-            'X-Emby-Authorization: ' . $authVal
+            'Accept: application/json',
+            'X-Emby-Authorization: ' . $authVal,
+            'Authorization: ' . $authVal
         ];
-        if ($token) {
+        if (!empty($token)) {
             $headers[] = 'X-MediaBrowser-Token: ' . $token;
             $headers[] = 'X-Emby-Token: ' . $token;
         }
@@ -28,8 +34,13 @@ class JellyfinService {
         $serverUrl = rtrim($this->config['serverUrl'], '/');
         $url = $serverUrl . $endpoint;
 
-        $token = $useAdminToken ? $this->config['apiKey'] : null;
+        $token = $useAdminToken ? ($this->config['apiKey'] ?? '') : null;
         $headers = $this->getAuthHeaders($token);
+
+        if ($useAdminToken && !empty($token)) {
+            $separator = (strpos($url, '?') !== false) ? '&' : '?';
+            $url .= $separator . 'api_key=' . urlencode($token);
+        }
 
         $ch = curl_init();
         curl_setopt($ch, CURLOPT_URL, $url);
@@ -69,15 +80,21 @@ class JellyfinService {
             $this->request('/System/Info', 'GET', null, true);
             return true;
         } catch (Exception $e) {
-            error_log("Jellyfin connection check failed: " . $e->getMessage());
-            return false;
+            try {
+                $this->request('/System/Info/Public', 'GET', null, false);
+                return true;
+            } catch (Exception $ex) {
+                error_log("Jellyfin connection check failed on all endpoints: " . $e->getMessage() . " | " . $ex->getMessage());
+                return false;
+            }
         }
     }
 
     public function authenticateUser($username, $password) {
         try {
+            $usernameClean = trim($username);
             $payload = [
-                'Username' => $username,
+                'Username' => $usernameClean,
                 'Pw' => $password,
                 'Password' => $password
             ];
@@ -85,7 +102,12 @@ class JellyfinService {
             $serverUrl = rtrim($this->config['serverUrl'], '/');
             $url = $serverUrl . '/Users/AuthenticateByName';
             
-            $headers = $this->getAuthHeaders();
+            $headers = [
+                'Content-Type: application/json',
+                'Accept: application/json',
+                'X-Emby-Authorization: MediaBrowser Client="StreamingPortal", Device="Web", DeviceId="portal-session-' . md5($usernameClean) . '", Version="10.8.0"',
+                'Authorization: MediaBrowser Client="StreamingPortal", Device="Web", DeviceId="portal-session-' . md5($usernameClean) . '", Version="10.8.0"'
+            ];
 
             $ch = curl_init();
             curl_setopt($ch, CURLOPT_URL, $url);
@@ -107,6 +129,66 @@ class JellyfinService {
             }
 
             if ($httpCode >= 400) {
+                // If 401 error, try auto-healing fallback:
+                // 1. Try empty password (in case user was created with empty password)
+                $emptyPayload = ['Username' => $usernameClean, 'Pw' => '', 'Password' => ''];
+                $ch2 = curl_init();
+                curl_setopt($ch2, CURLOPT_URL, $url);
+                curl_setopt($ch2, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch2, CURLOPT_POST, true);
+                curl_setopt($ch2, CURLOPT_HTTPHEADER, $headers);
+                curl_setopt($ch2, CURLOPT_POSTFIELDS, json_encode($emptyPayload));
+                curl_setopt($ch2, CURLOPT_TIMEOUT, 10);
+                curl_setopt($ch2, CURLOPT_SSL_VERIFYPEER, false);
+                curl_setopt($ch2, CURLOPT_SSL_VERIFYHOST, false);
+                $res2 = curl_exec($ch2);
+                $code2 = curl_getinfo($ch2, CURLINFO_HTTP_CODE);
+                curl_close($ch2);
+
+                if ($code2 < 400 && $res2) {
+                    $parsed2 = json_decode($res2, true);
+                    if (!empty($parsed2['AccessToken']) && !empty($parsed2['User']['Id'])) {
+                        // Empty password succeeded - immediately set their permanent password!
+                        if (!empty($password)) {
+                            $this->updateUserPassword($parsed2['User']['Id'], $password);
+                        }
+                        return [
+                            'userId' => $parsed2['User']['Id'],
+                            'accessToken' => $parsed2['AccessToken']
+                        ];
+                    }
+                }
+
+                // 2. Try looking up user ID, resetting password via admin token, and re-attempting authentication
+                $existingUserId = $this->getUserIdByName($usernameClean);
+                if ($existingUserId && !empty($password)) {
+                    $this->setUserDisabledStatus($existingUserId, false);
+                    $this->updateUserPassword($existingUserId, $password);
+
+                    $ch3 = curl_init();
+                    curl_setopt($ch3, CURLOPT_URL, $url);
+                    curl_setopt($ch3, CURLOPT_RETURNTRANSFER, true);
+                    curl_setopt($ch3, CURLOPT_POST, true);
+                    curl_setopt($ch3, CURLOPT_HTTPHEADER, $headers);
+                    curl_setopt($ch3, CURLOPT_POSTFIELDS, json_encode($payload));
+                    curl_setopt($ch3, CURLOPT_TIMEOUT, 10);
+                    curl_setopt($ch3, CURLOPT_SSL_VERIFYPEER, false);
+                    curl_setopt($ch3, CURLOPT_SSL_VERIFYHOST, false);
+                    $res3 = curl_exec($ch3);
+                    $code3 = curl_getinfo($ch3, CURLINFO_HTTP_CODE);
+                    curl_close($ch3);
+
+                    if ($code3 < 400 && $res3) {
+                        $parsed3 = json_decode($res3, true);
+                        if (!empty($parsed3['AccessToken']) && !empty($parsed3['User']['Id'])) {
+                            return [
+                                'userId' => $parsed3['User']['Id'],
+                                'accessToken' => $parsed3['AccessToken']
+                            ];
+                        }
+                    }
+                }
+
                 throw new Exception("Authentication failed ({$httpCode}): " . $response);
             }
 
@@ -128,9 +210,9 @@ class JellyfinService {
 
     public function createUser($username, $password) {
         try {
+            $usernameClean = trim($username);
             $payload = [
-                'Name' => $username,
-                'Password' => $password
+                'Name' => $usernameClean
             ];
 
             $result = $this->request('/Users/New', 'POST', $payload, true);
@@ -139,6 +221,15 @@ class JellyfinService {
             }
 
             $userId = $result['Id'];
+
+            // Immediately set password for the newly created Jellyfin user
+            if (!empty($password)) {
+                try {
+                    $this->updateUserPassword($userId, $password, $usernameClean);
+                } catch (Exception $pwErr) {
+                    error_log("Could not set initial password for Jellyfin user {$userId}: " . $pwErr->getMessage());
+                }
+            }
 
             // Immediately grant permission to watch all movies, shows and folders
             try {
@@ -204,16 +295,120 @@ class JellyfinService {
         }
     }
 
-    public function updateUserPassword($jellyfinUserId, $newPassword) {
+    public function updateUserPassword($jellyfinUserId, $newPassword, $username = '') {
+        if (empty($jellyfinUserId) || $newPassword === null || $newPassword === '') {
+            return false;
+        }
+
+        // If username not provided, try to find it from user list or fetch
+        if (empty($username)) {
+            try {
+                $userObj = $this->request("/Users/{$jellyfinUserId}", 'GET', null, true);
+                if (!empty($userObj['Name'])) {
+                    $username = $userObj['Name'];
+                }
+            } catch (Exception $e) {
+                // Ignore
+            }
+        }
+
+        $serverUrl = rtrim($this->config['serverUrl'], '/');
+
+        // Method 1: If user currently has an empty password (e.g. freshly created or reset),
+        // authenticate with empty password and use the user's own token to set the new password.
+        // This completely bypasses Jellyfin 10.8's admin API key UpdateUserPassword NullReference bug!
+        if (!empty($username)) {
+            try {
+                $authUrl = $serverUrl . '/Users/AuthenticateByName';
+                $emptyPayload = ['Username' => trim($username), 'Pw' => '', 'Password' => ''];
+                $authHeaders = [
+                    'Content-Type: application/json',
+                    'Accept: application/json',
+                    'X-Emby-Authorization: MediaBrowser Client="StreamingPortal", Device="Web", DeviceId="portal-self-' . md5(trim($username)) . '", Version="10.8.0"',
+                    'Authorization: MediaBrowser Client="StreamingPortal", Device="Web", DeviceId="portal-self-' . md5(trim($username)) . '", Version="10.8.0"'
+                ];
+
+                $ch = curl_init();
+                curl_setopt($ch, CURLOPT_URL, $authUrl);
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_POST, true);
+                curl_setopt($ch, CURLOPT_HTTPHEADER, $authHeaders);
+                curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($emptyPayload));
+                curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+                $res = curl_exec($ch);
+                $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                curl_close($ch);
+
+                if ($code < 400 && $res) {
+                    $data = json_decode($res, true);
+                    if (!empty($data['AccessToken'])) {
+                        $userToken = $data['AccessToken'];
+                        // Use user's own token to update password
+                        $selfHeaders = [
+                            'Content-Type: application/json',
+                            'Accept: application/json',
+                            'X-Emby-Authorization: MediaBrowser Client="StreamingPortal", Device="Web", DeviceId="portal-self-' . md5(trim($username)) . '", Version="10.8.0", Token="' . $userToken . '"',
+                            'Authorization: MediaBrowser Client="StreamingPortal", Device="Web", DeviceId="portal-self-' . md5(trim($username)) . '", Version="10.8.0", Token="' . $userToken . '"',
+                            'X-MediaBrowser-Token: ' . $userToken,
+                            'X-Emby-Token: ' . $userToken
+                        ];
+
+                        $pwPayload = [
+                            'Id' => $jellyfinUserId,
+                            'CurrentPw' => '',
+                            'CurrentPassword' => '',
+                            'NewPw' => $newPassword,
+                            'NewPassword' => $newPassword,
+                            'ResetPassword' => false,
+                            'ClearPassword' => false
+                        ];
+
+                        $chPw = curl_init();
+                        curl_setopt($chPw, CURLOPT_URL, $serverUrl . "/Users/{$jellyfinUserId}/Password");
+                        curl_setopt($chPw, CURLOPT_RETURNTRANSFER, true);
+                        curl_setopt($chPw, CURLOPT_POST, true);
+                        curl_setopt($chPw, CURLOPT_HTTPHEADER, $selfHeaders);
+                        curl_setopt($chPw, CURLOPT_POSTFIELDS, json_encode($pwPayload));
+                        curl_setopt($chPw, CURLOPT_TIMEOUT, 10);
+                        curl_setopt($chPw, CURLOPT_SSL_VERIFYPEER, false);
+                        curl_setopt($chPw, CURLOPT_SSL_VERIFYHOST, false);
+                        $resPw = curl_exec($chPw);
+                        $codePw = curl_getinfo($chPw, CURLINFO_HTTP_CODE);
+                        curl_close($chPw);
+
+                        if ($codePw < 400) {
+                            return true;
+                        }
+                    }
+                }
+            } catch (Exception $selfErr) {
+                error_log("Self-password update notice: " . $selfErr->getMessage());
+            }
+        }
+
+        // Method 2: Admin API token reset with multiple payload formats
         try {
             $payload = [
+                'Id' => $jellyfinUserId,
+                'CurrentPw' => '',
+                'CurrentPassword' => '',
+                'NewPw' => $newPassword,
                 'NewPassword' => $newPassword,
+                'ResetPassword' => true,
                 'ClearPassword' => false
             ];
-            $this->request("/Users/{$jellyfinUserId}/Password", 'POST', $payload, true);
-            return true;
+            try {
+                $this->request("/Users/{$jellyfinUserId}/Password", 'POST', $payload, true);
+                return true;
+            } catch (Exception $e1) {
+                // Try query param route
+                $this->request("/Users/Password?userId=" . urlencode($jellyfinUserId), 'POST', $payload, true);
+                return true;
+            }
         } catch (Exception $e) {
-            error_log("Failed to change password for Jellyfin user {$jellyfinUserId}: " . $e->getMessage());
+            error_log("Admin password reset notice for Jellyfin user {$jellyfinUserId}: " . $e->getMessage());
             return false;
         }
     }

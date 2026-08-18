@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { User, Key, Eye, EyeOff, Loader2, ShieldCheck, Tv, AlertCircle, Sparkles, ArrowLeft } from 'lucide-react';
+import { apiFetch, setSessionToken } from '../lib/api';
 
 interface SetupWizardProps {
   onSetupSuccess: () => void;
@@ -30,7 +31,7 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
   const verifyEnvStatus = async () => {
     try {
       setCheckingEnv(true);
-      const response = await fetch('/api/status');
+      const response = await apiFetch('/api/status');
       const data = await response.json();
       setIsEnvConfigured(!!data.configured);
       if (data.serverUrl) setServerUrl(data.serverUrl);
@@ -58,7 +59,7 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
     }
     setSavingConfig(true);
     try {
-      const response = await fetch('/api/admin/config', {
+      const response = await apiFetch('/api/admin/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -94,7 +95,7 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
 
     setLoading(true);
     try {
-      const response = await fetch('/api/setup', {
+      const response = await apiFetch('/api/setup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -108,6 +109,10 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.error || 'Administrator account creation failed');
+      }
+
+      if (data.sessionToken) {
+        setSessionToken(data.sessionToken);
       }
 
       onSetupSuccess();

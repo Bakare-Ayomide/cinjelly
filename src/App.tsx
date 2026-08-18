@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Loader2, Tv, Database, RefreshCw, ArrowLeft } from 'lucide-react';
 import { User, SystemStatus } from './types';
+import { apiFetch, clearSessionToken, setSessionToken } from './lib/api';
 import SetupWizard from './components/SetupWizard';
 import LandingPage from './components/LandingPage';
 import UserPortal from './components/UserPortal';
@@ -20,7 +21,7 @@ export default function App() {
     try {
       setDbError(null);
       // 1. Check system setup status
-      const statusRes = await fetch('/api/status');
+      const statusRes = await apiFetch('/api/status');
       if (!statusRes.ok) {
         const errorData = await statusRes.json().catch(() => ({}));
         throw new Error(errorData.error || 'MySQL database is currently offline or access is denied.');
@@ -30,12 +31,13 @@ export default function App() {
 
       // 2. If configured, attempt to load active user session
       if (statusData.configured && statusData.hasAdmin) {
-        const userRes = await fetch('/api/auth/me');
+        const userRes = await apiFetch('/api/auth/me');
         if (userRes.ok) {
           const userData = await userRes.json();
           setCurrentUser(userData.user);
           setJellyfinToken(userData.jellyfinToken || '');
         } else {
+          clearSessionToken();
           setCurrentUser(null);
           setJellyfinToken('');
         }
@@ -62,7 +64,10 @@ export default function App() {
   }, []);
 
   // Handle successful login
-  const handleLoginSuccess = (user: User, token: string) => {
+  const handleLoginSuccess = (user: User, token: string, sessionToken?: string) => {
+    if (sessionToken) {
+      setSessionToken(sessionToken);
+    }
     setCurrentUser(user);
     setJellyfinToken(token);
     // Redirect to home portal
@@ -70,7 +75,10 @@ export default function App() {
   };
 
   // Handle successful registration
-  const handleRegisterSuccess = (user: User) => {
+  const handleRegisterSuccess = (user: User, sessionToken?: string) => {
+    if (sessionToken) {
+      setSessionToken(sessionToken);
+    }
     setCurrentUser(user);
     setJellyfinToken(''); // Initial signup has no token in session until they verify password or renew
     window.location.hash = '#portal';
@@ -79,10 +87,11 @@ export default function App() {
   // Handle logout
   const handleLogout = async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await apiFetch('/api/auth/logout', { method: 'POST' });
     } catch (err) {
       console.error('Logout error:', err);
     }
+    clearSessionToken();
     setCurrentUser(null);
     setJellyfinToken('');
     window.location.hash = '';
@@ -91,7 +100,7 @@ export default function App() {
   // Reload user profile (e.g. after payment renewal)
   const reloadUserProfile = async () => {
     try {
-      const userRes = await fetch('/api/auth/me');
+      const userRes = await apiFetch('/api/auth/me');
       if (userRes.ok) {
         const userData = await userRes.json();
         setCurrentUser(userData.user);

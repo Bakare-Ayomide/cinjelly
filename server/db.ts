@@ -44,6 +44,38 @@ export interface JellyfinConfig {
   monnifySecretKey?: string;
   monnifyMode?: string;
   subscriptionAmount?: number;
+  // Paystack & Custom Payment Settings
+  paystackEnabled?: number;
+  paystackPublicKey?: string;
+  paystackSecretKey?: string;
+  paystackMode?: string;
+  customPaymentEnabled?: number;
+  customPaymentBtnName?: string;
+  customPaymentUrl?: string;
+  customPaymentTarget?: string;
+  // Squad Payment Settings
+  squadEnabled?: number;
+  squadSecretKey?: string;
+  squadApiKey?: string;
+  squadPublicKey?: string;
+  squadMode?: string;
+  // Squad SFTP Settings
+  squadSftpEnabled?: number;
+  squadSftpHost?: string;
+  squadSftpPort?: number;
+  squadSftpUsername?: string;
+  squadSftpPassword?: string;
+  squadSftpPrivateKey?: string;
+  squadSftpRemoteDir?: string;
+  squadSftpProcessingDir?: string;
+  squadSftpGpgPrivateKey?: string;
+  squadSftpGpgPassphrase?: string;
+  squadSftpPollInterval?: number;
+  squadSftpLastSync?: string;
+  squadSftpLastFile?: string;
+  squadSftpLastTxRef?: string;
+  squadSftpLastError?: string;
+  squadSftpLastStatus?: string;
 }
 
 export interface UserRecord {
@@ -108,6 +140,46 @@ export interface BroadcastNotificationRecord {
   createdAt: string;
 }
 
+export interface PendingPaymentRecord {
+  transactionRef: string;
+  userId: string;
+  username: string;
+  email: string;
+  amount: number;
+  gateway: string;
+  status: string;
+  createdAt: string;
+}
+
+export interface SquadMandateRecord {
+  id: string;
+  userId: string;
+  mandateId: string;
+  mandateReference?: string;
+  accountNumber?: string;
+  bankCode?: string;
+  bankName?: string;
+  accountName?: string;
+  amount: number;
+  status: 'pending' | 'pending_otp' | 'active' | 'cancelled' | 'failed';
+  startDate?: string;
+  endDate?: string;
+  lastDebitDate?: string;
+  nextDebitDate?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SquadSftpLogRecord {
+  id: string;
+  event: string;
+  status: 'info' | 'success' | 'warning' | 'error';
+  filename?: string;
+  transactionRef?: string;
+  message: string;
+  createdAt: string;
+}
+
 export let mysqlAvailable = false;
 export let mysqlErrorMsg: string | null = null;
 
@@ -125,6 +197,10 @@ export const localCommissions: CommissionRecord[] = [];
 export const localMediaRequests: MediaRequestRecord[] = [];
 export const localBroadcastNotifications: BroadcastNotificationRecord[] = [];
 export const localSessions = new Map<string, { userId: string; expiresAt: number; jellyfinToken: string }>();
+export const localProcessedTxs = new Set<string>();
+export const localPendingPayments = new Map<string, PendingPaymentRecord>();
+export const localSquadMandates: SquadMandateRecord[] = [];
+export const localSquadSftpLogs: SquadSftpLogRecord[] = [];
 
 // Create connection pool to the user's MySQL database
 export const pool = mysql.createPool({
@@ -229,6 +305,73 @@ export async function initDb() {
     try { await pool.query("ALTER TABLE system_config ADD COLUMN monnifySecretKey TEXT NULL"); } catch (e) {}
     try { await pool.query("ALTER TABLE system_config ADD COLUMN monnifyMode VARCHAR(50) NOT NULL DEFAULT 'live'"); } catch (e) {}
     try { await pool.query("ALTER TABLE system_config ADD COLUMN subscriptionAmount DECIMAL(10,2) NOT NULL DEFAULT 600.00"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN paystackEnabled TINYINT(1) NOT NULL DEFAULT 0"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN paystackPublicKey VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN paystackSecretKey TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN paystackMode VARCHAR(50) NOT NULL DEFAULT 'live'"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN customPaymentEnabled TINYINT(1) NOT NULL DEFAULT 0"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN customPaymentBtnName VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN customPaymentUrl TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN customPaymentTarget VARCHAR(50) NOT NULL DEFAULT '_blank'"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadEnabled TINYINT(1) NOT NULL DEFAULT 0"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSecretKey TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadApiKey TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadMode VARCHAR(50) NOT NULL DEFAULT 'live'"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpEnabled TINYINT(1) NOT NULL DEFAULT 0"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpHost VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpPort INT NOT NULL DEFAULT 22"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpUsername VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpPassword TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpPrivateKey TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpRemoteDir VARCHAR(255) NOT NULL DEFAULT '/notifications'"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpProcessingDir VARCHAR(255) NOT NULL DEFAULT './storage/sftp'"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpGpgPrivateKey TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpGpgPassphrase TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpPollInterval INT NOT NULL DEFAULT 15"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpLastSync VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpLastFile VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpLastTxRef VARCHAR(255) NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpLastError TEXT NULL"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpLastStatus VARCHAR(50) NOT NULL DEFAULT 'Idle'"); } catch (e) {}
+
+    // Create squad_sftp_logs table for diagnostic logging
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS squad_sftp_logs (
+        id VARCHAR(255) PRIMARY KEY,
+        event VARCHAR(100) NOT NULL,
+        status VARCHAR(50) NOT NULL DEFAULT 'info',
+        filename VARCHAR(255) NULL,
+        transactionRef VARCHAR(255) NULL,
+        message TEXT NOT NULL,
+        createdAt VARCHAR(255) NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Create processed_transactions table to prevent duplicate webhooks / idempotency lock
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS processed_transactions (
+        reference VARCHAR(255) PRIMARY KEY,
+        gateway VARCHAR(50) NOT NULL,
+        userId VARCHAR(255) NULL,
+        amount DECIMAL(10,2) NULL,
+        status VARCHAR(50) NOT NULL,
+        createdAt VARCHAR(255) NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Create pending_payments table for storing checkout initiation records
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS pending_payments (
+        transactionRef VARCHAR(255) PRIMARY KEY,
+        userId VARCHAR(255) NOT NULL,
+        username VARCHAR(255) NOT NULL,
+        email VARCHAR(255) NOT NULL,
+        amount DECIMAL(10,2) NOT NULL,
+        gateway VARCHAR(50) NOT NULL DEFAULT 'squad',
+        status VARCHAR(50) NOT NULL DEFAULT 'pending',
+        createdAt VARCHAR(255) NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
 
     // Create persistent sessions table to keep user logins intact across server restarts/compiles
     await pool.query(`
@@ -282,6 +425,28 @@ export async function initDb() {
     `);
 
     try { await pool.query("ALTER TABLE broadcast_notifications ADD COLUMN targetUserId VARCHAR(255) NULL"); } catch (e) {}
+
+    // Create squad_mandates table for Direct Debit recurring billing
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS squad_mandates (
+        id VARCHAR(255) PRIMARY KEY,
+        userId VARCHAR(255) NOT NULL,
+        mandateId VARCHAR(255) NOT NULL,
+        mandateReference VARCHAR(255) NULL,
+        accountNumber VARCHAR(50) NULL,
+        bankCode VARCHAR(50) NULL,
+        bankName VARCHAR(255) NULL,
+        accountName VARCHAR(255) NULL,
+        amount DECIMAL(10,2) NOT NULL DEFAULT 600.00,
+        status VARCHAR(50) NOT NULL DEFAULT 'pending',
+        startDate VARCHAR(255) NULL,
+        endDate VARCHAR(255) NULL,
+        lastDebitDate VARCHAR(255) NULL,
+        nextDebitDate VARCHAR(255) NULL,
+        createdAt VARCHAR(255) NOT NULL,
+        updatedAt VARCHAR(255) NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
     
     console.log('[MySQL] Database tables checked and ready.');
     mysqlAvailable = true;
@@ -381,7 +546,35 @@ export const db = {
             monnifyContractCode: rows[0].monnifyContractCode || '',
             monnifySecretKey: rows[0].monnifySecretKey || '',
             monnifyMode: rows[0].monnifyMode || 'live',
-            subscriptionAmount: rows[0].subscriptionAmount !== undefined ? Number(rows[0].subscriptionAmount) : 600.00
+            subscriptionAmount: rows[0].subscriptionAmount !== undefined ? Number(rows[0].subscriptionAmount) : 600.00,
+            customPaymentEnabled: rows[0].customPaymentEnabled !== undefined ? Number(rows[0].customPaymentEnabled) : 0,
+            customPaymentBtnName: rows[0].customPaymentBtnName || 'Pay via Paystack',
+            customPaymentUrl: rows[0].customPaymentUrl || '',
+            customPaymentTarget: rows[0].customPaymentTarget || '_blank',
+            paystackEnabled: rows[0].paystackEnabled !== undefined ? Number(rows[0].paystackEnabled) : 0,
+            paystackPublicKey: rows[0].paystackPublicKey || '',
+            paystackSecretKey: rows[0].paystackSecretKey || '',
+            paystackMode: rows[0].paystackMode || 'live',
+            squadEnabled: rows[0].squadEnabled !== undefined ? Number(rows[0].squadEnabled) : 0,
+            squadSecretKey: rows[0].squadSecretKey || '',
+            squadApiKey: rows[0].squadApiKey || '',
+            squadMode: rows[0].squadMode || 'live',
+            squadSftpEnabled: rows[0].squadSftpEnabled !== undefined ? Number(rows[0].squadSftpEnabled) : 0,
+            squadSftpHost: rows[0].squadSftpHost || '',
+            squadSftpPort: rows[0].squadSftpPort ? Number(rows[0].squadSftpPort) : 22,
+            squadSftpUsername: rows[0].squadSftpUsername || '',
+            squadSftpPassword: rows[0].squadSftpPassword || '',
+            squadSftpPrivateKey: rows[0].squadSftpPrivateKey || '',
+            squadSftpRemoteDir: rows[0].squadSftpRemoteDir || '/notifications',
+            squadSftpProcessingDir: rows[0].squadSftpProcessingDir || './storage/sftp',
+            squadSftpGpgPrivateKey: rows[0].squadSftpGpgPrivateKey || '',
+            squadSftpGpgPassphrase: rows[0].squadSftpGpgPassphrase || '',
+            squadSftpPollInterval: rows[0].squadSftpPollInterval ? Number(rows[0].squadSftpPollInterval) : 15,
+            squadSftpLastSync: rows[0].squadSftpLastSync || '',
+            squadSftpLastFile: rows[0].squadSftpLastFile || '',
+            squadSftpLastTxRef: rows[0].squadSftpLastTxRef || '',
+            squadSftpLastError: rows[0].squadSftpLastError || '',
+            squadSftpLastStatus: rows[0].squadSftpLastStatus || 'Idle'
           };
         }
       } catch (err) {
@@ -429,9 +622,14 @@ export const db = {
         smtpEnabled, smtpHost, smtpPort, smtpSecure, smtpUser, smtpPass, smtpFromName, smtpFromEmail,
         emailVerificationEnabled, emailVerificationSubject, emailVerificationTemplate,
         welcomeEmailSubject, welcomeEmailTemplate, notificationEmailSubject, notificationEmailTemplate,
-        monnifyEnabled, monnifyApiKey, monnifyContractCode, monnifySecretKey, monnifyMode, subscriptionAmount
+        monnifyEnabled, monnifyApiKey, monnifyContractCode, monnifySecretKey, monnifyMode, subscriptionAmount,
+        customPaymentEnabled, customPaymentBtnName, customPaymentUrl, customPaymentTarget,
+        paystackEnabled, paystackPublicKey, paystackSecretKey, paystackMode,
+        squadEnabled, squadSecretKey, squadApiKey, squadMode,
+        squadSftpEnabled, squadSftpHost, squadSftpPort, squadSftpUsername, squadSftpPassword, squadSftpPrivateKey,
+        squadSftpRemoteDir, squadSftpProcessingDir, squadSftpGpgPrivateKey, squadSftpGpgPassphrase, squadSftpPollInterval
       )
-      VALUES ('main', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES ('main', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         serverUrl = VALUES(serverUrl),
         adminUsername = VALUES(adminUsername),
@@ -470,7 +668,30 @@ export const db = {
         monnifyContractCode = VALUES(monnifyContractCode),
         monnifySecretKey = VALUES(monnifySecretKey),
         monnifyMode = VALUES(monnifyMode),
-        subscriptionAmount = VALUES(subscriptionAmount)
+        subscriptionAmount = VALUES(subscriptionAmount),
+        customPaymentEnabled = VALUES(customPaymentEnabled),
+        customPaymentBtnName = VALUES(customPaymentBtnName),
+        customPaymentUrl = VALUES(customPaymentUrl),
+        customPaymentTarget = VALUES(customPaymentTarget),
+        paystackEnabled = VALUES(paystackEnabled),
+        paystackPublicKey = VALUES(paystackPublicKey),
+        paystackSecretKey = VALUES(paystackSecretKey),
+        paystackMode = VALUES(paystackMode),
+        squadEnabled = VALUES(squadEnabled),
+        squadSecretKey = VALUES(squadSecretKey),
+        squadApiKey = VALUES(squadApiKey),
+        squadMode = VALUES(squadMode),
+        squadSftpEnabled = VALUES(squadSftpEnabled),
+        squadSftpHost = VALUES(squadSftpHost),
+        squadSftpPort = VALUES(squadSftpPort),
+        squadSftpUsername = VALUES(squadSftpUsername),
+        squadSftpPassword = IF(VALUES(squadSftpPassword) IS NOT NULL AND VALUES(squadSftpPassword) != '', VALUES(squadSftpPassword), squadSftpPassword),
+        squadSftpPrivateKey = IF(VALUES(squadSftpPrivateKey) IS NOT NULL AND VALUES(squadSftpPrivateKey) != '', VALUES(squadSftpPrivateKey), squadSftpPrivateKey),
+        squadSftpRemoteDir = VALUES(squadSftpRemoteDir),
+        squadSftpProcessingDir = VALUES(squadSftpProcessingDir),
+        squadSftpGpgPrivateKey = IF(VALUES(squadSftpGpgPrivateKey) IS NOT NULL AND VALUES(squadSftpGpgPrivateKey) != '', VALUES(squadSftpGpgPrivateKey), squadSftpGpgPrivateKey),
+        squadSftpGpgPassphrase = IF(VALUES(squadSftpGpgPassphrase) IS NOT NULL AND VALUES(squadSftpGpgPassphrase) != '', VALUES(squadSftpGpgPassphrase), squadSftpGpgPassphrase),
+        squadSftpPollInterval = VALUES(squadSftpPollInterval)
     `, [
       config.serverUrl, 
       config.adminUsername, 
@@ -509,8 +730,60 @@ export const db = {
       config.monnifyContractCode || null,
       config.monnifySecretKey || null,
       config.monnifyMode || 'live',
-      config.subscriptionAmount !== undefined ? Number(config.subscriptionAmount) : 600.00
+      config.subscriptionAmount !== undefined ? Number(config.subscriptionAmount) : 600.00,
+      config.customPaymentEnabled !== undefined ? Number(config.customPaymentEnabled) : 0,
+      config.customPaymentBtnName || null,
+      config.customPaymentUrl || null,
+      config.customPaymentTarget || '_blank',
+      config.paystackEnabled !== undefined ? Number(config.paystackEnabled) : 0,
+      config.paystackPublicKey || null,
+      config.paystackSecretKey || null,
+      config.paystackMode || 'live',
+      config.squadEnabled !== undefined ? Number(config.squadEnabled) : 0,
+      config.squadSecretKey || null,
+      config.squadApiKey || null,
+      config.squadMode || 'live',
+      config.squadSftpEnabled !== undefined ? Number(config.squadSftpEnabled) : 0,
+      config.squadSftpHost || null,
+      config.squadSftpPort ? Number(config.squadSftpPort) : 22,
+      config.squadSftpUsername || null,
+      config.squadSftpPassword || null,
+      config.squadSftpPrivateKey || null,
+      config.squadSftpRemoteDir || '/notifications',
+      config.squadSftpProcessingDir || './storage/sftp',
+      config.squadSftpGpgPrivateKey || null,
+      config.squadSftpGpgPassphrase || null,
+      config.squadSftpPollInterval ? Number(config.squadSftpPollInterval) : 15
     ]);
+  },
+
+  async isTransactionProcessed(reference: string): Promise<boolean> {
+    if (!reference) return false;
+    if (!mysqlAvailable) {
+      return localProcessedTxs.has(reference);
+    }
+    try {
+      const [rows]: any = await pool.query('SELECT reference FROM processed_transactions WHERE reference = ?', [reference]);
+      return rows && rows.length > 0;
+    } catch (e) {
+      return false;
+    }
+  },
+
+  async recordProcessedTransaction(reference: string, gateway: string, userId: string, amount: number, status: string): Promise<void> {
+    if (!reference) return;
+    if (!mysqlAvailable) {
+      localProcessedTxs.add(reference);
+      return;
+    }
+    try {
+      await pool.query(
+        'INSERT INTO processed_transactions (reference, gateway, userId, amount, status, createdAt) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE status = VALUES(status)',
+        [reference, gateway, userId || null, amount || 0, status || 'success', new Date().toISOString()]
+      );
+    } catch (e) {
+      console.error('[MySQL] Error recording processed transaction:', e);
+    }
   },
 
   async getUsers(): Promise<UserRecord[]> {
@@ -873,5 +1146,292 @@ export const db = {
     }
     const [rows]: any = await pool.query('SELECT * FROM broadcast_notifications ORDER BY createdAt DESC');
     return rows;
+  },
+
+  async savePendingPayment(record: PendingPaymentRecord): Promise<void> {
+    if (!mysqlAvailable) {
+      localPendingPayments.set(record.transactionRef, record);
+      return;
+    }
+    try {
+      await pool.query(`
+        INSERT INTO pending_payments (transactionRef, userId, username, email, amount, gateway, status, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          userId = VALUES(userId),
+          username = VALUES(username),
+          email = VALUES(email),
+          amount = VALUES(amount),
+          gateway = VALUES(gateway),
+          status = VALUES(status)
+      `, [
+        record.transactionRef,
+        record.userId,
+        record.username,
+        record.email,
+        record.amount,
+        record.gateway || 'squad',
+        record.status || 'pending',
+        record.createdAt || new Date().toISOString()
+      ]);
+    } catch (err) {
+      console.error('Error saving pending payment to DB:', err);
+    }
+  },
+
+  async getPendingPayment(transactionRef: string): Promise<PendingPaymentRecord | null> {
+    if (!transactionRef) return null;
+    if (!mysqlAvailable) {
+      return localPendingPayments.get(transactionRef) || null;
+    }
+    try {
+      const [rows]: any = await pool.query('SELECT * FROM pending_payments WHERE transactionRef = ?', [transactionRef]);
+      if (rows && rows.length > 0) {
+        return {
+          transactionRef: rows[0].transactionRef,
+          userId: rows[0].userId,
+          username: rows[0].username,
+          email: rows[0].email,
+          amount: Number(rows[0].amount),
+          gateway: rows[0].gateway,
+          status: rows[0].status,
+          createdAt: rows[0].createdAt
+        };
+      }
+    } catch (err) {
+      console.error('Error fetching pending payment from DB:', err);
+    }
+    return null;
+  },
+
+  async updatePendingPaymentStatus(transactionRef: string, status: string): Promise<void> {
+    if (!transactionRef) return;
+    if (!mysqlAvailable) {
+      const rec = localPendingPayments.get(transactionRef);
+      if (rec) rec.status = status;
+      return;
+    }
+    try {
+      await pool.query('UPDATE pending_payments SET status = ? WHERE transactionRef = ?', [status, transactionRef]);
+    } catch (err) {
+      console.error('Error updating pending payment status in DB:', err);
+    }
+  },
+
+  async saveSquadMandate(mandate: SquadMandateRecord): Promise<void> {
+    if (!mandate || !mandate.id) return;
+    if (!mysqlAvailable) {
+      const idx = localSquadMandates.findIndex(m => m.id === mandate.id || (mandate.mandateId && m.mandateId === mandate.mandateId));
+      if (idx >= 0) {
+        localSquadMandates[idx] = { ...localSquadMandates[idx], ...mandate };
+      } else {
+        localSquadMandates.push(mandate);
+      }
+      return;
+    }
+    try {
+      await pool.query(`
+        INSERT INTO squad_mandates (id, userId, mandateId, mandateReference, accountNumber, bankCode, bankName, accountName, amount, status, startDate, endDate, lastDebitDate, nextDebitDate, createdAt, updatedAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          mandateId = VALUES(mandateId),
+          mandateReference = VALUES(mandateReference),
+          accountNumber = VALUES(accountNumber),
+          bankCode = VALUES(bankCode),
+          bankName = VALUES(bankName),
+          accountName = VALUES(accountName),
+          amount = VALUES(amount),
+          status = VALUES(status),
+          startDate = VALUES(startDate),
+          endDate = VALUES(endDate),
+          lastDebitDate = VALUES(lastDebitDate),
+          nextDebitDate = VALUES(nextDebitDate),
+          updatedAt = VALUES(updatedAt)
+      `, [
+        mandate.id,
+        mandate.userId,
+        mandate.mandateId,
+        mandate.mandateReference || null,
+        mandate.accountNumber || null,
+        mandate.bankCode || null,
+        mandate.bankName || null,
+        mandate.accountName || null,
+        mandate.amount || 600.00,
+        mandate.status || 'pending',
+        mandate.startDate || null,
+        mandate.endDate || null,
+        mandate.lastDebitDate || null,
+        mandate.nextDebitDate || null,
+        mandate.createdAt || new Date().toISOString(),
+        mandate.updatedAt || new Date().toISOString()
+      ]);
+    } catch (err) {
+      console.error('Error saving squad mandate to DB:', err);
+    }
+  },
+
+  async getSquadMandateByUserId(userId: string): Promise<SquadMandateRecord | null> {
+    if (!userId) return null;
+    if (!mysqlAvailable) {
+      return localSquadMandates.find(m => m.userId === userId && m.status !== 'cancelled') || null;
+    }
+    try {
+      const [rows]: any = await pool.query('SELECT * FROM squad_mandates WHERE userId = ? ORDER BY createdAt DESC LIMIT 1', [userId]);
+      if (rows && rows.length > 0) {
+        return rows[0] as SquadMandateRecord;
+      }
+    } catch (err) {
+      console.error('Error fetching squad mandate by userId from DB:', err);
+    }
+    return null;
+  },
+
+  async getSquadMandateByMandateId(mandateId: string): Promise<SquadMandateRecord | null> {
+    if (!mandateId) return null;
+    if (!mysqlAvailable) {
+      return localSquadMandates.find(m => m.mandateId === mandateId || m.id === mandateId) || null;
+    }
+    try {
+      const [rows]: any = await pool.query('SELECT * FROM squad_mandates WHERE mandateId = ? OR id = ? LIMIT 1', [mandateId, mandateId]);
+      if (rows && rows.length > 0) {
+        return rows[0] as SquadMandateRecord;
+      }
+    } catch (err) {
+      console.error('Error fetching squad mandate by mandateId from DB:', err);
+    }
+    return null;
+  },
+
+  async updateSquadMandate(idOrMandateId: string, updates: Partial<SquadMandateRecord>): Promise<void> {
+    if (!idOrMandateId) return;
+    const updatedAt = new Date().toISOString();
+    if (!mysqlAvailable) {
+      const idx = localSquadMandates.findIndex(m => m.id === idOrMandateId || m.mandateId === idOrMandateId);
+      if (idx >= 0) {
+        localSquadMandates[idx] = { ...localSquadMandates[idx], ...updates, updatedAt };
+      }
+      return;
+    }
+    try {
+      const fields: string[] = [];
+      const values: any[] = [];
+      for (const [key, val] of Object.entries(updates)) {
+        if (key !== 'id') {
+          fields.push(`${key} = ?`);
+          values.push(val);
+        }
+      }
+      fields.push('updatedAt = ?');
+      values.push(updatedAt);
+      values.push(idOrMandateId);
+      values.push(idOrMandateId);
+
+      await pool.query(`UPDATE squad_mandates SET ${fields.join(', ')} WHERE id = ? OR mandateId = ?`, values);
+    } catch (err) {
+      console.error('Error updating squad mandate in DB:', err);
+    }
+  },
+
+  async getAllSquadMandates(): Promise<SquadMandateRecord[]> {
+    if (!mysqlAvailable) {
+      return [...localSquadMandates];
+    }
+    try {
+      const [rows]: any = await pool.query('SELECT * FROM squad_mandates ORDER BY createdAt DESC');
+      return (rows || []) as SquadMandateRecord[];
+    } catch (err) {
+      console.error('Error fetching all squad mandates from DB:', err);
+      return [];
+    }
+  },
+
+  async getActiveSquadMandatesDueForRenewal(): Promise<SquadMandateRecord[]> {
+    const all = await this.getAllSquadMandates();
+    const active = all.filter(m => m.status === 'active');
+    return active;
+  },
+
+  async getUserByTransactionRef(transactionRef: string): Promise<UserRecord | undefined> {
+    if (!transactionRef) return undefined;
+    const cleanRef = transactionRef.trim();
+    if (!mysqlAvailable) {
+      return localUsers.find(u => u.transactionRef === cleanRef);
+    }
+    try {
+      const [rows]: any = await pool.query('SELECT * FROM users WHERE transactionRef = ? LIMIT 1', [cleanRef]);
+      if (rows && rows.length > 0) return rows[0];
+    } catch (e) {
+      console.error('Error fetching user by transactionRef from DB:', e);
+    }
+    return undefined;
+  },
+
+  async createSftpLog(log: SquadSftpLogRecord): Promise<void> {
+    if (!mysqlAvailable) {
+      localSquadSftpLogs.unshift(log);
+      if (localSquadSftpLogs.length > 200) localSquadSftpLogs.pop();
+      return;
+    }
+    try {
+      await pool.query(
+        'INSERT INTO squad_sftp_logs (id, event, status, filename, transactionRef, message, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [log.id, log.event, log.status, log.filename || null, log.transactionRef || null, log.message, log.createdAt]
+      );
+    } catch (e) {
+      console.error('Error inserting squad SFTP log:', e);
+    }
+  },
+
+  async getSftpLogs(limit: number = 100): Promise<SquadSftpLogRecord[]> {
+    if (!mysqlAvailable) {
+      return localSquadSftpLogs.slice(0, limit);
+    }
+    try {
+      const [rows]: any = await pool.query('SELECT * FROM squad_sftp_logs ORDER BY createdAt DESC LIMIT ?', [limit]);
+      return (rows || []) as SquadSftpLogRecord[];
+    } catch (e) {
+      console.error('Error fetching squad SFTP logs:', e);
+      return [];
+    }
+  },
+
+  async clearSftpLogs(): Promise<void> {
+    if (!mysqlAvailable) {
+      localSquadSftpLogs.length = 0;
+      return;
+    }
+    try {
+      await pool.query('DELETE FROM squad_sftp_logs');
+    } catch (e) {
+      console.error('Error clearing squad SFTP logs:', e);
+    }
+  },
+
+  async updateSftpStatus(updates: { lastSync?: string; lastFile?: string; lastTxRef?: string; lastError?: string; lastStatus?: string }): Promise<void> {
+    if (!mysqlAvailable) {
+      if (localSystemConfig) {
+        if (updates.lastSync !== undefined) localSystemConfig.squadSftpLastSync = updates.lastSync;
+        if (updates.lastFile !== undefined) localSystemConfig.squadSftpLastFile = updates.lastFile;
+        if (updates.lastTxRef !== undefined) localSystemConfig.squadSftpLastTxRef = updates.lastTxRef;
+        if (updates.lastError !== undefined) localSystemConfig.squadSftpLastError = updates.lastError;
+        if (updates.lastStatus !== undefined) localSystemConfig.squadSftpLastStatus = updates.lastStatus;
+      }
+      return;
+    }
+    try {
+      const fields: string[] = [];
+      const values: any[] = [];
+      if (updates.lastSync !== undefined) { fields.push('squadSftpLastSync = ?'); values.push(updates.lastSync); }
+      if (updates.lastFile !== undefined) { fields.push('squadSftpLastFile = ?'); values.push(updates.lastFile); }
+      if (updates.lastTxRef !== undefined) { fields.push('squadSftpLastTxRef = ?'); values.push(updates.lastTxRef); }
+      if (updates.lastError !== undefined) { fields.push('squadSftpLastError = ?'); values.push(updates.lastError); }
+      if (updates.lastStatus !== undefined) { fields.push('squadSftpLastStatus = ?'); values.push(updates.lastStatus); }
+
+      if (fields.length > 0) {
+        await pool.query(`UPDATE system_config SET ${fields.join(', ')} WHERE id = 'main'`, values);
+      }
+    } catch (e) {
+      console.error('Error updating squad SFTP status:', e);
+    }
   }
 };

@@ -1,11 +1,17 @@
 import { JellyfinConfig } from './db.js';
 
 // Generates the standard Authorization header required by Jellyfin
-function getAuthHeader(token?: string) {
-  const authVal = 'MediaBrowser Client="StreamingPortal", Device="BackendServer", DeviceId="portal-backend", Version="1.0.0"';
+function getAuthHeader(token?: string, username = '') {
+  let authParams = `Client="StreamingPortal", Device="Web", DeviceId="portal-${username ? Buffer.from(username).toString('hex').slice(0, 16) : 'backend'}", Version="10.8.0"`;
+  if (token) {
+    authParams += `, Token="${token}"`;
+  }
+  const authVal = `MediaBrowser ${authParams}`;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'X-Emby-Authorization': authVal
+    'Accept': 'application/json',
+    'X-Emby-Authorization': authVal,
+    'Authorization': authVal
   };
   if (token) {
     headers['X-MediaBrowser-Token'] = token;
@@ -22,16 +28,25 @@ export class JellyfinService {
   }
 
   // Helper for requests
-  private async request(endpoint: string, method: string, body?: any, useAdminToken = true) {
+  private async request(endpoint: string, method: string, body?: any, useAdminToken = true, timeoutMs = 12000) {
     const cleanUrl = this.config.serverUrl.replace(/\/$/, '');
-    const url = `${cleanUrl}${endpoint}`;
+    let url = `${cleanUrl}${endpoint}`;
     
     const token = useAdminToken ? this.config.apiKey : undefined;
     const headers = getAuthHeader(token);
 
+    if (useAdminToken && token) {
+      const sep = url.includes('?') ? '&' : '?';
+      url += `${sep}api_key=${encodeURIComponent(token)}`;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
     const options: RequestInit = {
       method,
       headers,
+      signal: controller.signal
     };
 
     if (body) {
@@ -41,7 +56,7 @@ export class JellyfinService {
     try {
       const response = await fetch(url, options);
       if (!response.ok) {
-        const errorText = await response.text();
+        const errorText = await response.text().catch(() => '');
         throw new Error(`Jellyfin Error (${response.status}): ${errorText || response.statusText}`);
       }
 
@@ -52,17 +67,25 @@ export class JellyfinService {
       }
       return null;
     } catch (error: any) {
-      console.error(`Jellyfin API Request failed [${method} ${endpoint}]:`, error.message);
-      throw error;
+      const isAbort = error.name === 'AbortError' || error.message?.includes('aborted');
+      const errorMsg = isAbort ? `Request timed out after ${timeoutMs / 1000}s` : error.message;
+      console.log(`[JellyfinService] Request Notice [${method} ${endpoint}]: ${errorMsg}`);
+      throw new Error(errorMsg);
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
   // Verify the provided Jellyfin configuration is valid (tries to fetch admin users/info)
   async verifyConnection(): Promise<boolean> {
+    const cleanUrl = this.config.serverUrl ? this.config.serverUrl.replace(/\/$/, '') : '';
+    if (!cleanUrl) return false;
+
+    // 1. Primary check: /System/Info with admin API key
+    let timeoutId: NodeJS.Timeout | null = null;
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500);
-      const cleanUrl = this.config.serverUrl.replace(/\/$/, '');
+      timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout for snappy check
       const url = `${cleanUrl}/System/Info`;
       const token = this.config.apiKey;
       const headers = getAuthHeader(token);
@@ -72,40 +95,114 @@ export class JellyfinService {
         headers,
         signal: controller.signal
       });
-      clearTimeout(timeoutId);
-      return response.ok;
-    } catch (err) {
-      console.error('Jellyfin connection validation timed out or failed:', err);
-      return false;
+      if (response.ok) {
+        return true;
+      }
+    } catch (err: any) {
+      // Gracefully continue to public endpoint fallback
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
     }
+
+    // 2. Secondary fallback check: /System/Info/Public (unauthenticated server ping)
+    let timeoutIdPublic: NodeJS.Timeout | null = null;
+    try {
+      const controllerPublic = new AbortController();
+      timeoutIdPublic = setTimeout(() => controllerPublic.abort(), 6000); // 6s timeout
+      const publicUrl = `${cleanUrl}/System/Info/Public`;
+      
+      const publicResponse = await fetch(publicUrl, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controllerPublic.signal
+      });
+      if (publicResponse.ok) {
+        return true;
+      }
+    } catch (publicErr: any) {
+      // Jellyfin server not reachable
+    } finally {
+      if (timeoutIdPublic) clearTimeout(timeoutIdPublic);
+    }
+
+    return false;
   }
 
   // Authenticate user with Jellyfin and get their token
   async authenticateUser(username: string, password: string): Promise<{ userId: string; accessToken: string }> {
+    let timeoutId: NodeJS.Timeout | null = null;
+    const cleanUsername = username.trim();
     try {
-      // Jellyfin uses POST to /Users/AuthenticateByName
-      // In Jellyfin, the payload can use either "Pw" or "Password". We provide both for max compatibility.
       const payload = {
-        Username: username,
+        Username: cleanUsername,
         Pw: password,
         Password: password
       };
 
       const cleanUrl = this.config.serverUrl.replace(/\/$/, '');
       const url = `${cleanUrl}/Users/AuthenticateByName`;
-      
-      // For authenticating users, we MUST set the user-specific authorization header
-      const headers = getAuthHeader();
+      const headers = getAuthHeader(undefined, cleanUsername);
+
+      const controller = new AbortController();
+      timeoutId = setTimeout(() => controller.abort(), 12000);
 
       const response = await fetch(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: controller.signal
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Authentication failed (${response.status}): ${errorText}`);
+        // Auto-heal fallback 1: Check if Jellyfin user was created with empty password
+        try {
+          const emptyRes = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ Username: cleanUsername, Pw: '', Password: '' }),
+            signal: controller.signal
+          });
+          if (emptyRes.ok) {
+            const emptyData = await emptyRes.json();
+            if (emptyData?.AccessToken && emptyData?.User?.Id) {
+              if (password) {
+                await this.updateUserPassword(emptyData.User.Id, password);
+              }
+              return {
+                userId: emptyData.User.Id,
+                accessToken: emptyData.AccessToken
+              };
+            }
+          }
+        } catch (e) {
+          // Ignore fallback error
+        }
+
+        // Auto-heal fallback 2: Admin password reset and enable account
+        const existingUserId = await this.getUserIdByName(cleanUsername);
+        if (existingUserId && password) {
+          await this.setUserDisabledStatus(existingUserId, false);
+          await this.updateUserPassword(existingUserId, password);
+
+          const retryRes = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload),
+            signal: controller.signal
+          });
+          if (retryRes.ok) {
+            const retryData = await retryRes.json();
+            if (retryData?.AccessToken && retryData?.User?.Id) {
+              return {
+                userId: retryData.User.Id,
+                accessToken: retryData.AccessToken
+              };
+            }
+          }
+        }
+
+        const errorText = await response.text().catch(() => '');
+        throw new Error(`Authentication failed (${response.status}): ${errorText || response.statusText}`);
       }
 
       const result = await response.json();
@@ -118,17 +215,21 @@ export class JellyfinService {
         accessToken: result.AccessToken
       };
     } catch (err: any) {
-      console.warn(`Jellyfin auth notice for user ${username}:`, err.message);
-      throw err;
+      const isAbort = err.name === 'AbortError' || err.message?.includes('aborted');
+      const errorMsg = isAbort ? 'Jellyfin server authentication timed out' : (err.message || 'Authentication error');
+      console.log(`[JellyfinService] Auth notice for ${username}: ${errorMsg}`);
+      throw new Error(errorMsg);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
     }
   }
 
   // Create a new user in Jellyfin
   async createUser(username: string, password: string): Promise<string> {
     try {
+      const cleanUsername = username.trim();
       const payload = {
-        Name: username,
-        Password: password
+        Name: cleanUsername
       };
 
       const result = await this.request('/Users/New', 'POST', payload, true);
@@ -137,6 +238,15 @@ export class JellyfinService {
       }
 
       const userId = result.Id;
+
+      // Immediately set user password
+      if (password) {
+        try {
+          await this.updateUserPassword(userId, password);
+        } catch (pwErr: any) {
+          console.warn(`Could not set initial password for Jellyfin user ${userId}:`, pwErr.message);
+        }
+      }
 
       // Immediately grant permission to watch all movies, shows and folders
       try {
@@ -208,16 +318,71 @@ export class JellyfinService {
     }
   }
 
-  // Update password for a Jellyfin user as Admin
-  async updateUserPassword(jellyfinUserId: string, newPassword: string): Promise<boolean> {
+  // Update password for a Jellyfin user
+  async updateUserPassword(jellyfinUserId: string, newPassword: string, username = ''): Promise<boolean> {
+    if (!jellyfinUserId || newPassword === undefined || newPassword === null || newPassword === '') {
+      return false;
+    }
+
+    if (!username) {
+      try {
+        const userObj = await this.request(`/Users/${jellyfinUserId}`, 'GET', undefined, true);
+        if (userObj?.Name) {
+          username = userObj.Name;
+        }
+      } catch (err) {
+        // Ignore
+      }
+    }
+
+    // Method 1: If user currently has an empty password, self-authenticate and update
+    if (username) {
+      try {
+        const authRes = await this.authenticateUser(username, '');
+        if (authRes?.accessToken) {
+          const selfHeaders = getAuthHeader(authRes.accessToken, username);
+          const cleanUrl = this.config.serverUrl.replace(/\/$/, '');
+          const pwPayload = {
+            Id: jellyfinUserId,
+            CurrentPw: '',
+            CurrentPassword: '',
+            NewPw: newPassword,
+            NewPassword: newPassword,
+            ResetPassword: false,
+            ClearPassword: false
+          };
+          const resp = await fetch(`${cleanUrl}/Users/${jellyfinUserId}/Password`, {
+            method: 'POST',
+            headers: selfHeaders,
+            body: JSON.stringify(pwPayload)
+          });
+          if (resp.ok) {
+            return true;
+          }
+        }
+      } catch (err) {
+        // Continue to method 2
+      }
+    }
+
+    // Method 2: Admin API token reset
     try {
-      // Jellyfin has POST to /Users/{Id}/Password
       const payload = {
+        Id: jellyfinUserId,
+        CurrentPw: '',
+        CurrentPassword: '',
+        NewPw: newPassword,
         NewPassword: newPassword,
+        ResetPassword: true,
         ClearPassword: false
       };
-      await this.request(`/Users/${jellyfinUserId}/Password`, 'POST', payload, true);
-      return true;
+      try {
+        await this.request(`/Users/${jellyfinUserId}/Password`, 'POST', payload, true);
+        return true;
+      } catch (err1) {
+        await this.request(`/Users/Password?userId=${encodeURIComponent(jellyfinUserId)}`, 'POST', payload, true);
+        return true;
+      }
     } catch (err: any) {
       console.error(`Failed to change password for Jellyfin user ${jellyfinUserId}:`, err.message);
       return false;

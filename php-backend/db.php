@@ -14,6 +14,7 @@ define('DB_NAME', 'zerolord_cinjelly');
 
 class DB {
     private static $pdo = null;
+    private static $inited = false;
 
     public static function getConnection() {
         if (self::$pdo === null) {
@@ -54,6 +55,14 @@ class DB {
     }
 
     public static function initDb() {
+        if (self::$inited) return;
+
+        $flagFile = sys_get_temp_dir() . '/cinjelly_db_v2.flag';
+        if (file_exists($flagFile) && (time() - filemtime($flagFile) < 3600)) {
+            self::$inited = true;
+            return;
+        }
+
         $pdo = self::getConnection();
         
         // Create users table
@@ -229,6 +238,132 @@ class DB {
         try {
             $pdo->exec("ALTER TABLE system_config ADD COLUMN subscriptionAmount DECIMAL(10,2) NOT NULL DEFAULT 600.00");
         } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN customPaymentEnabled TINYINT(1) NOT NULL DEFAULT 0");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN customPaymentBtnName VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN customPaymentUrl TEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN customPaymentTarget VARCHAR(50) NOT NULL DEFAULT '_blank'");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN paystackEnabled TINYINT(1) NOT NULL DEFAULT 0");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN paystackPublicKey VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN paystackSecretKey TEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN paystackMode VARCHAR(50) NOT NULL DEFAULT 'live'");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadEnabled TINYINT(1) NOT NULL DEFAULT 0");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadSecretKey TEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadApiKey TEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadMode VARCHAR(50) NOT NULL DEFAULT 'live'");
+        } catch (Exception $e) {}
+
+        // Squad SFTP Fallback Configuration Columns
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadSftpEnabled TINYINT(1) NOT NULL DEFAULT 0");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadSftpHost VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadSftpPort INT NOT NULL DEFAULT 22");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadSftpUsername VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadSftpPassword TEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadSftpPrivateKey LONGTEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadSftpRemoteDir VARCHAR(255) NOT NULL DEFAULT '/notifications'");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadSftpProcessingDir VARCHAR(255) NOT NULL DEFAULT './storage/sftp'");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadSftpGpgPrivateKey LONGTEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadSftpGpgPassphrase TEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadSftpPollInterval INT NOT NULL DEFAULT 15");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadSftpLastSync VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadSftpLastFile VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadSftpLastTxRef VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadSftpLastError TEXT NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN squadSftpLastStatus VARCHAR(50) NOT NULL DEFAULT 'Idle'");
+        } catch (Exception $e) {}
+
+        // Create squad_sftp_logs table
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS squad_sftp_logs (
+                id VARCHAR(255) PRIMARY KEY,
+                action VARCHAR(100) NOT NULL,
+                status VARCHAR(50) NOT NULL,
+                message TEXT NOT NULL,
+                filename VARCHAR(255) NULL,
+                txRef VARCHAR(255) NULL,
+                metadata LONGTEXT NULL,
+                createdAt VARCHAR(255) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        // Create processed_transactions table
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS processed_transactions (
+                reference VARCHAR(255) PRIMARY KEY,
+                gateway VARCHAR(50) NOT NULL,
+                userId VARCHAR(255) NULL,
+                amount DECIMAL(10,2) NULL,
+                status VARCHAR(50) NOT NULL,
+                createdAt VARCHAR(255) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        // Create pending_payments table
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS pending_payments (
+                transactionRef VARCHAR(255) PRIMARY KEY,
+                userId VARCHAR(255) NOT NULL,
+                username VARCHAR(255) NOT NULL,
+                email VARCHAR(255) NOT NULL,
+                amount DECIMAL(10,2) NOT NULL,
+                gateway VARCHAR(50) NOT NULL DEFAULT 'squad',
+                status VARCHAR(50) NOT NULL DEFAULT 'pending',
+                createdAt VARCHAR(255) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
 
         // Create persistent sessions table
         $pdo->exec("
@@ -285,6 +420,28 @@ class DB {
             $pdo->exec("ALTER TABLE broadcast_notifications ADD COLUMN targetUserId VARCHAR(255) NULL");
         } catch (Exception $e) {}
 
+        // Create squad_mandates table for Direct Debit recurring billing
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS squad_mandates (
+                id VARCHAR(255) PRIMARY KEY,
+                userId VARCHAR(255) NOT NULL,
+                mandateId VARCHAR(255) NOT NULL,
+                mandateReference VARCHAR(255) NULL,
+                accountNumber VARCHAR(50) NULL,
+                bankCode VARCHAR(50) NULL,
+                bankName VARCHAR(255) NULL,
+                accountName VARCHAR(255) NULL,
+                amount DECIMAL(10,2) NOT NULL DEFAULT 600.00,
+                status VARCHAR(50) NOT NULL DEFAULT 'pending',
+                startDate VARCHAR(255) NULL,
+                endDate VARCHAR(255) NULL,
+                lastDebitDate VARCHAR(255) NULL,
+                nextDebitDate VARCHAR(255) NULL,
+                createdAt VARCHAR(255) NOT NULL,
+                updatedAt VARCHAR(255) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
         // Seed default Jellyfin configurations if the system_config table is empty
         try {
             $count = $pdo->query("SELECT COUNT(*) FROM system_config")->fetchColumn();
@@ -303,6 +460,8 @@ class DB {
         } catch (Exception $e) {
             // Ignore seeding errors silently
         }
+        @file_put_contents($flagFile, '1');
+        self::$inited = true;
     }
 
     public static function hashPassword($password) {
@@ -395,7 +554,36 @@ class DB {
             'monnifyContractCode' => $row['monnifyContractCode'] ?? '',
             'monnifySecretKey' => $row['monnifySecretKey'] ?? '',
             'monnifyMode' => $row['monnifyMode'] ?? 'live',
-            'subscriptionAmount' => isset($row['subscriptionAmount']) ? (float)$row['subscriptionAmount'] : 600.00
+            'subscriptionAmount' => isset($row['subscriptionAmount']) ? (float)$row['subscriptionAmount'] : 600.00,
+            'customPaymentEnabled' => isset($row['customPaymentEnabled']) ? (int)$row['customPaymentEnabled'] : 0,
+            'customPaymentBtnName' => $row['customPaymentBtnName'] ?? 'Pay via Paystack',
+            'customPaymentUrl' => $row['customPaymentUrl'] ?? '',
+            'customPaymentTarget' => $row['customPaymentTarget'] ?? '_blank',
+            'paystackEnabled' => isset($row['paystackEnabled']) ? (int)$row['paystackEnabled'] : 0,
+            'paystackPublicKey' => $row['paystackPublicKey'] ?? '',
+            'paystackSecretKey' => $row['paystackSecretKey'] ?? '',
+            'paystackMode' => $row['paystackMode'] ?? 'live',
+            'squadEnabled' => isset($row['squadEnabled']) ? (int)$row['squadEnabled'] : 0,
+            'squadSecretKey' => $row['squadSecretKey'] ?? '',
+            'squadApiKey' => $row['squadApiKey'] ?? '',
+            'squadMode' => $row['squadMode'] ?? 'live',
+            'squadSftpEnabled' => isset($row['squadSftpEnabled']) ? (int)$row['squadSftpEnabled'] : 0,
+            'squadSftpHost' => $row['squadSftpHost'] ?? '',
+            'squadSftpPort' => isset($row['squadSftpPort']) ? (int)$row['squadSftpPort'] : 22,
+            'squadSftpUsername' => $row['squadSftpUsername'] ?? '',
+            'squadSftpPassword' => $row['squadSftpPassword'] ?? '',
+            'squadSftpPrivateKey' => $row['squadSftpPrivateKey'] ?? '',
+            'squadSftpRemoteDir' => $row['squadSftpRemoteDir'] ?? '/notifications',
+            'squadSftpProcessingDir' => $row['squadSftpProcessingDir'] ?? './storage/sftp',
+            'squadSftpGpgPrivateKey' => $row['squadSftpGpgPrivateKey'] ?? '',
+            'squadSftpGpgPassphrase' => $row['squadSftpGpgPassphrase'] ?? '',
+            'squadSftpPollInterval' => isset($row['squadSftpPollInterval']) ? (int)$row['squadSftpPollInterval'] : 15,
+            'squadSftpLastSync' => $row['squadSftpLastSync'] ?? '',
+            'squadSftpLastFile' => $row['squadSftpLastFile'] ?? '',
+            'squadSftpLastTxRef' => $row['squadSftpLastTxRef'] ?? '',
+            'squadLastError' => $row['squadLastError'] ?? '',
+            'squadSftpLastError' => $row['squadSftpLastError'] ?? '',
+            'squadSftpLastStatus' => $row['squadSftpLastStatus'] ?? 'Idle'
         ];
     }
 
@@ -410,9 +598,15 @@ class DB {
                 smtpEnabled, smtpHost, smtpPort, smtpSecure, smtpUser, smtpPass, smtpFromName, smtpFromEmail,
                 emailVerificationEnabled, emailVerificationSubject, emailVerificationTemplate,
                 welcomeEmailSubject, welcomeEmailTemplate, notificationEmailSubject, notificationEmailTemplate,
-                monnifyEnabled, monnifyApiKey, monnifyContractCode, monnifySecretKey, monnifyMode, subscriptionAmount
+                monnifyEnabled, monnifyApiKey, monnifyContractCode, monnifySecretKey, monnifyMode, subscriptionAmount,
+                customPaymentEnabled, customPaymentBtnName, customPaymentUrl, customPaymentTarget,
+                paystackEnabled, paystackPublicKey, paystackSecretKey, paystackMode,
+                squadEnabled, squadSecretKey, squadApiKey, squadMode,
+                squadSftpEnabled, squadSftpHost, squadSftpPort, squadSftpUsername, squadSftpPassword, squadSftpPrivateKey,
+                squadSftpRemoteDir, squadSftpProcessingDir, squadSftpGpgPrivateKey, squadSftpGpgPassphrase,
+                squadSftpPollInterval, squadSftpLastSync, squadSftpLastFile, squadSftpLastTxRef, squadSftpLastError, squadSftpLastStatus
             )
-            VALUES ("main", ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ("main", ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ');
         $stmt->execute([
             $config['serverUrl'] ?? '',
@@ -452,8 +646,148 @@ class DB {
             $config['monnifyContractCode'] ?? '',
             $config['monnifySecretKey'] ?? '',
             $config['monnifyMode'] ?? 'live',
-            isset($config['subscriptionAmount']) ? (float)$config['subscriptionAmount'] : 600.00
+            isset($config['subscriptionAmount']) ? (float)$config['subscriptionAmount'] : 600.00,
+            isset($config['customPaymentEnabled']) ? (int)$config['customPaymentEnabled'] : 0,
+            $config['customPaymentBtnName'] ?? 'Pay via Paystack',
+            $config['customPaymentUrl'] ?? '',
+            $config['customPaymentTarget'] ?? '_blank',
+            isset($config['paystackEnabled']) ? (int)$config['paystackEnabled'] : 0,
+            $config['paystackPublicKey'] ?? '',
+            $config['paystackSecretKey'] ?? '',
+            $config['paystackMode'] ?? 'live',
+            isset($config['squadEnabled']) ? (int)$config['squadEnabled'] : 0,
+            $config['squadSecretKey'] ?? '',
+            $config['squadApiKey'] ?? '',
+            $config['squadMode'] ?? 'live',
+            isset($config['squadSftpEnabled']) ? (int)$config['squadSftpEnabled'] : 0,
+            $config['squadSftpHost'] ?? '',
+            isset($config['squadSftpPort']) ? (int)$config['squadSftpPort'] : 22,
+            $config['squadSftpUsername'] ?? '',
+            $config['squadSftpPassword'] ?? '',
+            $config['squadSftpPrivateKey'] ?? '',
+            $config['squadSftpRemoteDir'] ?? '/notifications',
+            $config['squadSftpProcessingDir'] ?? './storage/sftp',
+            $config['squadSftpGpgPrivateKey'] ?? '',
+            $config['squadSftpGpgPassphrase'] ?? '',
+            isset($config['squadSftpPollInterval']) ? (int)$config['squadSftpPollInterval'] : 15,
+            $config['squadSftpLastSync'] ?? '',
+            $config['squadSftpLastFile'] ?? '',
+            $config['squadSftpLastTxRef'] ?? '',
+            $config['squadSftpLastError'] ?? '',
+            $config['squadSftpLastStatus'] ?? 'Idle'
         ]);
+    }
+
+    public static function createSftpLog($action, $status, $message, $filename = null, $txRef = null, $metadata = null) {
+        try {
+            $pdo = self::getConnection();
+            $stmt = $pdo->prepare('
+                INSERT INTO squad_sftp_logs (id, action, status, message, filename, txRef, metadata, createdAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ');
+            $id = 'sftp_log_' . time() . '_' . substr(bin2hex(random_bytes(4)), 0, 8);
+            $stmt->execute([
+                $id,
+                $action,
+                $status,
+                $message,
+                $filename,
+                $txRef,
+                $metadata ? (is_string($metadata) ? $metadata : json_encode($metadata)) : null,
+                date('c')
+            ]);
+            return $id;
+        } catch (Exception $e) {
+            return null;
+        }
+    }
+
+    public static function getSftpLogs($limit = 100) {
+        try {
+            $pdo = self::getConnection();
+            $stmt = $pdo->prepare('SELECT * FROM squad_sftp_logs ORDER BY createdAt DESC LIMIT ?');
+            $stmt->bindValue(1, (int)$limit, PDO::PARAM_INT);
+            $stmt->execute();
+            return $stmt->fetchAll();
+        } catch (Exception $e) {
+            return [];
+        }
+    }
+
+    public static function clearSftpLogs() {
+        try {
+            $pdo = self::getConnection();
+            $pdo->exec('DELETE FROM squad_sftp_logs');
+            return true;
+        } catch (Exception $e) {
+            return false;
+        }
+    }
+
+    public static function updateSftpStatus($status, $lastFile = null, $lastTxRef = null, $lastError = null) {
+        try {
+            $pdo = self::getConnection();
+            $fields = [
+                'squadSftpLastStatus = ?',
+                'squadSftpLastSync = ?'
+            ];
+            $params = [$status, date('c')];
+
+            if ($lastFile !== null) {
+                $fields[] = 'squadSftpLastFile = ?';
+                $params[] = $lastFile;
+            }
+            if ($lastTxRef !== null) {
+                $fields[] = 'squadSftpLastTxRef = ?';
+                $params[] = $lastTxRef;
+            }
+            if ($lastError !== null) {
+                $fields[] = 'squadSftpLastError = ?';
+                $params[] = $lastError;
+            }
+
+            $params[] = 'main';
+            $sql = 'UPDATE system_config SET ' . implode(', ', $fields) . ' WHERE id = ?';
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            return true;
+        } catch (Exception $e) {
+            return false;
+        }
+    }
+
+    public static function isTransactionProcessed($reference) {
+        if (empty($reference)) return false;
+        try {
+            $pdo = self::getConnection();
+            $stmt = $pdo->prepare('SELECT reference FROM processed_transactions WHERE reference = ?');
+            $stmt->execute([$reference]);
+            return (bool)$stmt->fetchColumn();
+        } catch (Exception $e) {
+            return false;
+        }
+    }
+
+    public static function recordProcessedTransaction($reference, $gateway, $userId, $amount, $status) {
+        if (empty($reference)) return;
+        try {
+            $pdo = self::getConnection();
+            $stmt = $pdo->prepare('
+                INSERT INTO processed_transactions (reference, gateway, userId, amount, status, createdAt)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE status = VALUES(status)
+            ');
+            $stmt->execute([
+                $reference,
+                $gateway,
+                $userId ?: null,
+                $amount ?: 0,
+                $status ?: "success",
+                date(DATE_ISO8601)
+            ]);
+        } catch (Exception $e) {
+            error_log("[PHP DB] Error recording processed transaction: " . $e->getMessage());
+        }
     }
 
     public static function getUsers() {
@@ -767,5 +1101,138 @@ class DB {
         $pdo = self::getConnection();
         $stmt = $pdo->query('SELECT * FROM broadcast_notifications ORDER BY createdAt DESC');
         return $stmt->fetchAll();
+    }
+
+    public static function savePendingPayment($record) {
+        $pdo = self::getConnection();
+        $stmt = $pdo->prepare("
+            INSERT INTO pending_payments (transactionRef, userId, username, email, amount, gateway, status, createdAt)
+            VALUES (:transactionRef, :userId, :username, :email, :amount, :gateway, :status, :createdAt)
+            ON DUPLICATE KEY UPDATE
+              userId = VALUES(userId),
+              username = VALUES(username),
+              email = VALUES(email),
+              amount = VALUES(amount),
+              gateway = VALUES(gateway),
+              status = VALUES(status)
+        ");
+        $stmt->execute([
+            ':transactionRef' => $record['transactionRef'],
+            ':userId' => $record['userId'],
+            ':username' => $record['username'],
+            ':email' => $record['email'],
+            ':amount' => $record['amount'],
+            ':gateway' => $record['gateway'] ?? 'squad',
+            ':status' => $record['status'] ?? 'pending',
+            ':createdAt' => $record['createdAt'] ?? date(DATE_ISO8601)
+        ]);
+    }
+
+    public static function getPendingPayment($transactionRef) {
+        if (empty($transactionRef)) return null;
+        $pdo = self::getConnection();
+        $stmt = $pdo->prepare("SELECT * FROM pending_payments WHERE transactionRef = :transactionRef");
+        $stmt->execute([':transactionRef' => $transactionRef]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    public static function updatePendingPaymentStatus($transactionRef, $status) {
+        if (empty($transactionRef)) return;
+        $pdo = self::getConnection();
+        $stmt = $pdo->prepare("UPDATE pending_payments SET status = :status WHERE transactionRef = :transactionRef");
+        $stmt->execute([':status' => $status, ':transactionRef' => $transactionRef]);
+    }
+
+    public static function saveSquadMandate($mandate) {
+        if (empty($mandate) || empty($mandate['id'])) return;
+        $pdo = self::getConnection();
+        $stmt = $pdo->prepare("
+            INSERT INTO squad_mandates (id, userId, mandateId, mandateReference, accountNumber, bankCode, bankName, accountName, amount, status, startDate, endDate, lastDebitDate, nextDebitDate, createdAt, updatedAt)
+            VALUES (:id, :userId, :mandateId, :mandateReference, :accountNumber, :bankCode, :bankName, :accountName, :amount, :status, :startDate, :endDate, :lastDebitDate, :nextDebitDate, :createdAt, :updatedAt)
+            ON DUPLICATE KEY UPDATE
+              mandateId = VALUES(mandateId),
+              mandateReference = VALUES(mandateReference),
+              accountNumber = VALUES(accountNumber),
+              bankCode = VALUES(bankCode),
+              bankName = VALUES(bankName),
+              accountName = VALUES(accountName),
+              amount = VALUES(amount),
+              status = VALUES(status),
+              startDate = VALUES(startDate),
+              endDate = VALUES(endDate),
+              lastDebitDate = VALUES(lastDebitDate),
+              nextDebitDate = VALUES(nextDebitDate),
+              updatedAt = VALUES(updatedAt)
+        ");
+        $stmt->execute([
+            ':id' => $mandate['id'],
+            ':userId' => $mandate['userId'],
+            ':mandateId' => $mandate['mandateId'],
+            ':mandateReference' => $mandate['mandateReference'] ?? null,
+            ':accountNumber' => $mandate['accountNumber'] ?? null,
+            ':bankCode' => $mandate['bankCode'] ?? null,
+            ':bankName' => $mandate['bankName'] ?? null,
+            ':accountName' => $mandate['accountName'] ?? null,
+            ':amount' => $mandate['amount'] ?? 600.00,
+            ':status' => $mandate['status'] ?? 'pending',
+            ':startDate' => $mandate['startDate'] ?? null,
+            ':endDate' => $mandate['endDate'] ?? null,
+            ':lastDebitDate' => $mandate['lastDebitDate'] ?? null,
+            ':nextDebitDate' => $mandate['nextDebitDate'] ?? null,
+            ':createdAt' => $mandate['createdAt'] ?? date(DATE_ISO8601),
+            ':updatedAt' => $mandate['updatedAt'] ?? date(DATE_ISO8601)
+        ]);
+    }
+
+    public static function getSquadMandateByUserId($userId) {
+        if (empty($userId)) return null;
+        $pdo = self::getConnection();
+        $stmt = $pdo->prepare("SELECT * FROM squad_mandates WHERE userId = :userId ORDER BY createdAt DESC LIMIT 1");
+        $stmt->execute([':userId' => $userId]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    public static function getSquadMandateByMandateId($mandateId) {
+        if (empty($mandateId)) return null;
+        $pdo = self::getConnection();
+        $stmt = $pdo->prepare("SELECT * FROM squad_mandates WHERE mandateId = :mandateId OR id = :id LIMIT 1");
+        $stmt->execute([':mandateId' => $mandateId, ':id' => $mandateId]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    public static function updateSquadMandate($idOrMandateId, $updates) {
+        if (empty($idOrMandateId) || empty($updates)) return;
+        $pdo = self::getConnection();
+        $fields = [];
+        $params = [];
+        foreach ($updates as $k => $v) {
+            if ($k !== 'id') {
+                $fields[] = "{$k} = :{$k}";
+                $params[":{$k}"] = $v;
+            }
+        }
+        $fields[] = "updatedAt = :updatedAt";
+        $params[':updatedAt'] = date(DATE_ISO8601);
+        $params[':id1'] = $idOrMandateId;
+        $params[':id2'] = $idOrMandateId;
+
+        $sql = "UPDATE squad_mandates SET " . implode(', ', $fields) . " WHERE id = :id1 OR mandateId = :id2";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+    }
+
+    public static function getAllSquadMandates() {
+        $pdo = self::getConnection();
+        $stmt = $pdo->query("SELECT * FROM squad_mandates ORDER BY createdAt DESC");
+        return $stmt->fetchAll() ?: [];
+    }
+
+    public static function getActiveSquadMandatesDueForRenewal() {
+        $pdo = self::getConnection();
+        $stmt = $pdo->query("SELECT * FROM squad_mandates WHERE status = 'active' ORDER BY createdAt DESC");
+        return $stmt->fetchAll() ?: [];
     }
 }

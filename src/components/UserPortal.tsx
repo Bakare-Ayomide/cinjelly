@@ -3,9 +3,10 @@ import {
   Tv, LogOut, CheckCircle, AlertTriangle, Play, ShieldAlert, CreditCard, 
   Loader2, RefreshCw, Key, HelpCircle, ArrowLeft, ExternalLink, X, Info, UserCheck, Calendar,
   Users, DollarSign, Gift, Clock, Share2, Copy, Check, Percent, MessageSquare, PlusCircle, Bell,
-  Smartphone, Download, Building2
+  Smartphone, Download, Building2, Landmark, ShieldCheck
 } from 'lucide-react';
-import { User } from '../types';
+import { User, SquadMandate } from '../types';
+import { apiFetch } from '../lib/api';
 
 interface UserPortalProps {
   user: User;
@@ -47,6 +48,24 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
   const [monnifyEmail, setMonnifyEmail] = useState('');
   const [monnifyPhone, setMonnifyPhone] = useState('');
 
+  // Squad Direct Debit State
+  const [showDirectDebitModal, setShowDirectDebitModal] = useState(false);
+  const [directDebitBanks, setDirectDebitBanks] = useState<{ code: string; name: string }[]>([]);
+  const [selectedBankCode, setSelectedBankCode] = useState('');
+  const [directDebitAccountNo, setDirectDebitAccountNo] = useState('');
+  const [directDebitAccountName, setDirectDebitAccountName] = useState('');
+  const [directDebitMandateId, setDirectDebitMandateId] = useState<string | null>(null);
+  const [directDebitOtp, setDirectDebitOtp] = useState('');
+  const [directDebitStep, setDirectDebitStep] = useState<'input' | 'otp' | 'success'>('input');
+  const [directDebitLoading, setDirectDebitLoading] = useState(false);
+  const [directDebitError, setDirectDebitError] = useState<string | null>(null);
+  const [directDebitSuccess, setDirectDebitSuccess] = useState<string | null>(null);
+  const [userMandate, setUserMandate] = useState<SquadMandate | null>(null);
+  const [loadingUserMandate, setLoadingUserMandate] = useState(false);
+  const [cancellingMandate, setCancellingMandate] = useState(false);
+  const [renewingMandate, setRenewingMandate] = useState(false);
+  const [resendingOtp, setResendingOtp] = useState(false);
+
   // Notification states
   const [showNotificationModal, setShowNotificationModal] = useState(false);
   const [notificationType, setNotificationType] = useState<'accepted' | 'declined' | null>(null);
@@ -65,7 +84,7 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
     setResendingEmail(true);
     setEmailMsg(null);
     try {
-      const res = await fetch('/api/auth/resend-verification', {
+      const res = await apiFetch('/api/auth/resend-verification', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: user.email || user.username })
@@ -88,7 +107,7 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
   const [showHeaderNotifs, setShowHeaderNotifs] = useState(false);
   const [selectedModalNotif, setSelectedModalNotif] = useState<any | null>(null);
 
-  // Load read notification IDs from localStorage
+  // Load read notification IDs from localStorage & check for payment redirect query params
   useEffect(() => {
     if (user && user.id) {
       try {
@@ -102,7 +121,251 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
         console.error('Error loading read notifications', e);
       }
     }
+
+    // Check payment redirect query params
+    const params = new URLSearchParams(window.location.search);
+    const payment = params.get('payment');
+    const ref = params.get('ref');
+    if (payment === 'success') {
+      setSuccess(`Payment Verified Successfully! Your subscription is active${ref ? ` (Ref: ${ref})` : ''}.`);
+      if (onReloadUser) onReloadUser();
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+    } else if (payment === 'failed') {
+      setError('Paystack payment verification failed or payment was cancelled. Please try again.');
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+    } else if (payment === 'missing_reference') {
+      setError('Transaction reference missing from payment gateway callback.');
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+    } else if (payment === 'config_error') {
+      setError('Paystack integration key is not configured on the server. Please contact support.');
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+    }
+
+    // Fetch user's direct debit mandate
+    fetchUserMandate();
   }, [user]);
+
+  const fetchUserMandate = async () => {
+    if (!user || !user.id) return;
+    setLoadingUserMandate(true);
+    try {
+      const res = await apiFetch('/api/payment/squad-direct-debit/mandate');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.mandate) {
+          setUserMandate(data.mandate);
+        } else {
+          setUserMandate(null);
+        }
+      }
+    } catch (e) {
+      console.warn('Error loading direct debit mandate:', e);
+    } finally {
+      setLoadingUserMandate(false);
+    }
+  };
+
+  const fetchDirectDebitBanks = async () => {
+    try {
+      const res = await apiFetch('/api/payment/squad-direct-debit/banks');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.banks && Array.isArray(data.banks)) {
+          setDirectDebitBanks(data.banks);
+          if (data.banks.length > 0 && !selectedBankCode) {
+            setSelectedBankCode(data.banks[0].code);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Error loading Nigerian banks:', e);
+    }
+  };
+
+  const handleOpenDirectDebitModal = async () => {
+    setDirectDebitError(null);
+    setDirectDebitSuccess(null);
+    setDirectDebitOtp('');
+    setDirectDebitStep('input');
+    setShowDirectDebitModal(true);
+    if (directDebitBanks.length === 0) {
+      await fetchDirectDebitBanks();
+    }
+  };
+
+  const handleCreateMandate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setDirectDebitLoading(true);
+    setDirectDebitError(null);
+    setDirectDebitSuccess(null);
+
+    if (!selectedBankCode) {
+      setDirectDebitError('Please select your bank.');
+      setDirectDebitLoading(false);
+      return;
+    }
+
+    if (!directDebitAccountNo || directDebitAccountNo.trim().length < 10) {
+      setDirectDebitError('Please enter a valid 10-digit NUBAN account number.');
+      setDirectDebitLoading(false);
+      return;
+    }
+
+    const selectedBank = directDebitBanks.find(b => b.code === selectedBankCode);
+
+    try {
+      const res = await apiFetch('/api/payment/squad-direct-debit/create-mandate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountNumber: directDebitAccountNo.trim(),
+          bankCode: selectedBankCode,
+          bankName: selectedBank?.name || '',
+          accountName: directDebitAccountName || user.fullName || user.username,
+          username: user.username,
+          email: user.email,
+          userId: user.id
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setDirectDebitError(data.error || 'Failed to initiate Direct Debit authorization.');
+        setDirectDebitLoading(false);
+        return;
+      }
+
+      setDirectDebitMandateId(data.mandateId);
+      setDirectDebitSuccess(data.message || 'Mandate initiated. Please enter the OTP sent by your bank.');
+      setDirectDebitStep('otp');
+    } catch (err: any) {
+      setDirectDebitError(err.message || 'Error connecting to Direct Debit service.');
+    } finally {
+      setDirectDebitLoading(false);
+    }
+  };
+
+  const handleValidateMandateOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!directDebitMandateId) {
+      setDirectDebitError('Mandate reference missing. Please try again.');
+      return;
+    }
+
+    if (!directDebitOtp || directDebitOtp.trim().length < 4) {
+      setDirectDebitError('Please enter the OTP code sent to your phone/email.');
+      return;
+    }
+
+    setDirectDebitLoading(true);
+    setDirectDebitError(null);
+    try {
+      const res = await apiFetch('/api/payment/squad-direct-debit/validate-mandate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mandateId: directDebitMandateId,
+          otp: directDebitOtp.trim(),
+          userId: user.id
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setDirectDebitError(data.error || 'Failed to validate OTP.');
+        setDirectDebitLoading(false);
+        return;
+      }
+
+      setDirectDebitSuccess('Automated monthly Direct Debit mandate activated successfully! Your streaming access is enabled.');
+      setDirectDebitStep('success');
+      await fetchUserMandate();
+      if (onReloadUser) {
+        await onReloadUser();
+      }
+    } catch (err: any) {
+      setDirectDebitError(err.message || 'Error validating OTP with bank.');
+    } finally {
+      setDirectDebitLoading(false);
+    }
+  };
+
+  const handleResendMandateOtp = async () => {
+    if (!directDebitMandateId) return;
+    setResendingOtp(true);
+    setDirectDebitError(null);
+    try {
+      const res = await apiFetch('/api/payment/squad-direct-debit/resend-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mandateId: directDebitMandateId })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setDirectDebitSuccess('A new OTP has been dispatched by your bank.');
+      } else {
+        setDirectDebitError(data.error || 'Failed to resend OTP.');
+      }
+    } catch (err: any) {
+      setDirectDebitError('Error requesting OTP resend.');
+    } finally {
+      setResendingOtp(false);
+    }
+  };
+
+  const handleCancelUserMandate = async () => {
+    if (!userMandate) return;
+    const confirmCancel = window.confirm('Are you sure you want to cancel automated monthly Direct Debit renewal? You will need to renew manually when your subscription expires.');
+    if (!confirmCancel) return;
+
+    setCancellingMandate(true);
+    try {
+      const res = await apiFetch('/api/payment/squad-direct-debit/cancel-mandate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mandateId: userMandate.mandateId })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSuccess('Automated Direct Debit mandate has been cancelled successfully.');
+        await fetchUserMandate();
+      } else {
+        setError(data.error || 'Failed to cancel mandate.');
+      }
+    } catch (err: any) {
+      setError('Error communicating with direct debit service.');
+    } finally {
+      setCancellingMandate(false);
+    }
+  };
+
+  const handleTriggerManualRenewalDebit = async () => {
+    if (!userMandate) return;
+    setRenewingMandate(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const res = await apiFetch('/api/payment/squad-direct-debit/debit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSuccess('Direct Debit processed successfully! Your subscription has been extended by 30 days.');
+        await fetchUserMandate();
+        if (onReloadUser) {
+          await onReloadUser();
+        }
+      } else {
+        setError(data.error || 'Failed to process Direct Debit renewal.');
+      }
+    } catch (err: any) {
+      setError('Network error processing renewal.');
+    } finally {
+      setRenewingMandate(false);
+    }
+  };
 
   const handleOpenNotification = (notif: any) => {
     setSelectedModalNotif(notif);
@@ -133,7 +396,7 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
   const fetchNotifications = async () => {
     setLoadingNotifs(true);
     try {
-      const res = await fetch('/api/notifications/broadcast');
+      const res = await apiFetch('/api/notifications/broadcast');
       if (res.ok) {
         const data = await res.json();
         setNotifications(data);
@@ -148,7 +411,7 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
   const fetchUserRequests = async () => {
     setLoadingUserRequests(true);
     try {
-      const res = await fetch('/api/media/requests');
+      const res = await apiFetch('/api/media/requests');
       if (res.ok) {
         const data = await res.json();
         setUserRequests(data);
@@ -173,7 +436,7 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
         season: requestType === 'show' ? requestSeason : null,
         episode: (requestType === 'show' && !requestIsFullSeason) ? requestEpisode : null
       };
-      const res = await fetch('/api/media/requests', {
+      const res = await apiFetch('/api/media/requests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -235,6 +498,374 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
   };
 
   const [monnifyLoading, setMonnifyLoading] = useState(false);
+  const [paystackLoading, setPaystackLoading] = useState(false);
+  const [squadLoading, setSquadLoading] = useState(false);
+
+  const loadSquadScript = (): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      if (typeof window !== 'undefined' && (window.squad || window.Squad)) {
+        return resolve();
+      }
+      const existingScript = document.getElementById('squad-sdk-script');
+      if (existingScript) {
+        existingScript.addEventListener('load', () => resolve());
+        existingScript.addEventListener('error', () => reject(new Error('Failed to load Squad Payment SDK')));
+        // In case it already loaded
+        if ((window as any).squad || (window as any).Squad) {
+          return resolve();
+        }
+        return;
+      }
+      const script = document.createElement('script');
+      script.id = 'squad-sdk-script';
+      script.src = 'https://checkout.squadco.com/widget/squad.min.js';
+      script.async = true;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Failed to load Squad Payment SDK from checkout.squadco.com'));
+      document.body.appendChild(script);
+    });
+  };
+
+  const verifySquadPayment = async (reference: string) => {
+    try {
+      setSquadLoading(true);
+      setError('');
+      const res = await apiFetch('/api/payment/squad-verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactionReference: reference })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSuccess('Your subscription has been successfully renewed and activated with Squad!');
+        setError('');
+        if (onReloadUser) {
+          await onReloadUser();
+        }
+      } else {
+        setError(data.error || 'Squad payment verification was not confirmed. Please contact support if debited.');
+      }
+    } catch (err: any) {
+      setError('Failed to verify payment with server. If your account was debited, your subscription will activate shortly via automated webhook.');
+    } finally {
+      setSquadLoading(false);
+    }
+  };
+
+  const handlePayWithSquad = async () => {
+    try {
+      setSquadLoading(true);
+      setError('');
+
+      // 1. Ensure Squad SDK script is loaded
+      try {
+        await loadSquadScript();
+      } catch (scriptErr: any) {
+        console.warn('Squad SDK load warning:', scriptErr);
+      }
+
+      // 2. Initiate payment session on backend (never expose secret key)
+      const res = await apiFetch('/api/payment/squad-initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: user.username,
+          email: user.email,
+          fullName: user.fullName,
+          userId: user.id
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setError(data.error || 'Failed to initialize Squad payment session.');
+        setSquadLoading(false);
+        return;
+      }
+
+      const squadConstructor = (window as any).squad || (window as any).Squad;
+      
+      if (!squadConstructor) {
+        // Fallback to checkout URL if modal widget is somehow blocked by browser extensions
+        if (data.checkout_url || data.checkoutUrl) {
+          window.location.href = data.checkout_url || data.checkoutUrl;
+          return;
+        }
+        setError('Squad payment widget is currently unavailable. Please refresh or try another payment method.');
+        setSquadLoading(false);
+        return;
+      }
+
+      const amountKobo = Math.round(Number(data.amount || 600) * 100);
+      const transactionRef = data.transactionReference || data.transactionRef;
+
+      // 3. Launch official Squad Payment Modal
+      const squadInstance = new squadConstructor({
+        key: data.publicKey,
+        email: data.customerEmail || user.email || `${user.username}@cinjelly.com`,
+        amount: amountKobo,
+        currency_code: data.currency || 'NGN',
+        transaction_ref: transactionRef,
+        customer_name: data.customerName || user.fullName || user.username,
+        callback_url: data.callbackUrl || `${window.location.origin}/api/payment/squad-callback`,
+        payment_channels: ['card', 'bank', 'ussd', 'transfer'],
+        metadata: {
+          user_id: user.id,
+          username: user.username,
+          email: user.email,
+          gateway: 'squad'
+        },
+        onLoad: () => {
+          console.log('[SQUAD] Payment modal loaded');
+        },
+        onClose: () => {
+          console.log('[SQUAD] Payment modal closed');
+          setSquadLoading(false);
+        },
+        onSuccess: async (response: any) => {
+          console.log('[SQUAD] Modal success received:', response);
+          // Never trust frontend alone: verify securely with server
+          await verifySquadPayment(transactionRef);
+        }
+      });
+
+      if (typeof squadInstance.setup === 'function') {
+        squadInstance.setup();
+      }
+      if (typeof squadInstance.open === 'function') {
+        squadInstance.open();
+      } else if (typeof squadInstance === 'function') {
+        squadInstance();
+      }
+    } catch (err: any) {
+      console.error('[SQUAD] Error initiating payment:', err);
+      setError('Error initiating Squad payment. Please try again.');
+      setSquadLoading(false);
+    }
+  };
+
+  const loadPaystackScript = (): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      if (typeof window !== 'undefined' && ((window as any).PaystackPop || (window as any).Paystack)) {
+        return resolve();
+      }
+      const existingScript = document.getElementById('paystack-sdk-script') as HTMLScriptElement | null;
+      if (existingScript) {
+        if ((window as any).PaystackPop || (window as any).Paystack) {
+          return resolve();
+        }
+        existingScript.addEventListener('load', () => resolve());
+        existingScript.addEventListener('error', () => reject(new Error('Failed to load Paystack InlineJS SDK')));
+        setTimeout(() => {
+          if ((window as any).PaystackPop || (window as any).Paystack) {
+            resolve();
+          }
+        }, 150);
+        return;
+      }
+      const script = document.createElement('script');
+      script.id = 'paystack-sdk-script';
+      script.src = 'https://js.paystack.co/v2/inline.js';
+      script.async = true;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Failed to load Paystack InlineJS SDK from js.paystack.co'));
+      document.body.appendChild(script);
+    });
+  };
+
+  const verifyPaystackPayment = async (reference: string) => {
+    try {
+      setPaystackLoading(true);
+      setError('');
+      // 1. Primary dedicated endpoint for InlineJS verification
+      const res = await apiFetch('/api/payment/paystack-inlinejs-verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reference, userId: user.id, username: user.username })
+      });
+      const data = await res.json();
+      if (res.ok && (data.success || data.status === 'success')) {
+        setSuccess('Your subscription has been successfully activated with Paystack!');
+        setError('');
+        if (onReloadUser) {
+          await onReloadUser();
+        }
+        return;
+      }
+
+      // 2. Secondary fallback verification endpoint
+      const fallbackRes = await apiFetch('/api/payment/paystack-verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reference, userId: user.id, username: user.username })
+      });
+      const fallbackData = await fallbackRes.json();
+      if (fallbackRes.ok && (fallbackData.success || fallbackData.status === 'success')) {
+        setSuccess('Your subscription has been successfully activated with Paystack!');
+        setError('');
+        if (onReloadUser) {
+          await onReloadUser();
+        }
+      } else {
+        setError(data.error || fallbackData.error || 'Paystack payment verification was not confirmed. Please contact support if debited.');
+      }
+    } catch (err: any) {
+      setError('Payment completed! If your streaming subscription does not activate automatically in 30 seconds, please refresh or contact support.');
+    } finally {
+      setPaystackLoading(false);
+    }
+  };
+
+  const handlePayWithPaystack = async () => {
+    try {
+      setPaystackLoading(true);
+      setError('');
+
+      // 1. Ensure Paystack InlineJS SDK script is loaded (V2: https://js.paystack.co/v2/inline.js)
+      try {
+        await loadPaystackScript();
+      } catch (scriptErr: any) {
+        console.warn('Paystack SDK script load warning:', scriptErr);
+      }
+
+      // 2. Initiate payment session on backend (never expose secret key)
+      const res = await apiFetch('/api/payment/paystack-initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: user.username,
+          email: user.email,
+          fullName: user.fullName,
+          userId: user.id
+        })
+      });
+
+      const data = await res.json();
+      const pubKey = data?.publicKey || bankInfo?.paystackPublicKey;
+
+      if (!pubKey) {
+        setError('Paystack Public Key is not configured on the server. Please contact administrator.');
+        setPaystackLoading(false);
+        return;
+      }
+
+      const transactionRef = data?.reference || `PS_${user.username.replace(/[^a-zA-Z0-9]/g, '')}_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+      const amountKobo = Math.round(Number(bankInfo?.subscriptionAmount || 600) * 100);
+      const userEmail = user.email || `${user.username}@cinjelly.com`;
+      const nameParts = (user.fullName || '').trim().split(' ');
+      const firstName = nameParts[0] || user.username;
+      const lastName = nameParts.slice(1).join(' ') || '';
+
+      const PaystackConstructor = (window as any).PaystackPop || (window as any).Paystack;
+
+      if (!PaystackConstructor) {
+        if (data?.authorization_url) {
+          window.location.href = data.authorization_url;
+          return;
+        }
+        setError('Paystack InlineJS popup is currently unavailable. Please check your browser connection.');
+        setPaystackLoading(false);
+        return;
+      }
+
+      // 3. Launch official Paystack InlineJS V2 modal
+      const paystack = new PaystackConstructor();
+
+      const transactionOptions = {
+        key: pubKey,
+        email: userEmail,
+        amount: amountKobo,
+        currency: 'NGN',
+        firstName: firstName,
+        lastName: lastName,
+        reference: transactionRef,
+        accessCode: data?.access_code || undefined,
+        metadata: {
+          cinjelly_user_id: user.id,
+          username: user.username,
+          payment_gateway: 'paystack_inlinejs',
+          payment_purpose: 'subscription',
+          custom_fields: [
+            { display_name: 'Username', variable_name: 'username', value: user.username },
+            { display_name: 'User ID', variable_name: 'user_id', value: user.id }
+          ]
+        },
+        onLoad: (response: any) => {
+          console.log('[Paystack InlineJS] Modal loaded:', response);
+        },
+        onSuccess: async (transaction: any) => {
+          console.log('[Paystack InlineJS] Modal success callback received:', transaction);
+          const confirmedRef = transaction?.reference || transaction?.trxref || transactionRef;
+          await verifyPaystackPayment(confirmedRef);
+        },
+        onCancel: () => {
+          console.log('[Paystack InlineJS] Payment modal closed by user');
+          setPaystackLoading(false);
+        },
+        onError: (error: any) => {
+          console.error('[Paystack InlineJS] Payment error:', error);
+          setError(error?.message || 'Error occurred during Paystack checkout.');
+          setPaystackLoading(false);
+        }
+      };
+
+      // V2 newTransaction synchronous initiation
+      if (typeof paystack.newTransaction === 'function') {
+        paystack.newTransaction(transactionOptions);
+        return;
+      }
+
+      // V2 checkout asynchronous initiation
+      if (typeof paystack.checkout === 'function') {
+        paystack.checkout(transactionOptions);
+        return;
+      }
+
+      // V2 resumeTransaction with accessCode
+      if (typeof paystack.resumeTransaction === 'function' && data?.access_code) {
+        paystack.resumeTransaction(data.access_code, {
+          onSuccess: async (transaction: any) => {
+            const confirmedRef = transaction?.reference || transaction?.trxref || transactionRef;
+            await verifyPaystackPayment(confirmedRef);
+          },
+          onCancel: () => {
+            setPaystackLoading(false);
+          }
+        });
+        return;
+      }
+
+      // Legacy fallback if available
+      if (typeof PaystackConstructor.setup === 'function') {
+        const handler = PaystackConstructor.setup({
+          ...transactionOptions,
+          callback: async (response: any) => {
+            const confirmedRef = response?.reference || response?.trxref || transactionRef;
+            await verifyPaystackPayment(confirmedRef);
+          },
+          onClose: () => {
+            setPaystackLoading(false);
+          }
+        });
+        if (handler && typeof handler.openIframe === 'function') {
+          handler.openIframe();
+          return;
+        }
+      }
+
+      if (data?.authorization_url) {
+        window.location.href = data.authorization_url;
+        return;
+      }
+
+      setError('Unable to launch Paystack checkout. Please try again.');
+    } catch (err: any) {
+      console.error('[Paystack] Error initiating payment:', err);
+      setError('Error initiating Paystack payment. Please try again.');
+    } finally {
+      setPaystackLoading(false);
+    }
+  };
 
   const loadMonnifyScript = (): Promise<void> => {
     return new Promise((resolve, reject) => {
@@ -321,7 +952,7 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
       const initUrl = '/api/payment/monnify-initiate';
       console.log("[Monnify] Request URL:", initUrl);
 
-      const initRes = await fetch(initUrl, {
+      const initRes = await apiFetch(initUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -363,8 +994,12 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
       await loadMonnifyScript();
 
       const sdkObj = (window as any).MonnifySDK || (window as any).Monnify || (window as any).monnify;
-      console.log("[Monnify SDK Check] Object on window:", sdkObj);
-      console.log("[Monnify SDK Check] typeof sdkObj?.initialize:", typeof sdkObj?.initialize);
+      console.log("================ MONNIFY DEBUG LOGS ================");
+      console.log("window.MonnifySDK:", (window as any).MonnifySDK);
+      console.log("typeof window.MonnifySDK:", typeof (window as any).MonnifySDK);
+      console.log("typeof window.MonnifySDK?.initialize:", typeof (window as any).MonnifySDK?.initialize);
+      console.log("Resolved sdkObj:", sdkObj);
+      console.log("typeof sdkObj?.initialize:", typeof sdkObj?.initialize);
 
       if (!sdkObj || typeof sdkObj.initialize !== 'function') {
         throw new Error('Monnify Checkout SDK is unavailable or initialize function is not defined on window.MonnifySDK. Please refresh page and try again.');
@@ -384,88 +1019,109 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
         isTestEnv
       });
 
+      const handleMonnifyComplete = async (response: any) => {
+        console.log("[Monnify SDK] handleMonnifyComplete triggered:", response);
+        setMonnifyLoading(true);
+        try {
+          const completeUrl = '/api/payment/monnify-complete';
+          console.log("[Monnify Complete] Request URL:", completeUrl);
+
+          const res = await apiFetch(completeUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            },
+            body: JSON.stringify({
+              paymentReference: response?.paymentReference || response?.reference || paymentRef,
+              transactionReference: response?.transactionReference || response?.paymentReference || paymentRef,
+              paymentStatus: response?.paymentStatus || 'PAID',
+              response
+            })
+          });
+
+          console.log("[Monnify Complete] HTTP Status Code:", res.status);
+          const resText = await res.text();
+          console.log("Raw Response (monnify-complete):", resText);
+
+          let data: any = null;
+          if (resText && resText.trim().length > 0) {
+            try {
+              data = JSON.parse(resText);
+            } catch (parseErr) {
+              console.error("Failed to parse JSON response (monnify-complete):", parseErr, "Raw Text:", resText);
+              throw new Error(`Invalid response from server (Status ${res.status}): ${resText.substring(0, 150)}`);
+            }
+          }
+
+          if (!res.ok || !data?.success) {
+            throw new Error(data?.error || 'Failed to complete subscription update');
+          }
+          setSuccess('Payment successful! Your subscription is now active for 30 days.');
+          setShowMonnifyModal(false);
+          if (onReloadUser) {
+            onReloadUser();
+          }
+        } catch (err: any) {
+          setError(err.message || 'Payment received but account update failed. Contact support.');
+        } finally {
+          setMonnifyLoading(false);
+        }
+      };
+
+      const monnifyOptions: any = {
+        amount: subAmount,
+        currency: 'NGN',
+        reference: paymentRef,
+        paymentReference: paymentRef,
+        customerFullName: initData.customerFullName || 'Subscriber',
+        customerName: initData.customerFullName || 'Subscriber',
+        customerEmail: initData.customerEmail,
+        apiKey: initData.apiKey,
+        contractCode: initData.contractCode,
+        paymentDescription: 'CINJELLY Stream 30-Day Access Renewal',
+        isTestMode: isTestEnv,
+        mode: isTestEnv ? 'TEST' : 'LIVE',
+        onLoadStart: function() {
+          console.log("[Monnify SDK] onLoadStart triggered");
+        },
+        onLoadComplete: function() {
+          console.log("[Monnify SDK] onLoadComplete triggered");
+          setMonnifyLoading(false);
+        },
+        onComplete: function(response: any) {
+          console.log("[Monnify SDK] Synchronous onComplete called with response:", response);
+          handleMonnifyComplete(response);
+        },
+        onClose: function(data: any) {
+          console.log("[Monnify SDK] onClose triggered:", data);
+          setMonnifyLoading(false);
+        }
+      };
+
+      if (initData.customerPhoneNumber && String(initData.customerPhoneNumber).trim().length > 0) {
+        monnifyOptions.customerPhoneNumber = String(initData.customerPhoneNumber).trim();
+        monnifyOptions.customerMobileNumber = String(initData.customerPhoneNumber).trim();
+        monnifyOptions.phoneNumber = String(initData.customerPhoneNumber).trim();
+      }
+
+      console.log("================ EXACT OBJECT PASSED TO MonnifySDK.initialize() ================");
+      console.log("typeof monnifyOptions.onComplete:", typeof monnifyOptions.onComplete);
+      console.log("monnifyOptions.onComplete function:", monnifyOptions.onComplete);
+      console.log("JSON representation:", JSON.stringify(monnifyOptions, null, 2));
+      console.log("Direct JS Object:", monnifyOptions);
+
       // Step 3: Trigger Monnify SDK initialize
       try {
-        sdkObj.initialize({
-          amount: subAmount,
-          currency: 'NGN',
-          reference: paymentRef,
-          paymentReference: paymentRef,
-          customerFullName: initData.customerFullName || 'Subscriber',
-          customerName: initData.customerFullName || 'Subscriber',
-          customerEmail: initData.customerEmail,
-          customerPhoneNumber: initData.customerPhoneNumber || '',
-          customerMobileNumber: initData.customerPhoneNumber || '',
-          phoneNumber: initData.customerPhoneNumber || '',
-          apiKey: initData.apiKey,
-          contractCode: initData.contractCode,
-          paymentDescription: 'CINJELLY Stream 30-Day Access Renewal',
-          isTestMode: isTestEnv,
-          mode: isTestEnv ? 'TEST' : 'LIVE',
-          onLoadStart: () => {
-            console.log("[Monnify SDK] onLoadStart triggered");
-          },
-          onLoadComplete: () => {
-            console.log("[Monnify SDK] onLoadComplete triggered");
-            setMonnifyLoading(false);
-          },
-          onComplete: async (response: any) => {
-            console.log("[Monnify SDK] onComplete triggered:", response);
-            setMonnifyLoading(true);
-            try {
-              const completeUrl = '/api/payment/monnify-complete';
-              console.log("[Monnify Complete] Request URL:", completeUrl);
-
-              const res = await fetch(completeUrl, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Accept': 'application/json'
-                },
-                body: JSON.stringify({
-                  paymentReference: response?.paymentReference || response?.reference || paymentRef,
-                  transactionReference: response?.transactionReference || response?.paymentReference || paymentRef,
-                  paymentStatus: response?.paymentStatus || 'PAID',
-                  response
-                })
-              });
-
-              console.log("[Monnify Complete] HTTP Status Code:", res.status);
-              const resText = await res.text();
-              console.log("Raw Response (monnify-complete):", resText);
-
-              let data: any = null;
-              if (resText && resText.trim().length > 0) {
-                try {
-                  data = JSON.parse(resText);
-                } catch (parseErr) {
-                  console.error("Failed to parse JSON response (monnify-complete):", parseErr, "Raw Text:", resText);
-                  throw new Error(`Invalid response from server (Status ${res.status}): ${resText.substring(0, 150)}`);
-                }
-              }
-
-              if (!res.ok || !data?.success) {
-                throw new Error(data?.error || 'Failed to complete subscription update');
-              }
-              setSuccess('Payment successful! Your subscription is now active for 30 days.');
-              setShowMonnifyModal(false);
-              if (onReloadUser) {
-                onReloadUser();
-              }
-            } catch (err: any) {
-              setError(err.message || 'Payment received but account update failed. Contact support.');
-            } finally {
-              setMonnifyLoading(false);
-            }
-          },
-          onClose: (data: any) => {
-            console.log("[Monnify SDK] onClose triggered:", data);
-            setMonnifyLoading(false);
-          }
-        });
+        console.log("Calling sdkObj.initialize(monnifyOptions)...");
+        sdkObj.initialize(monnifyOptions);
       } catch (sdkInitErr: any) {
-        console.error("[Monnify SDK] sdkObj.initialize threw error:", sdkInitErr);
-        throw new Error(`Failed to initialize Monnify checkout: ${sdkInitErr.message || sdkInitErr}`);
+        console.error("================ MonnifySDK.initialize EXCEPTION CAUGHT ================");
+        console.error("Exception Object:", sdkInitErr);
+        console.error("Exception Message:", sdkInitErr?.message || sdkInitErr);
+        console.error("Full Stack Trace:", sdkInitErr?.stack);
+        setMonnifyLoading(false);
+        throw new Error(`Failed to initialize Monnify checkout: ${sdkInitErr?.message || sdkInitErr}`);
       }
 
       // Safety timeout to reset button loading state so form doesn't stay stuck
@@ -481,7 +1137,7 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
 
   const fetchBankInfo = async () => {
     try {
-      const response = await fetch('/api/payment/bank-info');
+      const response = await apiFetch('/api/payment/bank-info');
       if (response.ok) {
         const data = await response.json();
         setBankInfo(data);
@@ -506,7 +1162,7 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
 
     setLoading(true);
     try {
-      const response = await fetch('/api/payment/upload-receipt', {
+      const response = await apiFetch('/api/payment/upload-receipt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -579,7 +1235,7 @@ Note: My payment receipt has been uploaded to the portal.`;
       }
 
       // Clear notification on backend
-      fetch('/api/auth/clear-notification', { method: 'POST' })
+      apiFetch('/api/auth/clear-notification', { method: 'POST' })
         .then(res => {
           if (res.ok) {
             onReloadUser();
@@ -624,7 +1280,7 @@ Note: My payment receipt has been uploaded to the portal.`;
     setError(null);
     setSuccess(null);
     try {
-      const response = await fetch('/api/affiliate/join', {
+      const response = await apiFetch('/api/affiliate/join', {
         method: 'POST'
       });
       const data = await response.json();
@@ -643,7 +1299,7 @@ Note: My payment receipt has been uploaded to the portal.`;
   const fetchAffiliateStats = async () => {
     setLoadingStats(true);
     try {
-      const response = await fetch('/api/affiliate/stats');
+      const response = await apiFetch('/api/affiliate/stats');
       if (response.ok) {
         const data = await response.json();
         setAffiliateStats(data);
@@ -664,7 +1320,8 @@ Note: My payment receipt has been uploaded to the portal.`;
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const isActive = user.role === 'admin' || (user.subscriptionStatus === 'Active' && user.accountStatus === 'Active');
+  const isExplicitlyDisabled = user.accountStatus === 'Disabled' || user.subscriptionStatus === 'Disabled';
+  const isActive = user.role === 'admin' || (!isExplicitlyDisabled && (user.subscriptionStatus === 'Active' || user.accountStatus === 'Active' || user.paymentStatus === 'Paid'));
 
   // Handle simulated payment
   const handlePayment = async () => {
@@ -673,7 +1330,7 @@ Note: My payment receipt has been uploaded to the portal.`;
     setLoading(true);
 
     try {
-      const response = await fetch('/api/payment/simulate', {
+      const response = await apiFetch('/api/payment/simulate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });
@@ -700,7 +1357,7 @@ Note: My payment receipt has been uploaded to the portal.`;
     setSyncLoading(true);
 
     try {
-      const response = await fetch('/api/auth/jellyfin-token', {
+      const response = await apiFetch('/api/auth/jellyfin-token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: syncPassword })
@@ -1303,6 +1960,37 @@ Note: My payment receipt has been uploaded to the portal.`;
               </div>
 
               <div className="max-w-sm mx-auto space-y-3">
+                {bankInfo?.squadEnabled && (
+                  <button
+                    onClick={handlePayWithSquad}
+                    disabled={squadLoading}
+                    className="w-full bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 hover:from-purple-500 hover:to-indigo-500 text-white font-extrabold py-3.5 px-6 rounded-xl flex items-center justify-center gap-2.5 transition cursor-pointer text-sm shadow-xl shadow-purple-950/30 border border-purple-400/30"
+                    id="pay-squad-button"
+                  >
+                    {squadLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-white" /> Opening Squad Gateway...
+                      </>
+                    ) : (
+                      <>
+                        <CreditCard className="w-4.5 h-4.5 text-purple-200" />
+                        <span>Pay via Squad (HabariPay)</span>
+                      </>
+                    )}
+                  </button>
+                )}
+
+                {bankInfo?.squadEnabled && (
+                  <button
+                    onClick={handleOpenDirectDebitModal}
+                    className="w-full bg-gradient-to-r from-violet-700 via-purple-700 to-indigo-800 hover:from-violet-600 hover:to-indigo-700 text-white font-extrabold py-3.5 px-6 rounded-xl flex items-center justify-center gap-2.5 transition cursor-pointer text-sm shadow-xl shadow-purple-950/30 border border-purple-400/40"
+                    id="pay-direct-debit-button"
+                  >
+                    <Landmark className="w-4.5 h-4.5 text-purple-200" />
+                    <span>Set Up Auto-Renewal (Direct Debit)</span>
+                  </button>
+                )}
+
                 {bankInfo?.monnifyEnabled && (
                   <button
                     onClick={handlePayWithMonnify}
@@ -1323,23 +2011,67 @@ Note: My payment receipt has been uploaded to the portal.`;
                   </button>
                 )}
 
+                {/* Primary Paystack InlineJS Gateway */}
+                {bankInfo?.paystackEnabled && (
+                  <button
+                    onClick={handlePayWithPaystack}
+                    disabled={paystackLoading}
+                    className="w-full bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-500 hover:to-teal-500 text-white font-extrabold py-3.5 px-6 rounded-xl flex items-center justify-center gap-2.5 transition cursor-pointer text-sm shadow-xl shadow-emerald-950/30 border border-emerald-400/30"
+                    id="pay-paystack-inline-button"
+                  >
+                    {paystackLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-white" /> Opening Paystack Checkout...
+                      </>
+                    ) : (
+                      <>
+                        <CreditCard className="w-4.5 h-4.5 text-emerald-200" />
+                        <span>Pay via Paystack (Instant Activation)</span>
+                      </>
+                    )}
+                  </button>
+                )}
+
+                {/* 2. Separate Paystack Payment Link / Payment Page Gateway */}
+                {bankInfo?.customPaymentEnabled && (
+                  <button
+                    onClick={() => {
+                      if (bankInfo?.customPaymentUrl) {
+                        const target = bankInfo.customPaymentTarget === '_self' ? '_self' : '_blank';
+                        window.open(bankInfo.customPaymentUrl, target);
+                      } else {
+                        setError('Paystack Payment Link URL is not configured. Please contact the administrator.');
+                      }
+                    }}
+                    className={`w-full font-bold py-3.5 px-6 rounded-xl flex items-center justify-center gap-2.5 transition cursor-pointer text-sm ${
+                      bankInfo?.paystackEnabled
+                        ? 'bg-[#11131e] hover:bg-[#1a1c2e] text-emerald-300 border border-emerald-500/30'
+                        : 'bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-500 hover:to-teal-500 text-white shadow-xl shadow-emerald-950/30 border border-emerald-400/30 font-extrabold'
+                    }`}
+                    id="pay-custom-link-button"
+                  >
+                    <ExternalLink className="w-4 h-4 text-emerald-400" />
+                    <span>{bankInfo?.customPaymentBtnName || 'Pay via Paystack Payment Page'}</span>
+                  </button>
+                )}
+
                 <button
                   onClick={() => setShowManualPay(true)}
                   className={`w-full font-bold py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer text-xs ${
-                    bankInfo?.monnifyEnabled
+                    bankInfo?.squadEnabled || bankInfo?.monnifyEnabled || bankInfo?.paystackEnabled || bankInfo?.customPaymentEnabled
                       ? 'bg-[#0f111a] hover:bg-[#181a28] text-slate-300 border border-slate-800'
                       : 'bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white shadow-lg shadow-rose-950/20 py-3.5 text-sm'
                   }`}
                   id="pay-manually-button"
                 >
                   <Building2 className="w-4 h-4 text-slate-400" /> 
-                  {bankInfo?.monnifyEnabled ? 'Alternative: Manual Bank Transfer' : (hasPaidBefore ? 'Renew Subscription' : 'Pay ₦600 to Start Enjoying')}
+                  {bankInfo?.squadEnabled || bankInfo?.monnifyEnabled || bankInfo?.paystackEnabled || bankInfo?.customPaymentEnabled ? 'Alternative: Manual Bank Transfer' : (hasPaidBefore ? 'Renew Subscription' : 'Pay ₦600 to Start Enjoying')}
                 </button>
               </div>
               
               <p className="text-[11px] text-slate-500 mt-4 leading-relaxed">
-                {bankInfo?.monnifyEnabled 
-                  ? 'Instant automatic activation via Monnify (Card, Bank Transfer, USSD). Safe & secure.' 
+                {bankInfo?.squadEnabled || bankInfo?.monnifyEnabled || bankInfo?.paystackEnabled || bankInfo?.customPaymentEnabled
+                  ? 'Select your preferred payment option above to complete your subscription renewal.' 
                   : 'Unlock instant access via manual bank transfer securely. Cancel any time.'}
               </p>
             </div>
@@ -1411,6 +2143,79 @@ Note: My payment receipt has been uploaded to the portal.`;
                   <div>
                     <span className="block text-slate-500 font-medium mb-0.5">ACCOUNT ID</span>
                     <span className="text-slate-400 block truncate font-mono text-[11px] bg-[#07080c] p-2 rounded-lg mt-1 border border-slate-800/40">{user.jellyfinUserId || 'Direct Connection'}</span>
+                  </div>
+
+                  {/* Direct Debit Status Widget */}
+                  <div className="pt-2 border-t border-slate-800/60">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] font-bold text-purple-400 uppercase tracking-wider flex items-center gap-1">
+                        <Landmark className="w-3 h-3 text-purple-400" />
+                        <span>Auto-Renewal</span>
+                      </span>
+                      {userMandate && userMandate.status === 'active' ? (
+                        <span className="text-[9px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-bold">
+                          Active (₦{userMandate.amount}/mo)
+                        </span>
+                      ) : (
+                        <span className="text-[9px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-bold">
+                          Not Enabled
+                        </span>
+                      )}
+                    </div>
+
+                    {userMandate && userMandate.status === 'active' ? (
+                      <div className="bg-[#07080c] p-2.5 rounded-xl border border-purple-500/20 space-y-1.5 text-[11px]">
+                        <div className="flex justify-between text-slate-300">
+                          <span className="text-slate-500">Bank:</span>
+                          <span className="font-semibold">{userMandate.bankName || 'Nigerian Bank'}</span>
+                        </div>
+                        <div className="flex justify-between text-slate-300">
+                          <span className="text-slate-500">Account:</span>
+                          <span className="font-mono text-purple-300">
+                            {userMandate.accountNumber ? `******${userMandate.accountNumber.slice(-4)}` : '••••••••••'}
+                          </span>
+                        </div>
+                        {userMandate.nextDebitDate && (
+                          <div className="flex justify-between text-slate-300">
+                            <span className="text-slate-500">Next Debit:</span>
+                            <span className="text-emerald-400 font-medium">
+                              {new Date(userMandate.nextDebitDate).toLocaleDateString()}
+                            </span>
+                          </div>
+                        )}
+                        <div className="flex gap-2 pt-2 border-t border-slate-800/80">
+                          <button
+                            type="button"
+                            onClick={handleTriggerManualRenewalDebit}
+                            disabled={renewingMandate}
+                            className="flex-1 bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/30 rounded-lg py-1 text-[10px] font-bold transition flex items-center justify-center gap-1 cursor-pointer"
+                          >
+                            {renewingMandate ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                            <span>Debit Now</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleCancelUserMandate}
+                            disabled={cancellingMandate}
+                            className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-lg py-1 px-2 text-[10px] font-bold transition flex items-center justify-center gap-1 cursor-pointer"
+                          >
+                            {cancellingMandate ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
+                            <span>Cancel</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      bankInfo?.squadEnabled && (
+                        <button
+                          type="button"
+                          onClick={handleOpenDirectDebitModal}
+                          className="w-full bg-purple-950/40 hover:bg-purple-900/50 text-purple-300 border border-purple-500/30 text-[10px] font-bold py-1.5 px-2.5 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer"
+                        >
+                          <Landmark className="w-3 h-3 text-purple-400" />
+                          <span>Enable Auto-Renew (Direct Debit)</span>
+                        </button>
+                      )
+                    )}
                   </div>
                 </div>
               </div>
@@ -2362,6 +3167,190 @@ Note: My payment receipt has been uploaded to the portal.`;
               >
                 Close
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SQUAD DIRECT DEBIT SETUP MODAL */}
+      {showDirectDebitModal && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-[#11131e] border border-slate-800 rounded-2xl shadow-2xl overflow-hidden relative">
+            <div className="p-5 border-b border-slate-800/80 flex items-center justify-between bg-[#0b0d17]">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-purple-500/10 text-purple-400 rounded-xl border border-purple-500/20">
+                  <Landmark className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-display font-extrabold text-white">Automated Direct Debit</h3>
+                  <p className="text-[11px] text-slate-400">Powered by Squad (HabariPay)</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => { setShowDirectDebitModal(false); setDirectDebitError(null); setDirectDebitSuccess(null); }}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800/50 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="bg-purple-950/20 border border-purple-500/30 rounded-xl p-3.5 flex items-start gap-3 text-xs">
+                <ShieldCheck className="w-5 h-5 text-purple-400 shrink-0 mt-0.5" />
+                <div className="text-slate-300 leading-relaxed">
+                  <strong className="text-white block font-semibold mb-0.5">Recurring Monthly Renewal (₦600/month)</strong>
+                  Setting up a Direct Debit mandate guarantees that your streaming access never expires. Charges are processed automatically every 30 days. You can cancel at any time.
+                </div>
+              </div>
+
+              {directDebitError && (
+                <div className="p-3 bg-rose-500/10 border border-rose-500/25 text-rose-300 text-xs rounded-xl flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+                  <span>{directDebitError}</span>
+                </div>
+              )}
+
+              {directDebitSuccess && (
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 text-xs rounded-xl flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4 shrink-0 text-emerald-400" />
+                  <span>{directDebitSuccess}</span>
+                </div>
+              )}
+
+              {directDebitStep === 'input' && (
+                <form onSubmit={handleCreateMandate} className="space-y-4">
+                  <div className="space-y-1">
+                    <label className="block text-xs font-semibold text-slate-300">Select Bank</label>
+                    <select
+                      value={selectedBankCode}
+                      onChange={(e) => setSelectedBankCode(e.target.value)}
+                      required
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                    >
+                      {directDebitBanks.length === 0 ? (
+                        <option value="">Loading Nigerian Banks...</option>
+                      ) : (
+                        directDebitBanks.map((bank) => (
+                          <option key={bank.code} value={bank.code}>
+                            {bank.name}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="block text-xs font-semibold text-slate-300">10-Digit NUBAN Account Number</label>
+                    <input
+                      type="text"
+                      maxLength={10}
+                      pattern="[0-9]{10}"
+                      placeholder="e.g. 0123456789"
+                      value={directDebitAccountNo}
+                      onChange={(e) => setDirectDebitAccountNo(e.target.value.replace(/[^0-9]/g, ''))}
+                      required
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs font-mono focus:outline-none focus:border-purple-500 transition"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="block text-xs font-semibold text-slate-300">Account Holder Name (Optional)</label>
+                    <input
+                      type="text"
+                      placeholder={user.fullName || user.username}
+                      value={directDebitAccountName}
+                      onChange={(e) => setDirectDebitAccountName(e.target.value)}
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                    />
+                  </div>
+
+                  <div className="pt-2">
+                    <button
+                      type="submit"
+                      disabled={directDebitLoading}
+                      className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-extrabold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer text-xs shadow-lg shadow-purple-950/30 disabled:opacity-50"
+                    >
+                      {directDebitLoading ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" /> Authorizing with Bank...
+                        </>
+                      ) : (
+                        <>
+                          <Landmark className="w-4 h-4" /> Authorize & Request Bank OTP
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {directDebitStep === 'otp' && (
+                <form onSubmit={handleValidateMandateOtp} className="space-y-4">
+                  <div className="p-3 bg-[#07080c] border border-purple-500/30 rounded-xl text-center">
+                    <p className="text-xs text-purple-300 font-medium">
+                      An OTP authorization code was sent by your bank to your registered phone number / email.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="block text-xs font-semibold text-slate-300">Enter OTP Code</label>
+                    <input
+                      type="text"
+                      maxLength={8}
+                      placeholder="e.g. 123456"
+                      value={directDebitOtp}
+                      onChange={(e) => setDirectDebitOtp(e.target.value)}
+                      required
+                      autoFocus
+                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-3 text-white text-center text-lg font-mono tracking-widest focus:outline-none focus:border-purple-500 transition"
+                    />
+                  </div>
+
+                  <div className="flex gap-2 pt-2">
+                    <button
+                      type="submit"
+                      disabled={directDebitLoading}
+                      className="flex-1 bg-purple-600 hover:bg-purple-500 text-white font-extrabold py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer text-xs shadow-lg disabled:opacity-50"
+                    >
+                      {directDebitLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+                      <span>Validate & Activate Mandate</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResendMandateOtp}
+                      disabled={resendingOtp}
+                      className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-3 rounded-xl transition cursor-pointer text-xs flex items-center gap-1 disabled:opacity-50"
+                    >
+                      {resendingOtp ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                      <span>Resend OTP</span>
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {directDebitStep === 'success' && (
+                <div className="text-center py-4 space-y-4">
+                  <div className="inline-flex items-center justify-center p-3 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 rounded-full">
+                    <CheckCircle className="w-8 h-8" />
+                  </div>
+                  <h4 className="text-base font-extrabold text-white">Direct Debit Activated!</h4>
+                  <p className="text-xs text-slate-300 leading-relaxed max-w-xs mx-auto">
+                    Your bank account is now configured for automatic monthly renewal. Your streaming subscription is active!
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowDirectDebitModal(false);
+                      setDirectDebitStep('input');
+                      setDirectDebitError(null);
+                      setDirectDebitSuccess(null);
+                    }}
+                    className="bg-purple-600 hover:bg-purple-500 text-white font-bold py-2.5 px-6 rounded-xl text-xs transition cursor-pointer"
+                  >
+                    Done
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>

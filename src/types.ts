@@ -44,6 +44,55 @@ export interface JellyfinConfigDetails {
   androidDownloadUrl?: string;
 }
 
+export interface SquadMandate {
+  id: string;
+  userId: string;
+  mandateId: string;
+  mandateReference?: string;
+  accountNumber?: string;
+  bankCode?: string;
+  bankName?: string;
+  accountName?: string;
+  amount: number;
+  status: 'pending' | 'pending_otp' | 'active' | 'cancelled' | 'failed';
+  startDate?: string;
+  endDate?: string;
+  lastDebitDate?: string;
+  nextDebitDate?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SquadSftpLog {
+  id: string;
+  action: string;
+  status: 'info' | 'success' | 'warning' | 'error';
+  message: string;
+  filename?: string;
+  txRef?: string;
+  metadata?: string;
+  createdAt: string;
+}
+
+export interface SquadSftpStatus {
+  enabled: boolean;
+  host: string;
+  port: number;
+  username: string;
+  remoteDir: string;
+  processingDir: string;
+  pollInterval: number;
+  hasPassword?: boolean;
+  hasPrivateKey?: boolean;
+  hasGpgKey?: boolean;
+  hasGpgPassphrase?: boolean;
+  lastSync?: string;
+  lastFile?: string;
+  lastTxRef?: string;
+  lastError?: string;
+  lastStatus?: string;
+}
+
 export interface Commission {
   id: string;
   affiliateId: string;
@@ -79,6 +128,10 @@ export interface AffiliateStats {
 
 declare global {
   interface Window {
+    squad?: any;
+    Squad?: any;
+    PaystackPop?: any;
+    Paystack?: any;
     MonnifySDK?: {
       initialize: (options: {
         amount: number;

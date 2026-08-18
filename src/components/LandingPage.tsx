@@ -6,6 +6,7 @@ import {
   CheckCircle2, Copy, Menu, Radio
 } from 'lucide-react';
 import { User as UserType, SystemStatus } from '../types';
+import { apiFetch, setSessionToken } from '../lib/api';
 
 import heroBg from '../assets/images/hero_poster_wall_1784858989562.jpg';
 import showcaseBg from '../assets/images/showcase_poster_wall_1784859002323.jpg';
@@ -13,8 +14,8 @@ import showcaseBg from '../assets/images/showcase_poster_wall_1784859002323.jpg'
 interface LandingPageProps {
   currentUser: UserType | null;
   systemStatus: SystemStatus | null;
-  onLoginSuccess: (user: UserType, token: string) => void;
-  onRegisterSuccess: (user: UserType) => void;
+  onLoginSuccess: (user: UserType, token: string, sessionToken?: string) => void;
+  onRegisterSuccess: (user: UserType, sessionToken?: string) => void;
 }
 
 interface MovieItem {
@@ -273,23 +274,42 @@ export default function LandingPage({ currentUser, systemStatus, onLoginSuccess,
     setTimeout(() => setCopiedServerUrl(false), 2500);
   };
 
+  const parseApiResponse = async (response: Response) => {
+    const text = await response.text();
+    let data: any = {};
+    try {
+      data = JSON.parse(text);
+    } catch {
+      const cleanText = text.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim();
+      if (text.trim().toLowerCase().startsWith('<!doctype') || text.trim().toLowerCase().startsWith('<html')) {
+        throw new Error(`Server returned HTML error (${response.status}). Please verify that backend routing is configured.`);
+      }
+      throw new Error(cleanText || `Server returned status ${response.status}`);
+    }
+    return data;
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
 
     try {
-      const response = await fetch('/api/auth/login', {
+      const response = await apiFetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: loginUsername, password: loginPassword })
       });
-      const data = await response.json();
+      const data = await parseApiResponse(response);
       if (!response.ok) {
         throw new Error(data.error || 'Login failed');
       }
 
-      onLoginSuccess(data.user, data.jellyfinToken || '');
+      if (data.sessionToken) {
+        setSessionToken(data.sessionToken);
+      }
+
+      onLoginSuccess(data.user, data.jellyfinToken || '', data.sessionToken);
       setAuthModal(null);
     } catch (err: any) {
       setError(err.message);
@@ -304,7 +324,7 @@ export default function LandingPage({ currentUser, systemStatus, onLoginSuccess,
     setLoading(true);
 
     try {
-      const response = await fetch('/api/auth/register', {
+      const response = await apiFetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -315,12 +335,16 @@ export default function LandingPage({ currentUser, systemStatus, onLoginSuccess,
           referredBy: regReferredBy
         })
       });
-      const data = await response.json();
+      const data = await parseApiResponse(response);
       if (!response.ok) {
         throw new Error(data.error || 'Registration failed');
       }
 
-      onRegisterSuccess(data.user);
+      if (data.sessionToken) {
+        setSessionToken(data.sessionToken);
+      }
+
+      onRegisterSuccess(data.user, data.sessionToken);
       setAuthModal(null);
     } catch (err: any) {
       setError(err.message);

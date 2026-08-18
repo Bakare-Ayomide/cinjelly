@@ -10,8 +10,31 @@ ini_set('display_errors', 0);
 ini_set('log_errors', 1);
 error_reporting(E_ALL);
 
+// Output buffering ensures no PHP warnings/notices leak before JSON headers
+ob_start();
+
 // Re-route to standard output header
 header('Content-Type: application/json');
+
+// Global Exception Handler to ensure JSON responses on errors
+set_exception_handler(function($e) {
+    if (ob_get_length()) ob_clean();
+    header('Content-Type: application/json');
+    http_response_code(500);
+    echo json_encode(['error' => 'Server error: ' . $e->getMessage()]);
+    exit;
+});
+
+register_shutdown_function(function() {
+    $error = error_get_last();
+    if ($error && in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR])) {
+        if (ob_get_length()) ob_clean();
+        header('Content-Type: application/json');
+        http_response_code(500);
+        echo json_encode(['error' => 'Fatal server error: ' . $error['message']]);
+        exit;
+    }
+});
 
 // --- CORS HEADERS ---
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '*';
@@ -139,7 +162,21 @@ if (strpos($path, '/jellyfin') === 0) {
 
 // --- 2. AUTH SESSION MIDDLEWARE ---
 $currentUser = null;
-$sessionToken = $_COOKIE['session'] ?? null;
+$sessionToken = null;
+
+// Prioritize Bearer token header over cookie
+$authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? ($_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? ($_SERVER['HTTP_AUTHORISATION'] ?? ''));
+if (empty($authHeader) && function_exists('apache_request_headers')) {
+    $headers = apache_request_headers();
+    $authHeader = $headers['Authorization'] ?? ($headers['authorization'] ?? '');
+}
+if (!empty($authHeader) && preg_match('/Bearer\s+(\S+)/i', $authHeader, $matches)) {
+    $sessionToken = trim($matches[1]);
+}
+if (!$sessionToken) {
+    $sessionToken = $_COOKIE['session'] ?? null;
+}
+
 if ($sessionToken) {
     $session = DB::getSession($sessionToken);
     $nowMs = round(microtime(true) * 1000);
@@ -152,13 +189,16 @@ if ($sessionToken) {
 $input = json_decode(file_get_contents('php://input'), true) ?? [];
 
 function setSessionCookie($token) {
-    // Set 7 days session cookie (Using sameSite=None, Secure=True to support iframe embedding)
+    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ||
+               ($_SERVER['SERVER_PORT'] ?? 80) == 443 ||
+               ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https';
+
     setcookie('session', $token, [
         'expires' => time() + 7 * 24 * 60 * 60,
         'path' => '/',
-        'secure' => true,
+        'secure' => $isHttps,
         'httponly' => true,
-        'samesite' => 'None'
+        'samesite' => $isHttps ? 'None' : 'Lax'
     ]);
 }
 
@@ -315,6 +355,19 @@ if ($path === '/api/admin/config') {
         $monnifySecretKey = $input['monnifySecretKey'] ?? ($existingConfig['monnifySecretKey'] ?? '');
         $monnifyMode = $input['monnifyMode'] ?? ($existingConfig['monnifyMode'] ?? 'live');
         $subscriptionAmount = isset($input['subscriptionAmount']) ? (float)$input['subscriptionAmount'] : ($existingConfig['subscriptionAmount'] ?? 600.00);
+        $paystackEnabled = isset($input['paystackEnabled']) ? ((bool)$input['paystackEnabled'] ? 1 : 0) : ($existingConfig['paystackEnabled'] ?? 0);
+        $paystackPublicKey = $input['paystackPublicKey'] ?? ($existingConfig['paystackPublicKey'] ?? '');
+        $paystackSecretKey = $input['paystackSecretKey'] ?? ($existingConfig['paystackSecretKey'] ?? '');
+        $paystackMode = $input['paystackMode'] ?? ($existingConfig['paystackMode'] ?? 'live');
+        $customPaymentEnabled = isset($input['customPaymentEnabled']) ? ((bool)$input['customPaymentEnabled'] ? 1 : 0) : ($existingConfig['customPaymentEnabled'] ?? 0);
+        $customPaymentBtnName = $input['customPaymentBtnName'] ?? ($existingConfig['customPaymentBtnName'] ?? 'Pay via Paystack');
+        $customPaymentUrl = $input['customPaymentUrl'] ?? ($existingConfig['customPaymentUrl'] ?? '');
+        $customPaymentTarget = $input['customPaymentTarget'] ?? ($existingConfig['customPaymentTarget'] ?? '_blank');
+        
+        $squadEnabled = isset($input['squadEnabled']) ? ((bool)$input['squadEnabled'] ? 1 : 0) : ($existingConfig['squadEnabled'] ?? 0);
+        $squadSecretKey = $input['squadSecretKey'] ?? ($existingConfig['squadSecretKey'] ?? '');
+        $squadApiKey = $input['squadApiKey'] ?? ($input['squadPublicKey'] ?? ($existingConfig['squadApiKey'] ?? ''));
+        $squadMode = $input['squadMode'] ?? ($existingConfig['squadMode'] ?? 'sandbox');
         
         $newConfig = [
             'serverUrl' => $serverUrl,
@@ -340,6 +393,18 @@ if ($path === '/api/admin/config') {
             'monnifySecretKey' => $monnifySecretKey,
             'monnifyMode' => $monnifyMode,
             'subscriptionAmount' => $subscriptionAmount,
+            'paystackEnabled' => $paystackEnabled,
+            'paystackPublicKey' => $paystackPublicKey,
+            'paystackSecretKey' => $paystackSecretKey,
+            'paystackMode' => $paystackMode,
+            'customPaymentEnabled' => $customPaymentEnabled,
+            'customPaymentBtnName' => $customPaymentBtnName,
+            'customPaymentUrl' => $customPaymentUrl,
+            'customPaymentTarget' => $customPaymentTarget,
+            'squadEnabled' => $squadEnabled,
+            'squadSecretKey' => $squadSecretKey,
+            'squadApiKey' => $squadApiKey,
+            'squadMode' => $squadMode,
             'smtpEnabled' => isset($input['smtpEnabled']) ? ((bool)$input['smtpEnabled'] ? 1 : 0) : ($existingConfig['smtpEnabled'] ?? 0),
             'smtpHost' => $input['smtpHost'] ?? ($existingConfig['smtpHost'] ?? ''),
             'smtpPort' => isset($input['smtpPort']) ? (int)$input['smtpPort'] : ($existingConfig['smtpPort'] ?? 587),
@@ -723,75 +788,105 @@ if ($method === 'POST' && $path === '/api/auth/register') {
 
 // POST /api/auth/login
 if ($method === 'POST' && $path === '/api/auth/login') {
-    $username = $input['username'] ?? '';
-    $password = $input['password'] ?? '';
+    try {
+        $username = trim($input['username'] ?? '');
+        $password = $input['password'] ?? '';
 
-    if (empty($username) || empty($password)) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Username and Password are required']);
-        exit;
-    }
+        if (empty($username) || empty($password)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Username and Password are required']);
+            exit;
+        }
 
-    $user = DB::getUserByUsername($username);
-    if (!$user || !DB::verifyPassword($password, $user['passwordHash'])) {
-        http_response_code(401);
-        echo json_encode(['error' => 'Invalid username or password']);
-        exit;
-    }
+        $user = DB::getUserByUsername($username);
+        if (!$user) {
+            $user = DB::getUserByEmail($username);
+        }
 
-    $config = DB::getConfig();
-    $jellyfinToken = '';
-    if ($config) {
-        $jellyfin = new JellyfinService($config);
-        // Only attempt Jellyfin authentication for users with an Active subscription or Admin role
-        if (($user['subscriptionStatus'] === 'Active' || $user['role'] === 'admin') && !empty($user['jellyfinUserId'])) {
-            try {
-                // Ensure account is enabled on Jellyfin & password matches current portal password
-                $jellyfin->setUserDisabledStatus($user['jellyfinUserId'], false);
-                $jellyfin->updateUserPassword($user['jellyfinUserId'], $password);
+        if (!$user || !DB::verifyPassword($password, $user['passwordHash'])) {
+            http_response_code(401);
+            echo json_encode(['error' => 'Invalid username or password']);
+            exit;
+        }
 
-                $authResult = $jellyfin->authenticateUser($username, $password);
-                $jellyfinToken = $authResult['accessToken'];
-            } catch (Exception $e) {
-                error_log("Notice: Could not obtain Jellyfin token on login: " . $e->getMessage());
+        $config = DB::getConfig();
+        $jellyfinToken = '';
+        if ($config) {
+            $jellyfin = new JellyfinService($config);
+            $jUserId = $user['jellyfinUserId'] ?? null;
+            if (empty($jUserId)) {
+                $jUserId = $jellyfin->getUserIdByName($user['username']);
+                if ($jUserId) {
+                    DB::updateUser($user['id'], ['jellyfinUserId' => $jUserId]);
+                    $user['jellyfinUserId'] = $jUserId;
+                }
+            }
+
+            if (!empty($jUserId)) {
+                // Ensure account password matches current portal password and permissions are granted
+                $jellyfin->updateUserPassword($jUserId, $password, $user['username']);
+                if ($user['subscriptionStatus'] === 'Active' || ($user['accountStatus'] ?? '') === 'Active' || ($user['paymentStatus'] ?? '') === 'Paid' || $user['role'] === 'admin') {
+                    $jellyfin->setUserDisabledStatus($jUserId, false);
+                    $jellyfin->grantAllPermissions($jUserId);
+                }
+            }
+
+            // Authenticate with Jellyfin using the user's actual username
+            if (($user['subscriptionStatus'] === 'Active' || ($user['accountStatus'] ?? '') === 'Active' || ($user['paymentStatus'] ?? '') === 'Paid' || $user['role'] === 'admin')) {
+                try {
+                    $authResult = $jellyfin->authenticateUser($user['username'], $password);
+                    $jellyfinToken = $authResult['accessToken'] ?? '';
+                } catch (Exception $e) {
+                    error_log("Notice: Could not obtain Jellyfin token on login: " . $e->getMessage());
+                }
             }
         }
+
+        $sessionToken = DB::generateUUID();
+        $expiresAt = (round(microtime(true) * 1000) + 7 * 24 * 60 * 60 * 1000);
+        DB::createSession($sessionToken, $user['id'], $expiresAt, $jellyfinToken);
+        setSessionCookie($sessionToken);
+
+        echo json_encode([
+            'success' => true,
+            'user' => [
+                'id' => $user['id'],
+                'fullName' => $user['fullName'],
+                'username' => $user['username'],
+                'email' => $user['email'],
+                'subscriptionStatus' => $user['subscriptionStatus'],
+                'paymentStatus' => $user['paymentStatus'],
+                'subscriptionExpiryDate' => $user['subscriptionExpiryDate'] ?? null,
+                'role' => $user['role'],
+                'isAffiliate' => isset($user['isAffiliate']) ? (int)$user['isAffiliate'] : 0,
+                'affiliateCode' => $user['affiliateCode'] ?? null
+            ],
+            'jellyfinToken' => $jellyfinToken,
+            'sessionToken' => $sessionToken
+        ]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Login error: ' . $e->getMessage()]);
     }
-
-    $sessionToken = DB::generateUUID();
-    $expiresAt = (round(microtime(true) * 1000) + 7 * 24 * 60 * 60 * 1000);
-    DB::createSession($sessionToken, $user['id'], $expiresAt, $jellyfinToken);
-    setSessionCookie($sessionToken);
-
-    echo json_encode([
-        'success' => true,
-        'user' => [
-            'id' => $user['id'],
-            'fullName' => $user['fullName'],
-            'username' => $user['username'],
-            'email' => $user['email'],
-            'subscriptionStatus' => $user['subscriptionStatus'],
-            'paymentStatus' => $user['paymentStatus'],
-            'subscriptionExpiryDate' => $user['subscriptionExpiryDate'] ?? null,
-            'role' => $user['role']
-        ],
-        'jellyfinToken' => $jellyfinToken
-    ]);
     exit;
 }
 
 // POST /api/auth/logout
 if ($method === 'POST' && $path === '/api/auth/logout') {
-    $token = $_COOKIE['session'] ?? null;
-    if ($token) {
-        DB::deleteSession($token);
+    $tokenToUse = $sessionToken ?: ($_COOKIE['session'] ?? null);
+    if ($tokenToUse) {
+        DB::deleteSession($tokenToUse);
     }
+    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ||
+               ($_SERVER['SERVER_PORT'] ?? 80) == 443 ||
+               ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https';
+
     setcookie('session', '', [
         'expires' => time() - 3600,
         'path' => '/',
-        'secure' => true,
+        'secure' => $isHttps,
         'httponly' => true,
-        'samesite' => 'None'
+        'samesite' => $isHttps ? 'None' : 'Lax'
     ]);
     echo json_encode(['success' => true, 'message' => 'Logged out successfully']);
     exit;
@@ -810,9 +905,12 @@ if ($method === 'GET' && $path === '/api/auth/me') {
 
     if ($currentUser['role'] === 'admin' || $currentUser['subscriptionStatus'] === 'Active') {
         if ($config && !empty($currentUser['jellyfinUserId'])) {
-            $session = DB::getSession($_COOKIE['session'] ?? '');
-            if ($session && !empty($session['jellyfinToken'])) {
-                $jellyfinAuthToken = $session['jellyfinToken'];
+            $tokenToUse = $sessionToken ?: ($_COOKIE['session'] ?? '');
+            if (!empty($tokenToUse)) {
+                $session = DB::getSession($tokenToUse);
+                if ($session && !empty($session['jellyfinToken'])) {
+                    $jellyfinAuthToken = $session['jellyfinToken'];
+                }
             }
         }
     }
@@ -887,16 +985,28 @@ if ($method === 'POST' && $path === '/api/auth/jellyfin-token') {
 
     try {
         $jellyfin = new JellyfinService($config);
-        if (!empty($currentUser['jellyfinUserId'])) {
-            if ($currentUser['subscriptionStatus'] === 'Active' || $currentUser['role'] === 'admin') {
-                $jellyfin->setUserDisabledStatus($currentUser['jellyfinUserId'], false);
-                $jellyfin->updateUserPassword($currentUser['jellyfinUserId'], $password);
+        $jUserId = $currentUser['jellyfinUserId'] ?? null;
+        if (empty($jUserId)) {
+            $jUserId = $jellyfin->getUserIdByName($currentUser['username']);
+            if (!$jUserId) {
+                $jUserId = $jellyfin->createUser($currentUser['username'], $password);
+            }
+            if ($jUserId) {
+                DB::updateUser($currentUser['id'], ['jellyfinUserId' => $jUserId]);
+                $currentUser['jellyfinUserId'] = $jUserId;
+            }
+        }
+        if (!empty($jUserId)) {
+            if ($currentUser['subscriptionStatus'] === 'Active' || ($currentUser['accountStatus'] ?? '') === 'Active' || ($currentUser['paymentStatus'] ?? '') === 'Paid' || $currentUser['role'] === 'admin') {
+                $jellyfin->setUserDisabledStatus($jUserId, false);
+                $jellyfin->grantAllPermissions($jUserId);
+                $jellyfin->updateUserPassword($jUserId, $password, $currentUser['username']);
             }
         }
         $authResult = $jellyfin->authenticateUser($currentUser['username'], $password);
         
-        $token = $_COOKIE['session'] ?? '';
-        if ($token) {
+        $token = $sessionToken ?: ($_COOKIE['session'] ?? '');
+        if ($token && !empty($authResult['accessToken'])) {
             DB::updateSessionJellyfinToken($token, $authResult['accessToken']);
         }
 
@@ -924,8 +1034,17 @@ if ($method === 'POST' && $path === '/api/payment/simulate') {
     }
 
     try {
-        $startDate = date(DATE_ISO8601);
-        $expiryDate = date(DATE_ISO8601, strtotime('+30 days'));
+        $daysToAdd = 30;
+        $currentTime = time();
+        $currentExpiry = $currentTime;
+        if (!empty($currentUser['subscriptionExpiryDate'])) {
+            $existingExpiry = strtotime($currentUser['subscriptionExpiryDate']);
+            if ($existingExpiry > $currentTime) {
+                $currentExpiry = $existingExpiry;
+            }
+        }
+        $expiryDate = gmdate('Y-m-d\TH:i:s.000\Z', $currentExpiry + ($daysToAdd * 24 * 60 * 60));
+        $startDate = $currentUser['subscriptionStartDate'] ?? gmdate('Y-m-d\TH:i:s.000\Z');
 
         DB::updateUser($currentUser['id'], [
             'subscriptionStatus' => 'Active',
@@ -984,7 +1103,18 @@ if ($method === 'GET' && $path === '/api/payment/bank-info') {
         'monnifyApiKey' => $config['monnifyApiKey'] ?? '',
         'monnifyContractCode' => $config['monnifyContractCode'] ?? '',
         'monnifyMode' => $config['monnifyMode'] ?? 'live',
-        'subscriptionAmount' => isset($config['subscriptionAmount']) ? (float)$config['subscriptionAmount'] : 600.00
+        'subscriptionAmount' => isset($config['subscriptionAmount']) ? (float)$config['subscriptionAmount'] : 600.00,
+        'paystackEnabled' => !empty($config['paystackEnabled']),
+        'paystackPublicKey' => $config['paystackPublicKey'] ?? '',
+        'paystackMode' => $config['paystackMode'] ?? 'live',
+        'customPaymentEnabled' => !empty($config['customPaymentEnabled']),
+        'customPaymentBtnName' => $config['customPaymentBtnName'] ?? 'Pay via Paystack',
+        'customPaymentUrl' => $config['customPaymentUrl'] ?? '',
+        'customPaymentTarget' => $config['customPaymentTarget'] ?? '_blank',
+        'squadEnabled' => !empty($config['squadEnabled']),
+        'squadApiKey' => $config['squadApiKey'] ?? '',
+        'squadPublicKey' => $config['squadApiKey'] ?? '',
+        'squadMode' => $config['squadMode'] ?? 'live'
     ]);
     exit;
 }
@@ -1228,6 +1358,1284 @@ if ($method === 'POST' && $path === '/api/payment/monnify-complete') {
     exit;
 }
 
+// GET & POST /api/payment/paystack-webhook and /api/payment/paystack-inlinejs-webhook
+if ($path === '/api/payment/paystack-webhook' || $path === '/api/payment/paystack-inlinejs-webhook') {
+    header('Content-Type: application/json');
+
+    if ($method === 'GET') {
+        echo json_encode([
+            'status' => 'ok',
+            'message' => 'Paystack Webhook Endpoint is active and listening for POST notifications.',
+            'timestamp' => date(DATE_ISO8601)
+        ]);
+        exit;
+    }
+
+    // 1. Read raw request body before parsing JSON
+    $rawBody = file_get_contents('php://input');
+
+    // 2. Read x-paystack-signature header
+    $headers = getallheaders();
+    $paystackSignature = '';
+    if (is_array($headers)) {
+        foreach ($headers as $k => $v) {
+            if (strtolower($k) === 'x-paystack-signature') {
+                $paystackSignature = trim($v);
+                break;
+            }
+        }
+    }
+    if (empty($paystackSignature)) {
+        $paystackSignature = $_SERVER['HTTP_X_PAYSTACK_SIGNATURE'] ?? '';
+    }
+
+    if (empty($paystackSignature)) {
+        error_log('[Paystack Webhook Error] Missing x-paystack-signature header.');
+        http_response_code(400);
+        echo json_encode(['error' => 'Missing x-paystack-signature header']);
+        exit;
+    }
+
+    // 3. Fetch Paystack Secret Key from MySQL config / env
+    $config = DB::getConfig();
+    $secretKey = trim($config['paystackSecretKey'] ?? getenv('PAYSTACK_SECRET_KEY') ?? '');
+
+    if (empty($secretKey)) {
+        error_log('[Paystack Webhook Error] Paystack Secret Key is not configured on server.');
+        http_response_code(400);
+        echo json_encode(['error' => 'Paystack secret key is not configured on server']);
+        exit;
+    }
+
+    // 4. Verify HMAC SHA512 signature
+    $computedSignature = hash_hmac('sha512', $rawBody, $secretKey);
+    if (!hash_equals($computedSignature, $paystackSignature)) {
+        error_log('[Paystack Webhook Error] Signature mismatch.');
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid webhook signature']);
+        exit;
+    }
+
+    // 5. Parse JSON payload only AFTER signature verification
+    $event = json_decode($rawBody, true);
+    if (!$event || !is_array($event) || empty($event['event'])) {
+        error_log('[Paystack Webhook Error] Malformed JSON payload.');
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid JSON payload']);
+        exit;
+    }
+
+    $eventType = $event['event'];
+    error_log("[Paystack Webhook] Received valid event: {$eventType}");
+
+    // 6. Listen specifically for charge.success
+    if ($eventType !== 'charge.success') {
+        http_response_code(200);
+        echo json_encode(['status' => 'success', 'message' => 'Event acknowledged']);
+        exit;
+    }
+
+    $data = $event['data'] ?? [];
+    $txStatus = $data['status'] ?? '';
+    $currency = strtoupper($data['currency'] ?? '');
+    $amountKobo = (int)($data['amount'] ?? 0);
+    $customerEmail = strtolower(trim($data['customer']['email'] ?? ''));
+    $reference = trim($data['reference'] ?? '');
+
+    if ($txStatus !== 'success') {
+        error_log("[Paystack Webhook] Transaction status is '{$txStatus}', ignoring.");
+        http_response_code(200);
+        echo json_encode(['status' => 'ignored', 'message' => 'Transaction not successful']);
+        exit;
+    }
+
+    if ($currency !== 'NGN') {
+        error_log("[Paystack Webhook Error] Currency '{$currency}' is not NGN.");
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid currency, expected NGN']);
+        exit;
+    }
+
+    $subAmountNaira = isset($config['subscriptionAmount']) ? (float)$config['subscriptionAmount'] : 600.00;
+    $expectedKobo = (int)round($subAmountNaira * 100);
+
+    if ($amountKobo < $expectedKobo) {
+        error_log("[Paystack Webhook Error] Amount {$amountKobo} kobo is less than expected {$expectedKobo} kobo.");
+        http_response_code(400);
+        echo json_encode(['error' => 'Insufficient payment amount']);
+        exit;
+    }
+
+    if (empty($customerEmail)) {
+        error_log('[Paystack Webhook Error] Customer email missing in payload.');
+        http_response_code(400);
+        echo json_encode(['error' => 'Customer email is missing']);
+        exit;
+    }
+
+    if (empty($reference)) {
+        error_log('[Paystack Webhook Error] Transaction reference missing in payload.');
+        http_response_code(400);
+        echo json_encode(['error' => 'Transaction reference is missing']);
+        exit;
+    }
+
+    // 7. Fulfill payment via centralized handler (handles idempotency, verification, user resolution, expiry date, jellyfin, affiliate, email)
+    $result = fulfill_paystack_payment($reference);
+
+    if (!$result['success']) {
+        error_log("[Paystack Webhook Error] Fulfillment failed for ref {$reference}: " . ($result['error'] ?? 'Unknown error'));
+        http_response_code(400);
+        echo json_encode(['error' => $result['error'] ?? 'Payment fulfillment failed']);
+        exit;
+    }
+
+    error_log("[Paystack Webhook Success] Successfully activated subscription for ref {$reference}. Expiry: " . ($result['subscriptionExpiryDate'] ?? 'N/A'));
+
+    // 8. Return HTTP 200 to Paystack
+    http_response_code(200);
+    echo json_encode([
+        'status' => 'success',
+        'message' => $result['message'] ?? 'Subscription activated successfully',
+        'subscriptionExpiryDate' => $result['subscriptionExpiryDate'] ?? null
+    ]);
+    exit;
+}
+
+// Multi-field user resolution helper for Paystack (username, userId, email, custom_fields)
+function find_user_for_paystack($data) {
+    if (empty($data)) return null;
+    $metadata = $data['metadata'] ?? [];
+    $customerEmail = strtolower(trim($data['customer']['email'] ?? ''));
+    $metaEmail = strtolower(trim($metadata['email'] ?? ''));
+    $username = trim($metadata['username'] ?? ($metadata['cinjelly_username'] ?? ''));
+    $userId = trim($metadata['userId'] ?? ($metadata['user_id'] ?? ''));
+
+    // 1. Try by userId
+    if (!empty($userId)) {
+        $user = DB::getUserById($userId);
+        if ($user) return $user;
+    }
+
+    // 2. Try by username
+    if (!empty($username)) {
+        $user = DB::getUserByUsername($username);
+        if ($user) return $user;
+    }
+
+    // 3. Try custom_fields
+    if (!empty($metadata['custom_fields']) && is_array($metadata['custom_fields'])) {
+        foreach ($metadata['custom_fields'] as $field) {
+            $varName = $field['variable_name'] ?? '';
+            if (($varName === 'username' || $varName === 'cinjelly_username' || $varName === 'user_id') && !empty($field['value'])) {
+                $val = trim($field['value']);
+                $user = DB::getUserByUsername($val) ?? DB::getUserById($val);
+                if ($user) return $user;
+            }
+        }
+    }
+
+    // 4. Try by customer email
+    if (!empty($customerEmail)) {
+        $user = DB::getUserByEmail($customerEmail);
+        if ($user) return $user;
+    }
+
+    // 5. Try by metadata email
+    if (!empty($metaEmail)) {
+        $user = DB::getUserByEmail($metaEmail);
+        if ($user) return $user;
+    }
+
+    // 6. Try by customer first_name or last_name
+    $firstName = trim($data['customer']['first_name'] ?? '');
+    $lastName = trim($data['customer']['last_name'] ?? '');
+    if (!empty($firstName)) {
+        $user = DB::getUserByUsername($firstName);
+        if ($user) return $user;
+    }
+    if (!empty($lastName)) {
+        $user = DB::getUserByUsername($lastName);
+        if ($user) return $user;
+    }
+
+    // 7. Try by email prefix/handle
+    if (!empty($customerEmail) && strpos($customerEmail, '@') !== false) {
+        $parts = explode('@', $customerEmail);
+        if (!empty($parts[0])) {
+            $user = DB::getUserByUsername($parts[0]);
+            if ($user) return $user;
+        }
+    }
+
+    return null;
+}
+
+// Centralized Paystack payment verification and fulfillment function
+function fulfill_paystack_payment($transactionRef) {
+    $ref = trim($transactionRef ?? '');
+    if (empty($ref)) {
+        return ['success' => false, 'error' => 'Transaction reference is required'];
+    }
+
+    // 1. Idempotency check: is transaction already processed?
+    if (DB::isTransactionProcessed($ref)) {
+        error_log("[PAYSTACK] Transaction already processed for ref: {$ref}");
+        return [
+            'success' => true,
+            'message' => 'Transaction already processed and subscription is active',
+            'alreadyProcessed' => true,
+            'reference' => $ref
+        ];
+    }
+
+    $config = DB::getConfig();
+    $secretKey = trim($config['paystackSecretKey'] ?? getenv('PAYSTACK_SECRET_KEY') ?? '');
+
+    if (empty($secretKey)) {
+        error_log("[PAYSTACK] Secret key not configured on server");
+        return ['success' => false, 'error' => 'Paystack secret key is not configured on server'];
+    }
+
+    // 2. Call Paystack REST API to verify transaction status
+    $verifyUrl = "https://api.paystack.co/transaction/verify/" . urlencode($ref);
+    $ch = curl_init($verifyUrl);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPGET, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        "Authorization: Bearer {$secretKey}",
+        "Content-Type: application/json"
+    ]);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 20);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+
+    $res = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($httpCode !== 200 || empty($res)) {
+        error_log("[PAYSTACK] Verification HTTP request failed with code {$httpCode}");
+        return ['success' => false, 'error' => 'Paystack transaction verification network call failed'];
+    }
+
+    $verifyJson = json_decode($res, true);
+    if (empty($verifyJson['status']) || empty($verifyJson['data'])) {
+        error_log("[PAYSTACK] Verification rejected by Paystack: " . ($verifyJson['message'] ?? 'Unknown'));
+        return ['success' => false, 'error' => $verifyJson['message'] ?? 'Paystack transaction verification rejected'];
+    }
+
+    $vData = $verifyJson['data'];
+    $transStatus = strtolower($vData['status'] ?? '');
+    $currency = strtoupper($vData['currency'] ?? '');
+    $amountKobo = (int)($vData['amount'] ?? 0);
+
+    if ($transStatus !== 'success') {
+        error_log("[PAYSTACK] Transaction status is not success: {$transStatus}");
+        return ['success' => false, 'error' => "Paystack payment status is '{$transStatus}', not completed"];
+    }
+
+    if ($currency !== 'NGN') {
+        error_log("[PAYSTACK] Currency mismatch: {$currency}");
+        return ['success' => false, 'error' => 'Invalid currency, expected NGN'];
+    }
+
+    $subAmountNaira = isset($config['subscriptionAmount']) ? (float)$config['subscriptionAmount'] : 600.00;
+    $expectedKobo = (int)round($subAmountNaira * 100);
+    if ($amountKobo < $expectedKobo) {
+        error_log("[PAYSTACK] Amount {$amountKobo} kobo less than expected {$expectedKobo} kobo");
+        return ['success' => false, 'error' => 'Insufficient payment amount'];
+    }
+
+    // 3. User resolution: pending payment -> metadata -> customer email -> authenticated session
+    $user = null;
+    $pendingRecord = DB::getPendingPayment($ref);
+    if ($pendingRecord && !empty($pendingRecord['userId'])) {
+        $user = DB::getUserById($pendingRecord['userId']);
+    }
+    if (!$user && $pendingRecord && !empty($pendingRecord['username'])) {
+        $user = DB::getUserByUsername($pendingRecord['username']);
+    }
+    if (!$user && $pendingRecord && !empty($pendingRecord['email'])) {
+        $user = DB::getUserByEmail($pendingRecord['email']);
+    }
+    if (!$user) {
+        $user = find_user_for_paystack($vData);
+    }
+    if (!$user) {
+        $sessionUser = get_authenticated_user();
+        if ($sessionUser) {
+            $user = $sessionUser;
+        }
+    }
+
+    if (!$user) {
+        error_log("[PAYSTACK] User account could not be resolved for ref {$ref}");
+        return ['success' => false, 'error' => 'CINJELLY user account not found for this payment'];
+    }
+
+    error_log("[PAYSTACK] Fulfilling subscription for user: {$user['username']} ({$user['id']}) via ref: {$ref}");
+
+    // 4. Calculate subscription extension (add 30 days)
+    $daysToAdd = 30;
+    $currentTime = time();
+    $currentExpiry = $currentTime;
+    if (!empty($user['subscriptionExpiryDate'])) {
+        $existingExpiry = strtotime($user['subscriptionExpiryDate']);
+        if ($existingExpiry > $currentTime) {
+            $currentExpiry = $existingExpiry;
+        }
+    }
+    $newExpiryDate = gmdate('Y-m-d\TH:i:s.000\Z', $currentExpiry + ($daysToAdd * 24 * 60 * 60));
+    $paidAmountNaira = $amountKobo / 100;
+
+    // 5. Lock transaction idempotency and update pending payment status
+    DB::recordProcessedTransaction($ref, 'paystack_inlinejs', $user['id'], $paidAmountNaira, 'success');
+    DB::updatePendingPaymentStatus($ref, 'completed');
+
+    // 6. Update user record
+    $updatedUser = DB::updateUser($user['id'], [
+        'subscriptionStatus' => 'Active',
+        'accountStatus' => 'Active',
+        'paymentStatus' => 'Paid',
+        'subscriptionStartDate' => $user['subscriptionStartDate'] ?? gmdate('Y-m-d\TH:i:s.000\Z'),
+        'subscriptionExpiryDate' => $newExpiryDate,
+        'transactionRef' => $ref,
+        'lastPaymentTime' => gmdate('Y-m-d\TH:i:s.000\Z'),
+        'declineReason' => null,
+        'systemNotification' => 'accepted'
+    ]);
+
+    // 7. Re-enable user's Jellyfin account if present
+    if (!empty($user['jellyfinUserId']) && $config) {
+        try {
+            $jellyfin = new JellyfinService($config);
+            $jellyfin->setUserDisabledStatus($user['jellyfinUserId'], false);
+            error_log("[PAYSTACK] Re-enabled Jellyfin account for user {$user['username']}");
+        } catch (Exception $e) {
+            error_log("[PAYSTACK] Jellyfin enable warning: " . $e->getMessage());
+        }
+    }
+
+    // 8. Execute affiliate commission logic
+    if (!empty($user['referredBy'])) {
+        $affiliateUser = DB::getUserByAffiliateCode($user['referredBy']);
+        if ($affiliateUser) {
+            $commissionAmount = isset($config['defaultCommission']) ? (float)$config['defaultCommission'] : 100.00;
+            DB::createCommission([
+                'affiliateId' => $affiliateUser['id'],
+                'referredUserId' => $user['id'],
+                'amount' => $commissionAmount,
+                'status' => 'Approved'
+            ]);
+            error_log("[PAYSTACK] Approved commission for affiliate '{$affiliateUser['username']}'");
+        }
+    }
+
+    // 9. Send welcome/confirmation email if SMTP configured
+    if (!empty($config['smtpEnabled']) && !empty($config['welcomeEmailTemplate'])) {
+        try {
+            $subj = !empty($config['welcomeEmailSubject']) ? $config['welcomeEmailSubject'] : 'Payment Received - CINJELLY Stream';
+            $body = replace_template_vars($config['welcomeEmailTemplate'], $user, $config);
+            send_smtp_email($user['email'], $subj, $body, $config);
+        } catch (Exception $e) {
+            error_log("[PAYSTACK] Email notification warning: " . $e->getMessage());
+        }
+    }
+
+    error_log("[PAYSTACK] Fulfillment completed successfully for user {$user['username']}. New expiry: {$newExpiryDate}");
+
+    return [
+        'success' => true,
+        'message' => 'Payment verified and subscription activated successfully',
+        'subscriptionExpiryDate' => $newExpiryDate,
+        'reference' => $ref,
+        'user' => $updatedUser
+    ];
+}
+
+// Multi-field user resolution helper for Squad
+function find_user_for_squad($data) {
+    if (empty($data)) return null;
+    $metadata = $data['metadata'] ?? ($data['meta'] ?? ($data['merchant_info'] ?? []));
+    $customerEmail = strtolower(trim($data['email'] ?? ($data['customer_email'] ?? ($data['customer']['email'] ?? ''))));
+    $metaEmail = strtolower(trim($metadata['email'] ?? ''));
+    $username = trim($metadata['username'] ?? ($metadata['cinjelly_username'] ?? ($data['username'] ?? '')));
+    $userId = trim($metadata['userId'] ?? ($metadata['user_id'] ?? ($data['userId'] ?? '')));
+
+    if (!empty($userId)) {
+        $user = DB::getUserById($userId);
+        if ($user) return $user;
+    }
+
+    if (!empty($username)) {
+        $user = DB::getUserByUsername($username);
+        if ($user) return $user;
+    }
+
+    if (!empty($metadata['custom_fields']) && is_array($metadata['custom_fields'])) {
+        foreach ($metadata['custom_fields'] as $field) {
+            $varName = $field['variable_name'] ?? '';
+            if (($varName === 'username' || $varName === 'cinjelly_username' || $varName === 'user_id') && !empty($field['value'])) {
+                $val = trim($field['value']);
+                $user = DB::getUserByUsername($val) ?? DB::getUserById($val);
+                if ($user) return $user;
+            }
+        }
+    }
+
+    if (!empty($customerEmail)) {
+        $user = DB::getUserByEmail($customerEmail);
+        if ($user) return $user;
+    }
+
+    if (!empty($metaEmail)) {
+        $user = DB::getUserByEmail($metaEmail);
+        if ($user) return $user;
+    }
+
+    $customerName = trim($data['customer_name'] ?? ($data['first_name'] ?? ''));
+    if (!empty($customerName)) {
+        $user = DB::getUserByUsername($customerName);
+        if ($user) return $user;
+    }
+
+    if (!empty($customerEmail) && strpos($customerEmail, '@') !== false) {
+        $parts = explode('@', $customerEmail);
+        if (!empty($parts[0])) {
+            $user = DB::getUserByUsername($parts[0]);
+            if ($user) return $user;
+        }
+    }
+
+    return null;
+}
+
+// Centralized Squad payment fulfillment logic in PHP
+function fulfill_squad_payment(string $transactionRef): array {
+    $ref = trim($transactionRef);
+    if (empty($ref)) {
+        return ['success' => false, 'error' => 'Transaction reference is missing'];
+    }
+
+    error_log("[SQUAD] Verification started for ref: {$ref}");
+
+    // 1. Idempotency check: check if already processed
+    if (DB::isTransactionProcessed($ref)) {
+        error_log("[SQUAD] Payment already processed for ref: {$ref}");
+        return ['success' => true, 'message' => 'Transaction already processed', 'alreadyProcessed' => true];
+    }
+
+    // 2. Fetch system config & secret key
+    $config = DB::getConfig();
+    $secretKey = trim($config['squadSecretKey'] ?? getenv('SQUAD_SECRET_KEY') ?? '');
+    $squadMode = $config['squadMode'] ?? 'live';
+    $squadBaseUrl = ($squadMode === 'sandbox') ? 'https://sandbox-api-d.squadco.com' : 'https://api-d.squadco.com';
+
+    if (empty($secretKey)) {
+        error_log("[SQUAD] Verification failed for ref: {$ref} - Secret key not configured");
+        return ['success' => false, 'error' => 'Squad secret key is not configured on server'];
+    }
+
+    // 3. Server-side verification with Squad REST API
+    $ch = curl_init("{$squadBaseUrl}/transaction/verify/" . rawurlencode($ref));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        "Authorization: Bearer {$secretKey}",
+        "Content-Type: application/json"
+    ]);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    $res = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    $verifyData = json_decode($res, true) ?? [];
+    $vData = $verifyData['data'] ?? $verifyData;
+
+    $transStatus = strtolower($vData['transaction_status'] ?? ($verifyData['transaction_status'] ?? ''));
+    $isVerified = ($httpCode === 200) && ($transStatus === 'success');
+
+    if (!$isVerified) {
+        $statusMsg = !empty($vData['transaction_status']) ? " (Status: {$vData['transaction_status']})" : '';
+        $errMsg = $verifyData['message'] ?? ($verifyData['error'] ?? "Squad transaction verification failed{$statusMsg}");
+        error_log("[SQUAD] Verification failed for ref: {$ref} - {$errMsg}");
+        return ['success' => false, 'error' => $errMsg];
+    }
+
+    error_log("[SQUAD] Verification successful for ref: {$ref}");
+
+    // 4. Verify currency and amount
+    $currency = strtoupper($vData['currency'] ?? ($vData['transaction_currency'] ?? 'NGN'));
+    if ($currency !== 'NGN') {
+        error_log("[SQUAD] Verification failed for ref: {$ref} - Invalid currency {$currency}");
+        return ['success' => false, 'error' => 'Invalid currency, expected NGN'];
+    }
+
+    $expectedSubAmount = isset($config['subscriptionAmount']) ? (float)$config['subscriptionAmount'] : 600.00;
+    $expectedKobo = (int)round($expectedSubAmount * 100);
+    $paidKobo = (int)($vData['transaction_amount'] ?? ($vData['amount'] ?? 0));
+
+    if ($paidKobo < $expectedKobo) {
+        error_log("[SQUAD] Verification failed for ref: {$ref} - Insufficient amount paid: {$paidKobo} kobo, expected {$expectedKobo} kobo");
+        return ['success' => false, 'error' => 'Insufficient payment amount'];
+    }
+
+    // 5. Locate user using pending_payments record first, or fallback
+    $pendingRecord = DB::getPendingPayment($ref);
+    $user = null;
+
+    if (!empty($pendingRecord['userId'])) {
+        $user = DB::getUserById($pendingRecord['userId']);
+    }
+
+    if (!$user && !empty($pendingRecord['username'])) {
+        $user = DB::getUserByUsername($pendingRecord['username']);
+    }
+
+    if (!$user && !empty($pendingRecord['email'])) {
+        $user = DB::getUserByEmail($pendingRecord['email']);
+    }
+
+    if (!$user) {
+        $user = find_user_for_squad($vData);
+    }
+
+    if (!$user) {
+        error_log("[SQUAD] Verification failed for ref: {$ref} - CINJELLY user account not found");
+        return ['success' => false, 'error' => 'CINJELLY user account not found for transaction reference'];
+    }
+
+    error_log("[SQUAD] Payment fulfillment started for ref: {$ref} (User: {$user['username']})");
+
+    // 6. Calculate subscription extension (30 days)
+    $daysToAdd = 30;
+    $currentTime = time();
+    $currentExpiry = $currentTime;
+    if (!empty($user['subscriptionExpiryDate'])) {
+        $existingExpiry = strtotime($user['subscriptionExpiryDate']);
+        if ($existingExpiry > $currentTime) {
+            $currentExpiry = $existingExpiry;
+        }
+    }
+    $newExpiryDate = gmdate('Y-m-d\TH:i:s.000\Z', $currentExpiry + ($daysToAdd * 24 * 60 * 60));
+    $paidAmountNaira = $paidKobo / 100;
+
+    // 7. Record processed transaction & update pending status
+    DB::recordProcessedTransaction($ref, 'squad', $user['id'], $paidAmountNaira, 'success');
+    DB::updatePendingPaymentStatus($ref, 'completed');
+
+    // 8. Update user subscription status
+    DB::updateUser($user['id'], [
+        'subscriptionStatus' => 'Active',
+        'accountStatus' => 'Active',
+        'paymentStatus' => 'Paid',
+        'subscriptionStartDate' => $user['subscriptionStartDate'] ?? gmdate('Y-m-d\TH:i:s.000\Z'),
+        'subscriptionExpiryDate' => $newExpiryDate,
+        'transactionRef' => $ref,
+        'lastPaymentTime' => gmdate('Y-m-d\TH:i:s.000\Z'),
+        'declineReason' => null,
+        'systemNotification' => 'accepted'
+    ]);
+
+    // 9. Enable Jellyfin account
+    if (!empty($user['jellyfinUserId'])) {
+        try {
+            $jellyfin = new JellyfinService($config);
+            $jellyfin->setUserDisabledStatus($user['jellyfinUserId'], false);
+        } catch (Exception $e) {}
+    }
+
+    // 10. Affiliate commission
+    if (!empty($user['referredBy'])) {
+        $affiliateUser = DB::getUserByAffiliateCode($user['referredBy']);
+        if ($affiliateUser) {
+            $commissionAmount = isset($config['defaultCommission']) ? (float)$config['defaultCommission'] : 100.00;
+            DB::createCommission([
+                'affiliateId' => $affiliateUser['id'],
+                'referredUserId' => $user['id'],
+                'amount' => $commissionAmount,
+                'status' => 'Approved'
+            ]);
+        }
+    }
+
+    // 11. Welcome Email
+    if (!empty($config['smtpEnabled']) && !empty($config['welcomeEmailTemplate'])) {
+        try {
+            $subj = !empty($config['welcomeEmailSubject']) ? $config['welcomeEmailSubject'] : 'Payment Received - CINJELLY Stream';
+            $body = replace_template_vars($config['welcomeEmailTemplate'], $user, $config);
+            send_smtp_email($user['email'], $subj, $body, $config);
+        } catch (Exception $e) {}
+    }
+
+    error_log("[SQUAD] Payment fulfillment completed for ref: {$ref}");
+
+    return [
+        'success' => true,
+        'message' => 'Subscription activated successfully for 30 days',
+        'subscriptionExpiryDate' => $newExpiryDate,
+        'user' => $user
+    ];
+}
+
+// Centralized Squad Direct Debit fulfillment function
+function fulfill_squad_direct_debit_payment($transactionRef, $mandateId = null) {
+    $ref = trim($transactionRef ?? '');
+    if (empty($ref)) {
+        return ['success' => false, 'error' => 'Transaction reference is missing'];
+    }
+
+    error_log("[SQUAD DIRECT DEBIT] Payment fulfillment started for ref: {$ref}");
+
+    // 1. Idempotency check: check if already processed
+    if (DB::isTransactionProcessed($ref)) {
+        error_log("[SQUAD DIRECT DEBIT] Transaction already processed for ref: {$ref}");
+        return ['success' => true, 'message' => 'Transaction already processed', 'alreadyProcessed' => true];
+    }
+
+    $config = DB::getConfig();
+    $squadSecretKey = trim($config['squadSecretKey'] ?? getenv('SQUAD_SECRET_KEY') ?? '');
+    $squadMode = $config['squadMode'] ?? 'live';
+    $squadBaseUrl = $squadMode === 'sandbox' ? 'https://sandbox-api-d.squadco.com' : 'https://api-d.squadco.com';
+
+    // 2. Map back to CINJELLY user using stored pending payment or mandate record
+    $pendingRecord = DB::getPendingPayment($ref);
+    $user = null;
+
+    if (!empty($pendingRecord['userId'])) {
+        $user = DB::getUserById($pendingRecord['userId']);
+    }
+
+    if (!$user && !empty($mandateId)) {
+        $mandate = DB::getSquadMandateByMandateId($mandateId);
+        if (!empty($mandate['userId'])) {
+            $user = DB::getUserById($mandate['userId']);
+        }
+    }
+
+    if (!$user && !empty($pendingRecord['username'])) {
+        $user = DB::getUserByUsername($pendingRecord['username']);
+    }
+
+    if (!$user && !empty($pendingRecord['email'])) {
+        $user = DB::getUserByEmail($pendingRecord['email']);
+    }
+
+    if (!$user) {
+        error_log("[SQUAD DIRECT DEBIT] Fulfillment failed for ref: {$ref} - CINJELLY user account not found");
+        return ['success' => false, 'error' => 'CINJELLY user account not found for transaction reference'];
+    }
+
+    $expectedAmountNaira = isset($config['subscriptionAmount']) ? (float)$config['subscriptionAmount'] : 600.00;
+    $paidAmountNaira = !empty($pendingRecord['amount']) ? (float)$pendingRecord['amount'] : $expectedAmountNaira;
+
+    error_log("[SQUAD DIRECT DEBIT] Fulfilling subscription for user: {$user['username']} ({$user['id']})");
+
+    // 3. Calculate subscription extension (add 30 days)
+    $daysToAdd = 30;
+    $currentTime = time();
+    $currentExpiry = $currentTime;
+    if (!empty($user['subscriptionExpiryDate'])) {
+        $existingExpiry = strtotime($user['subscriptionExpiryDate']);
+        if ($existingExpiry > $currentTime) {
+            $currentExpiry = $existingExpiry;
+        }
+    }
+    $newExpiryDate = date('Y-m-d\TH:i:s.000\Z', $currentExpiry + ($daysToAdd * 24 * 60 * 60));
+
+    // 4. Lock transaction idempotency and update pending payment status
+    DB::recordProcessedTransaction($ref, 'squad_direct_debit', $user['id'], $paidAmountNaira, 'success');
+    DB::updatePendingPaymentStatus($ref, 'completed');
+
+    // 5. Update user record
+    $updatedUser = DB::updateUser($user['id'], [
+        'subscriptionStatus' => 'Active',
+        'accountStatus' => 'Active',
+        'paymentStatus' => 'Paid',
+        'subscriptionStartDate' => $user['subscriptionStartDate'] ?? date('Y-m-d\TH:i:s.000\Z'),
+        'subscriptionExpiryDate' => $newExpiryDate,
+        'transactionRef' => $ref,
+        'lastPaymentTime' => date(DATE_ISO8601),
+        'declineReason' => null,
+        'systemNotification' => 'accepted'
+    ]);
+
+    // 6. Update mandate's lastDebitDate and nextDebitDate
+    if (!empty($mandateId)) {
+        DB::updateSquadMandate($mandateId, [
+            'lastDebitDate' => date('Y-m-d\TH:i:s.000\Z'),
+            'nextDebitDate' => $newExpiryDate,
+            'status' => 'active'
+        ]);
+    } else {
+        $userMandate = DB::getSquadMandateByUserId($user['id']);
+        if ($userMandate) {
+            DB::updateSquadMandate($userMandate['id'], [
+                'lastDebitDate' => date('Y-m-d\TH:i:s.000\Z'),
+                'nextDebitDate' => $newExpiryDate,
+                'status' => 'active'
+            ]);
+        }
+    }
+
+    // 7. Re-enable user's linked Jellyfin account if present
+    if (!empty($user['jellyfinUserId']) && $config) {
+        try {
+            $jellyfin = new JellyfinService($config);
+            $jellyfin->setUserDisabledStatus($user['jellyfinUserId'], false);
+            error_log("[SQUAD DIRECT DEBIT] Re-enabled Jellyfin account '{$user['jellyfinUserId']}' for user '{$user['username']}'.");
+        } catch (Exception $e) {
+            error_log("[SQUAD DIRECT DEBIT] Jellyfin enable warning: " . $e->getMessage());
+        }
+    }
+
+    // 8. Execute affiliate commission logic
+    if (!empty($user['referredBy'])) {
+        $affiliateUser = DB::getUserByAffiliateCode($user['referredBy']);
+        if ($affiliateUser) {
+            $commissionAmount = isset($config['defaultCommission']) ? (float)$config['defaultCommission'] : 100.00;
+            DB::createCommission([
+                'affiliateId' => $affiliateUser['id'],
+                'referredUserId' => $user['id'],
+                'amount' => $commissionAmount,
+                'status' => 'Approved'
+            ]);
+            error_log("[SQUAD DIRECT DEBIT] Approved ₦{$commissionAmount} commission for affiliate '{$affiliateUser['username']}'.");
+        }
+    }
+
+    // 9. Send email receipt if configured
+    if (!empty($config['smtpEnabled']) && !empty($config['welcomeEmailTemplate'])) {
+        try {
+            $subj = !empty($config['welcomeEmailSubject']) ? $config['welcomeEmailSubject'] : 'Direct Debit Renewal Successful - CINJELLY Stream';
+            $body = replace_template_vars($config['welcomeEmailTemplate'], $user, $config);
+            send_smtp_email($user['email'], $subj, $body, $config);
+        } catch (Exception $e) {
+            error_log("[SQUAD DIRECT DEBIT] Email notification warning: " . $e->getMessage());
+        }
+    }
+
+    error_log("[SQUAD DIRECT DEBIT] Payment fulfillment successfully completed for ref: {$ref}");
+
+    return [
+        'success' => true,
+        'message' => 'Subscription successfully renewed for 30 days via Direct Debit',
+        'subscriptionExpiryDate' => $newExpiryDate,
+        'user' => $updatedUser
+    ];
+}
+
+// POST /api/payment/squad-initiate
+if ($method === 'POST' && $path === '/api/payment/squad-initiate') {
+    header('Content-Type: application/json');
+    $config = DB::getConfig();
+    
+    if (empty($config['squadEnabled'])) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Squad payment gateway is currently disabled in admin settings.']);
+        exit;
+    }
+
+    $secretKey = trim($config['squadSecretKey'] ?? getenv('SQUAD_SECRET_KEY') ?? '');
+    $publicKey = trim($config['squadApiKey'] ?? $config['squadPublicKey'] ?? '');
+
+    if (empty($secretKey)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Squad secret key is not configured on server. Please configure it in Admin Dashboard.']);
+        exit;
+    }
+
+    if (empty($publicKey)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Squad public key is not configured. Please configure it in Admin Dashboard.']);
+        exit;
+    }
+
+    $sessionUser = get_authenticated_user();
+    $username = trim($input['username'] ?? ($sessionUser['username'] ?? ''));
+    $email = trim($input['email'] ?? ($sessionUser['email'] ?? ($username ? "{$username}@cinjelly.com" : '')));
+    $fullName = trim($input['fullName'] ?? ($sessionUser['fullName'] ?? $username));
+    $userId = trim($sessionUser['id'] ?? ($input['userId'] ?? ''));
+
+    if (empty($username) && empty($email)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'User identification (username or email) is required for payment']);
+        exit;
+    }
+
+    error_log("[SQUAD] Initiation started for user: {$username}");
+
+    $subAmount = isset($config['subscriptionAmount']) ? (float)$config['subscriptionAmount'] : 600.00;
+    
+    // Cryptographically secure unique CINJELLY transaction reference
+    $userSegment = preg_replace('/[^a-zA-Z0-9]/', '', $userId ?: $username);
+    $reference = 'CINJELLY_SQUAD_' . ($userSegment ?: 'USR') . '_' . time() . '_' . bin2hex(random_bytes(5));
+
+    error_log("[SQUAD] Transaction reference generated: {$reference}");
+
+    // Save pending payment record in MySQL database
+    DB::savePendingPayment([
+        'transactionRef' => $reference,
+        'userId' => $userId,
+        'username' => $username,
+        'email' => $email,
+        'amount' => $subAmount,
+        'gateway' => 'squad',
+        'status' => 'pending',
+        'createdAt' => date('Y-m-d\TH:i:s.000\Z')
+    ]);
+
+    error_log("[SQUAD] Pending payment created for ref: {$reference}");
+
+    $scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? 'cinjelly.zerolord.com';
+    $callbackUrl = "{$scheme}://{$host}/api/payment/squad-direct-debit/redirect";
+
+    echo json_encode([
+        'success' => true,
+        'transactionReference' => $reference,
+        'transactionRef' => $reference,
+        'publicKey' => $publicKey,
+        'amount' => $subAmount,
+        'currency' => 'NGN',
+        'customerName' => $fullName ?: $username,
+        'customerEmail' => $email,
+        'callbackUrl' => $callbackUrl
+    ]);
+    exit;
+}
+
+// POST /api/payment/squad-verify
+if ($method === 'POST' && $path === '/api/payment/squad-verify') {
+    header('Content-Type: application/json');
+    $reference = trim($input['transactionReference'] ?? ($input['transactionRef'] ?? ($input['reference'] ?? '')));
+
+    if (empty($reference)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Transaction reference is required for verification']);
+        exit;
+    }
+
+    error_log("[SQUAD] Modal success received - verifying ref: {$reference}");
+
+    $result = fulfill_squad_payment($reference);
+
+    if (!$result['success']) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => $result['error'] ?? 'Squad verification failed']);
+        exit;
+    }
+
+    echo json_encode([
+        'success' => true,
+        'message' => $result['message'] ?? 'Payment verified and subscription activated successfully',
+        'subscriptionExpiryDate' => $result['subscriptionExpiryDate'] ?? null,
+        'alreadyProcessed' => $result['alreadyProcessed'] ?? false
+    ]);
+    exit;
+}
+
+// POST & GET /api/payment/squad-direct-debit/webhook and /api/payment/squad-webhook
+if ($path === '/api/payment/squad-direct-debit/webhook' || $path === '/api/payment/squad-webhook') {
+    header('Content-Type: application/json');
+
+    if ($method === 'GET') {
+        echo json_encode([
+            'success' => true,
+            'status' => 'ok', 
+            'message' => 'Squad Webhook Endpoint is active and listening.'
+        ]);
+        exit;
+    }
+
+    try {
+        $clientIp = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? ($_SERVER['REMOTE_ADDR'] ?? '');
+        $isSquadKnownIp = (strpos($clientIp, '18.133.63.109') !== false);
+        error_log("[SQUAD WEBHOOK] Notification received from IP: {$clientIp} (Squad IP match: " . ($isSquadKnownIp ? 'yes' : 'no') . ")");
+
+        // Inspect Squad security headers if provided
+        $encryptedBodyHeader = $_SERVER['HTTP_X_SQUAD_ENCRYPTED_BODY'] ?? null;
+        $signatureHeader = $_SERVER['HTTP_X_SQUAD_SIGNATURE'] ?? null;
+        if (!empty($encryptedBodyHeader) || !empty($signatureHeader)) {
+            error_log("[SQUAD WEBHOOK] Verified security header presence in request");
+        }
+
+        $payload = $input ?? [];
+        $event = strtolower($payload['Event'] ?? ($payload['event'] ?? ''));
+        $data = $payload['Body'] ?? ($payload['body'] ?? ($payload['data'] ?? $payload));
+        
+        $reference = trim($payload['TransactionRef'] ?? ($data['transaction_ref'] ?? ($data['TransactionRef'] ?? ($payload['transaction_ref'] ?? ($data['reference'] ?? ($payload['reference'] ?? ''))))));
+        $mandateId = trim($payload['mandate_id'] ?? ($data['mandate_id'] ?? ($data['mandateId'] ?? ($payload['mandateId'] ?? ''))));
+
+        // Mandate status update event
+        if (empty($reference) && !empty($mandateId)) {
+            error_log("[SQUAD WEBHOOK] Mandate update event received for mandate: {$mandateId}");
+            DB::updateSquadMandate($mandateId, ['status' => 'active']);
+            echo json_encode(['success' => true, 'message' => 'Mandate status updated']);
+            exit;
+        }
+
+        if (empty($reference)) {
+            error_log("[SQUAD WEBHOOK] Missing transaction_ref in payload");
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Invalid webhook']);
+            exit;
+        }
+
+        error_log("[SQUAD WEBHOOK] Processing transaction ref: {$reference}");
+
+        // Duplicate protection: Idempotency check
+        if (DB::isTransactionProcessed($reference)) {
+            error_log("[SQUAD WEBHOOK] Transaction ref '{$reference}' already processed. Skipping duplicate execution.");
+            echo json_encode([
+                'success' => true,
+                'message' => 'Transaction already processed'
+            ]);
+            exit;
+        }
+
+        // Authoritative mapping: Locate CINJELLY pending payment record
+        $pendingRecord = DB::getPendingPayment($reference);
+        if ($pendingRecord && ($pendingRecord['status'] ?? '') === 'completed') {
+            error_log("[SQUAD WEBHOOK] Pending payment ref '{$reference}' already marked completed.");
+            echo json_encode([
+                'success' => true,
+                'message' => 'Transaction already processed'
+            ]);
+            exit;
+        }
+
+        // Server-side verification directly against Squad API
+        $config = DB::getConfig();
+        $squadSecretKey = trim($config['squadSecretKey'] ?? getenv('SQUAD_SECRET_KEY') ?? '');
+        $squadMode = $config['squadMode'] ?? 'live';
+        $squadBaseUrl = $squadMode === 'sandbox' ? 'https://sandbox-api-d.squadco.com' : 'https://api-d.squadco.com';
+
+        if (!empty($squadSecretKey)) {
+            $ch = curl_init("{$squadBaseUrl}/transaction/verify/" . urlencode($reference));
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_HTTPGET, true);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                "Authorization: Bearer {$squadSecretKey}",
+                "Content-Type: application/json"
+            ]);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            $res = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if ($httpCode === 200 && $res) {
+                $verifyJson = json_decode($res, true);
+                $vData = $verifyJson['data'] ?? $verifyJson;
+                $transStatus = strtolower($vData['transaction_status'] ?? ($verifyJson['transaction_status'] ?? ''));
+                $currency = strtoupper($vData['currency'] ?? ($vData['transaction_currency'] ?? 'NGN'));
+
+                if ($transStatus !== 'success' && $transStatus !== 'successful') {
+                    error_log("[SQUAD WEBHOOK] Transaction status verification failed for ref '{$reference}': {$transStatus}");
+                    http_response_code(400);
+                    echo json_encode(['success' => false, 'error' => 'Payment status not successful at Squad']);
+                    exit;
+                }
+
+                if ($currency !== 'NGN') {
+                    error_log("[SQUAD WEBHOOK] Invalid currency for ref '{$reference}': {$currency}");
+                    http_response_code(400);
+                    echo json_encode(['success' => false, 'error' => 'Invalid currency, expected NGN']);
+                    exit;
+                }
+            }
+        }
+
+        // Fulfill payment idempotently
+        $result = fulfill_squad_direct_debit_payment($reference, $mandateId ?: null);
+
+        if (!$result['success']) {
+            error_log("[SQUAD WEBHOOK] Fulfillment failed for ref '{$reference}': " . ($result['error'] ?? 'Unknown'));
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => $result['error'] ?? 'Invalid webhook']);
+            exit;
+        }
+
+        if (!empty($result['alreadyProcessed'])) {
+            echo json_encode([
+                'success' => true,
+                'message' => 'Transaction already processed'
+            ]);
+            exit;
+        }
+
+        echo json_encode([
+            'success' => true,
+            'message' => 'Webhook processed'
+        ]);
+        exit;
+    } catch (Exception $e) {
+        error_log("[SQUAD WEBHOOK] Webhook exception: " . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['success' => false, 'error' => 'Invalid webhook']);
+        exit;
+    }
+}
+
+// GET & POST /api/payment/squad-direct-debit/redirect and /api/payment/squad-callback
+if ($path === '/api/payment/squad-direct-debit/redirect' || $path === '/api/payment/squad-callback') {
+    $reference = $_GET['transaction_ref'] ?? ($_GET['reference'] ?? ($_GET['trxref'] ?? ($_GET['ref'] ?? ($input['transaction_ref'] ?? ($input['reference'] ?? '')))));
+    $reference = trim($reference);
+
+    error_log("[SQUAD REDIRECT] Redirect invoked for ref: {$reference}");
+
+    $isHtmlRequest = isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'text/html') !== false;
+    $isJsonRequest = (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false) || (isset($_SERVER['CONTENT_TYPE']) && strpos($_SERVER['CONTENT_TYPE'], 'application/json') !== false);
+
+    if (empty($reference)) {
+        if ($isJsonRequest && !$isHtmlRequest) {
+            header('Content-Type: application/json');
+            echo json_encode(['success' => true, 'status' => 'ok', 'message' => 'Squad Redirect Endpoint is active and listening.']);
+            exit;
+        }
+        header('Location: /?payment=missing_reference');
+        exit;
+    }
+
+    // Idempotency check: duplicate protection
+    if (DB::isTransactionProcessed($reference)) {
+        error_log("[SQUAD REDIRECT] Ref '{$reference}' already processed. Redirecting to success.");
+        if ($isHtmlRequest) {
+            header('Location: /?payment=success&ref=' . urlencode($reference));
+            exit;
+        }
+        header('Content-Type: application/json');
+        echo json_encode([
+            'success' => true,
+            'message' => 'Transaction already processed',
+            'alreadyProcessed' => true,
+            'reference' => $reference
+        ]);
+        exit;
+    }
+
+    // Perform server-side Squad verification and fulfillment
+    $result = fulfill_squad_direct_debit_payment($reference);
+
+    if (!$result['success']) {
+        error_log("[SQUAD REDIRECT] Fulfillment failed for ref '{$reference}': " . ($result['error'] ?? 'Unknown'));
+        if ($isHtmlRequest) {
+            header('Location: /?payment=failed');
+            exit;
+        }
+        http_response_code(400);
+        header('Content-Type: application/json');
+        echo json_encode(['success' => false, 'error' => $result['error'] ?? 'Payment verification failed at Squad']);
+        exit;
+    }
+
+    if ($isHtmlRequest) {
+        header('Location: /?payment=success&ref=' . urlencode($reference));
+        exit;
+    }
+
+    header('Content-Type: application/json');
+    echo json_encode([
+        'success' => true,
+        'message' => $result['message'] ?? 'Payment verified and subscription activated successfully',
+        'reference' => $reference,
+        'subscriptionExpiryDate' => $result['subscriptionExpiryDate'] ?? null
+    ]);
+    exit;
+}
+
+// POST /api/payment/paystack-initiate
+if ($method === 'POST' && $path === '/api/payment/paystack-initiate') {
+    header('Content-Type: application/json');
+    $config = DB::getConfig();
+    $secretKey = trim($config['paystackSecretKey'] ?? getenv('PAYSTACK_SECRET_KEY') ?? '');
+
+    if (empty($secretKey)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Paystack secret key is not configured on server. Please configure Paystack secret key in Admin Dashboard.']);
+        exit;
+    }
+
+    $sessionUser = get_authenticated_user();
+    $username = trim($input['username'] ?? ($sessionUser['username'] ?? ''));
+    $email = trim($input['email'] ?? ($sessionUser['email'] ?? ($username ? "{$username}@cinjelly.com" : '')));
+    $fullName = trim($input['fullName'] ?? ($sessionUser['fullName'] ?? $username));
+    $userId = trim($sessionUser['id'] ?? ($input['userId'] ?? ''));
+
+    if (empty($username) && empty($email)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'User identification (username or email) is required for payment']);
+        exit;
+    }
+
+    $subAmount = isset($config['subscriptionAmount']) ? (float)$config['subscriptionAmount'] : 600.00;
+    $amountKobo = (int)round($subAmount * 100);
+    $userSegment = preg_replace('/[^a-zA-Z0-9]/', '', $userId ?: $username);
+    $reference = 'PS_' . ($userSegment ?: 'USR') . '_' . time() . '_' . rand(1000, 9999);
+
+    // Save pending payment record in MySQL database for authoritative mapping
+    DB::savePendingPayment([
+        'transactionRef' => $reference,
+        'userId' => $userId,
+        'username' => $username,
+        'email' => $email,
+        'amount' => $subAmount,
+        'gateway' => 'paystack_inlinejs',
+        'status' => 'pending',
+        'createdAt' => date('Y-m-d\TH:i:s.000\Z')
+    ]);
+
+    $scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? 'cinjelly.zerolord.com';
+    $callbackUrl = "{$scheme}://{$host}/api/payment/paystack-callback";
+
+    $paystackData = [
+        'email' => (strpos($email, '@') !== false) ? $email : "{$email}@cinjelly.com",
+        'amount' => $amountKobo,
+        'reference' => $reference,
+        'callback_url' => $callbackUrl,
+        'metadata' => [
+            'username' => $username,
+            'userId' => $userId,
+            'fullName' => $fullName,
+            'email' => $email,
+            'cinjelly_user_id' => $userId,
+            'cinjelly_username' => $username,
+            'custom_fields' => [
+                ['display_name' => 'Username', 'variable_name' => 'username', 'value' => $username],
+                ['display_name' => 'Full Name', 'variable_name' => 'full_name', 'value' => $fullName],
+                ['display_name' => 'User ID', 'variable_name' => 'user_id', 'value' => $userId]
+            ]
+        ]
+    ];
+
+    $ch = curl_init('https://api.paystack.co/transaction/initialize');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($paystackData));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        "Authorization: Bearer {$secretKey}",
+        "Content-Type: application/json"
+    ]);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+
+    $res = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    $json = json_decode($res, true);
+    $publicKey = trim($config['paystackPublicKey'] ?? getenv('PAYSTACK_PUBLIC_KEY') ?? '');
+
+    if ($httpCode !== 200 || empty($json['status']) || empty($json['data']['authorization_url'])) {
+        // Even if initialize endpoint fails or is offline, return reference and public key for client-side InlineJS
+        echo json_encode([
+            'success' => true,
+            'authorization_url' => '',
+            'access_code' => '',
+            'reference' => $reference,
+            'publicKey' => $publicKey,
+            'amount' => $subAmount,
+            'currency' => 'NGN'
+        ]);
+        exit;
+    }
+
+    echo json_encode([
+        'success' => true,
+        'authorization_url' => $json['data']['authorization_url'] ?? '',
+        'access_code' => $json['data']['access_code'] ?? '',
+        'reference' => $json['data']['reference'] ?? $reference,
+        'publicKey' => $publicKey,
+        'amount' => $subAmount,
+        'currency' => 'NGN'
+    ]);
+    exit;
+}
+
+// POST /api/payment/paystack-inlinejs-verify
+if ($method === 'POST' && $path === '/api/payment/paystack-inlinejs-verify') {
+    header('Content-Type: application/json');
+    $reference = trim($input['reference'] ?? ($input['trxref'] ?? ($input['transaction_ref'] ?? '')));
+
+    if (empty($reference)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Transaction reference is required for Paystack verification']);
+        exit;
+    }
+
+    $result = fulfill_paystack_payment($reference);
+
+    if (!$result['success']) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => $result['error'] ?? 'Paystack transaction verification failed']);
+        exit;
+    }
+
+    echo json_encode([
+        'success' => true,
+        'message' => $result['message'] ?? 'Payment verified and subscription activated successfully',
+        'subscriptionExpiryDate' => $result['subscriptionExpiryDate'] ?? null,
+        'alreadyProcessed' => $result['alreadyProcessed'] ?? false,
+        'reference' => $reference
+    ]);
+    exit;
+}
+
+// GET or POST /api/payment/paystack-callback, /api/payment/paystack-verify, and /api/payment/paystack-complete
+if ($path === '/api/payment/paystack-callback' || $path === '/api/payment/paystack-verify' || $path === '/api/payment/paystack-complete') {
+    $reference = $_GET['reference'] ?? ($_GET['trxref'] ?? ($input['reference'] ?? ($input['trxref'] ?? '')));
+    $reference = trim($reference);
+
+    $isHtmlRequest = isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'text/html') !== false;
+    $isJsonRequest = (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false) || (isset($_SERVER['CONTENT_TYPE']) && strpos($_SERVER['CONTENT_TYPE'], 'application/json') !== false);
+
+    if (empty($reference)) {
+        if ($isJsonRequest && !$isHtmlRequest) {
+            header('Content-Type: application/json');
+            echo json_encode(['status' => 'ok', 'message' => 'Paystack Callback Endpoint is active and listening.']);
+            exit;
+        }
+        if ($isHtmlRequest || $method === 'GET') {
+            header('Location: /?payment=missing_reference');
+            exit;
+        }
+        http_response_code(400);
+        header('Content-Type: application/json');
+        echo json_encode(['success' => false, 'error' => 'Transaction reference is missing']);
+        exit;
+    }
+
+    // Fulfill payment via centralized handler
+    $result = fulfill_paystack_payment($reference);
+
+    if (!$result['success']) {
+        if ($isHtmlRequest || $method === 'GET') {
+            header('Location: /?payment=failed');
+            exit;
+        }
+        http_response_code(400);
+        header('Content-Type: application/json');
+        echo json_encode(['success' => false, 'error' => $result['error'] ?? 'Paystack verification failed']);
+        exit;
+    }
+
+    if ($isHtmlRequest || $method === 'GET') {
+        header('Location: /?payment=success&ref=' . urlencode($reference));
+        exit;
+    }
+
+    header('Content-Type: application/json');
+    echo json_encode([
+        'success' => true,
+        'message' => $result['message'] ?? 'Payment verified successfully',
+        'reference' => $reference,
+        'subscriptionExpiryDate' => $result['subscriptionExpiryDate'] ?? null
+    ]);
+    exit;
+}
+
 // POST /api/payment/monnify-initiate
 if ($method === 'POST' && $path === '/api/payment/monnify-initiate') {
     header('Content-Type: application/json');
@@ -1337,7 +2745,7 @@ if ($path === '/api/payment/monnify-webhook' || $path === '/api/monnify/webhook'
                         $currentExpiry = $existingExpiry;
                     }
                 }
-                $newExpiryDate = date(DATE_ISO8601, $currentExpiry + $daysToAdd * 24 * 60 * 60);
+                $newExpiryDate = gmdate('Y-m-d\TH:i:s.000\Z', $currentExpiry + $daysToAdd * 24 * 60 * 60);
 
                 DB::updateUser($targetUser['id'], [
                     'subscriptionStatus' => 'Active',
@@ -1345,7 +2753,7 @@ if ($path === '/api/payment/monnify-webhook' || $path === '/api/monnify/webhook'
                     'paymentStatus' => 'Paid',
                     'subscriptionExpiryDate' => $newExpiryDate,
                     'transactionRef' => $paymentRef,
-                    'lastPaymentTime' => date(DATE_ISO8601)
+                    'lastPaymentTime' => gmdate('Y-m-d\TH:i:s.000\Z')
                 ]);
 
                 if (!empty($targetUser['jellyfinUserId']) && $config) {
@@ -2279,7 +3687,7 @@ if ($method === 'POST' && $path === '/api/admin/payments/verify') {
                     $currentExpiry = $existingExpiry;
                 }
             }
-            $newExpiryDate = date(DATE_ISO8601, $currentExpiry + $daysToAdd * 24 * 60 * 60);
+            $newExpiryDate = gmdate('Y-m-d\TH:i:s.000\Z', $currentExpiry + $daysToAdd * 24 * 60 * 60);
 
             $updatedUser = DB::updateUser($userId, [
                 'subscriptionStatus' => 'Active',
