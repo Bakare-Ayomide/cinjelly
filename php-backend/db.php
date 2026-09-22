@@ -274,6 +274,9 @@ class DB {
         try {
             $pdo->exec("ALTER TABLE system_config ADD COLUMN squadMode VARCHAR(50) NOT NULL DEFAULT 'live'");
         } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN manualPaymentEnabled TINYINT(1) NOT NULL DEFAULT 1");
+        } catch (Exception $e) {}
 
         // Squad SFTP Fallback Configuration Columns
         try {
@@ -388,6 +391,44 @@ class DB {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ");
 
+        // Create affiliate_withdrawals table
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS affiliate_withdrawals (
+                id VARCHAR(255) PRIMARY KEY,
+                affiliate_user_id VARCHAR(255) NOT NULL,
+                amount DECIMAL(10,2) NOT NULL,
+                bank_name VARCHAR(255) NOT NULL,
+                account_number VARCHAR(100) NOT NULL,
+                account_name VARCHAR(255) NOT NULL,
+                status VARCHAR(50) NOT NULL DEFAULT 'pending',
+                admin_note TEXT NULL,
+                requested_at VARCHAR(255) NOT NULL,
+                processed_at VARCHAR(255) NULL,
+                processed_by VARCHAR(255) NULL,
+                payment_reference VARCHAR(255) NULL,
+                decline_reason TEXT NULL,
+                created_at VARCHAR(255) NOT NULL,
+                updated_at VARCHAR(255) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        try {
+            $pdo->exec("CREATE INDEX idx_affiliate_user_withdrawals ON affiliate_withdrawals (affiliate_user_id)");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("CREATE INDEX idx_affiliate_withdrawal_status ON affiliate_withdrawals (status)");
+        } catch (Exception $e) {}
+
+        try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN bankName VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN accountNumber VARCHAR(100) NULL");
+        } catch (Exception $e) {}
+        try {
+            $pdo->exec("ALTER TABLE users ADD COLUMN accountName VARCHAR(255) NULL");
+        } catch (Exception $e) {}
+
         // Create media_requests table
         $pdo->exec("
             CREATE TABLE IF NOT EXISTS media_requests (
@@ -420,6 +461,130 @@ class DB {
             $pdo->exec("ALTER TABLE broadcast_notifications ADD COLUMN targetUserId VARCHAR(255) NULL");
         } catch (Exception $e) {}
 
+                try {
+            $pdo->exec("ALTER TABLE system_config ADD COLUMN heroSlideDelaySeconds INT NOT NULL DEFAULT 5");
+        } catch (Exception $e) {}
+
+        // Create landing_hero_slides table
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS landing_hero_slides (
+                id VARCHAR(255) PRIMARY KEY,
+                title VARCHAR(255) NOT NULL,
+                tagline VARCHAR(255) NULL,
+                year VARCHAR(50) NULL,
+                rating VARCHAR(50) NULL,
+                quality VARCHAR(50) NULL,
+                duration VARCHAR(100) NULL,
+                mediaType VARCHAR(50) NOT NULL DEFAULT 'image',
+                mediaUrl TEXT NOT NULL,
+                posterUrl TEXT NULL,
+                announcement TEXT NULL,
+                slideOrder INT NOT NULL DEFAULT 0,
+                isActive TINYINT(1) NOT NULL DEFAULT 1,
+                createdAt VARCHAR(255) NOT NULL,
+                updatedAt VARCHAR(255) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        // Create landing_about table
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS landing_about (
+                id VARCHAR(255) PRIMARY KEY,
+                header VARCHAR(255) NOT NULL,
+                badge VARCHAR(255) NULL,
+                subtitle VARCHAR(255) NULL,
+                contentHtml LONGTEXT NOT NULL,
+                imageUrl TEXT NULL,
+                imageAlt VARCHAR(255) NULL,
+                captionTitle VARCHAR(255) NULL,
+                captionDesc VARCHAR(255) NULL,
+                featurePillsJson TEXT NULL,
+                cardsJson TEXT NULL,
+                updatedAt VARCHAR(255) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        // Create landing_faqs table
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS landing_faqs (
+                id VARCHAR(255) PRIMARY KEY,
+                question TEXT NOT NULL,
+                answer TEXT NOT NULL,
+                faqOrder INT NOT NULL DEFAULT 0,
+                isActive TINYINT(1) NOT NULL DEFAULT 1,
+                createdAt VARCHAR(255) NOT NULL,
+                updatedAt VARCHAR(255) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        // Seed initial slides if empty
+        try {
+            $stmt = $pdo->query("SELECT COUNT(*) as cnt FROM landing_hero_slides");
+            $r = $stmt->fetch();
+            if ($r && intval($r['cnt']) === 0) {
+                $now = date(DATE_ISO8601);
+                $seedSlides = [
+                    ['slide-evil-dead', 'EVIL DEAD', 'CINODE 4K STREAMING NETWORK • ₦600 UNLIMITED PASS', '1981 - 2023', '9.9', '4K Remaster', 'Franchise Boxset', 'image', '', '', "Bruce Campbell and Sam Raimi's legendary Evil Dead universe is fully remastered in 4K HDR. Stream unrated cuts and behind-the-scenes specials with zero buffer on Cinode.", 0, 1, $now, $now],
+                    ['slide-dune-2', 'DUNE: PART TWO', 'IMAX ENHANCED 4K HDR • 45MBPS DIRECT STREAM', '2024', '9.8', '4K Ultra HD', '2h 46m', 'image', 'https://image.tmdb.org/t/p/original/8b8R8l88Qje9dn9OE8PY05Nxl1X.jpg', 'https://image.tmdb.org/t/p/w500/y4ml848KTz0zccQxfWlE8CMMC13.jpg', "Denis Villeneuve's cinematic masterwork is now streaming in full 4K HDR. Experience Paul Atreides' destiny on any TV, PC, or mobile device with zero buffering.", 1, 1, $now, $now],
+                    ['slide-stranger-things', 'STRANGER THINGS', 'COMPLETE 4K BINGE • OFFLINE DOWNLOADS READY', '2025', '9.9', '4K BINGE', 'All Seasons', 'image', 'https://image.tmdb.org/t/p/original/56v2KjBlU4XaOv9rVYEQypROD7P.jpg', 'https://image.tmdb.org/t/p/w500/uOOtwVbSr4QDjAGIifLDwpb2Pdl.jpg', 'Every season of Stranger Things available in stunning 4K HDR. Save full episodes directly to your iOS or Android app to watch on the go without mobile data lag.', 2, 1, $now, $now],
+                    ['slide-arcane', 'ARCANE', 'CRITICALLY ACCLAIMED MASTERPIECE • 9.9/10 RATING', '2024', '9.9', '4K HDR', 'Season 1 & 2', 'image', 'https://image.tmdb.org/t/p/original/uDgy6hyPd82kOHh6I95FLtLnj6p.jpg', 'https://image.tmdb.org/t/p/w500/abf8tHznhSvl9BAElD2cQeRr7do.jpg', 'Experience the visual triumph of Piltover and Zaun. Stream every high-stakes episode in pristine 4K resolution with synchronized English/multi-language subtitles.', 3, 1, $now, $now],
+                    ['slide-gladiator', 'GLADIATOR II', 'EPIC ACTION BLOCKBUSTER • UNTHROTTLED PLAYBACK', '2024', '9.4', '4K HDR', '2h 28m', 'image', 'https://image.tmdb.org/t/p/original/euYIwmqkmz95mnXvufEmbL6ovhZ.jpg', 'https://image.tmdb.org/t/p/w500/gUPnmDkNRSLFynbpNw9VJrYBEgT.jpg', "Lucius enters the Colosseum in Ridley Scott's monumental return to ancient Rome. Stream with instant 1-click seeking and zero buffering on Cinode.", 4, 1, $now, $now]
+                ];
+                $ins = $pdo->prepare("INSERT INTO landing_hero_slides (id, title, tagline, year, rating, quality, duration, mediaType, mediaUrl, posterUrl, announcement, slideOrder, isActive, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                foreach ($seedSlides as $s) {
+                    $ins->execute($s);
+                }
+            }
+        } catch (Exception $e) {}
+
+        // Seed initial about if empty
+        try {
+            $stmt = $pdo->query("SELECT COUNT(*) as cnt FROM landing_about");
+            $r = $stmt->fetch();
+            if ($r && intval($r['cnt']) === 0) {
+                $now = date(DATE_ISO8601);
+                $ins = $pdo->prepare("INSERT INTO landing_about (id, header, badge, subtitle, contentHtml, imageUrl, imageAlt, captionTitle, captionDesc, featurePillsJson, cardsJson, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                $ins->execute([
+                    'main',
+                    'About',
+                    "⚡ NIGERIA'S HIGH-SPEED CINEMA NETWORK",
+                    'Cinode: Unthrottled 4K Streaming for Everyone',
+                    '<p>Cinode is a purpose-built, high-performance private streaming network engineered to deliver true 4K HDR and Full HD cinema directly to your screens without buffering or ISP throttling.</p><p>With a dedicated 45Mbps direct-play infrastructure, you bypass aggressive streaming compression to enjoy theater-quality audio, crystal-clear visuals, personalized watch histories, and instant movie requests.</p><p>One single ₦600/month pass gives you unhindered access across Smart TVs, Android, iPhone, iPad, Windows, and Mac with synchronized playback and offline mobile downloads.</p>',
+                    '',
+                    'Cinode 4K Cinema Engine',
+                    'Direct Cloud Storage Architecture',
+                    '10,000+ Hours of 4K Remastered Cinema & TV Series',
+                    json_encode(["⚡ 45Mbps Direct Play Engine", "🛡️ 100% Ad-Free Private Profiles", "🍿 ₦600 All-Inclusive Pass"]),
+                    json_encode([
+                        ['id' => 'c1', 'title' => 'Zero Buffer Engine', 'desc' => 'Direct-play 45Mbps video streams backed by dedicated high-speed storage. Movies and series launch instantly without waiting.', 'icon' => 'Zap'],
+                        ['id' => 'c2', 'title' => 'Any Screen, Everywhere', 'desc' => 'Stream on your Smart TV, Mobile Phone, Tablet, and PC without paying extra per device. Seamless playback synchronization.', 'icon' => 'Tv'],
+                        ['id' => 'c3', 'title' => 'Offline Downloads', 'desc' => 'Save HD blockbusters directly onto your iOS or Android app to watch on trips without spending mobile data.', 'icon' => 'Smartphone']
+                    ]),
+                    $now
+                ]);
+            }
+        } catch (Exception $e) {}
+
+        // Seed initial FAQs if empty
+        try {
+            $stmt = $pdo->query("SELECT COUNT(*) as cnt FROM landing_faqs");
+            $r = $stmt->fetch();
+            if ($r && intval($r['cnt']) === 0) {
+                $now = date(DATE_ISO8601);
+                $seedFaqs = [
+                    ['faq-1', 'What is Cinode Streaming Network?', 'Cinode is a high-speed private media streaming portal engineered for smooth, ad-free streaming of curated blockbuster movies, full franchises, and TV series directly on your phone, smart TV, or laptop.', 0, 1, $now, $now],
+                    ['faq-2', 'How does the ₦600 subscription work?', 'We keep premium streaming ultra-affordable. A single flat subscription fee of ₦600 unlocks 30 full days of unlimited, ad-free streaming in 4K HDR. You can renew instantly using Paystack, Monnify, Squad, or direct bank transfer.', 1, 1, $now, $now],
+                    ['faq-3', 'Can I watch offline on my mobile phone?', 'Yes! Download our official mobile client apps to save your favorite movies and series directly to your device and watch offline anywhere without using mobile data.', 2, 1, $now, $now],
+                    ['faq-4', 'How do I connect the Mobile App?', 'When you open the mobile app for the first time, simply enter our Server Address: https://cinode.zerolord.com and sign in with your Cinode portal account credentials.', 3, 1, $now, $now],
+                    ['faq-5', 'Can I request movies that are not available?', 'Absolutely! Our portal includes a built-in Content Request system. Simply submit the title you want, and our system will fetch and add it to the library.', 4, 1, $now, $now]
+                ];
+                $ins = $pdo->prepare("INSERT INTO landing_faqs (id, question, answer, faqOrder, isActive, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?)");
+                foreach ($seedFaqs as $f) {
+                    $ins->execute($f);
+                }
+            }
+        } catch (Exception $e) {}
+
         // Create squad_mandates table for Direct Debit recurring billing
         $pdo->exec("
             CREATE TABLE IF NOT EXISTS squad_mandates (
@@ -439,6 +604,20 @@ class DB {
                 nextDebitDate VARCHAR(255) NULL,
                 createdAt VARCHAR(255) NOT NULL,
                 updatedAt VARCHAR(255) NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        ");
+
+        // Create password_reset_tokens table for secure forgot password recovery
+        $pdo->exec("
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                id VARCHAR(255) PRIMARY KEY,
+                userId VARCHAR(255) NOT NULL,
+                tokenHash VARCHAR(255) NOT NULL,
+                expiresAt VARCHAR(255) NOT NULL,
+                usedAt VARCHAR(255) NULL,
+                createdAt VARCHAR(255) NOT NULL,
+                INDEX idx_reset_token_hash (tokenHash),
+                INDEX idx_reset_user_id (userId)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ");
 
@@ -526,6 +705,7 @@ class DB {
             'bankName' => $row['bankName'] ?? '',
             'bankBeneficiary' => $row['bankBeneficiary'] ?? '',
             'bankInstructions' => $row['bankInstructions'] ?? '',
+            'manualPaymentEnabled' => isset($row['manualPaymentEnabled']) ? (int)$row['manualPaymentEnabled'] : 1,
             'chatbotInfo' => $row['chatbotInfo'] ?? '',
             'chatbotInstructions' => $row['chatbotInstructions'] ?? '',
             'contactEmail' => $row['contactEmail'] ?? '',
@@ -592,7 +772,7 @@ class DB {
         $stmt = $pdo->prepare('
             REPLACE INTO system_config (
                 id, serverUrl, adminUsername, adminPasswordFull, apiKey, defaultCommission, 
-                bankAccountNo, bankName, bankBeneficiary, bankInstructions, 
+                bankAccountNo, bankName, bankBeneficiary, bankInstructions, manualPaymentEnabled, 
                 chatbotInfo, chatbotInstructions, contactEmail, contactPhone, contactWhatsApp, contactOther, 
                 iosDownloadUrl, androidDownloadUrl,
                 smtpEnabled, smtpHost, smtpPort, smtpSecure, smtpUser, smtpPass, smtpFromName, smtpFromEmail,
@@ -606,7 +786,7 @@ class DB {
                 squadSftpRemoteDir, squadSftpProcessingDir, squadSftpGpgPrivateKey, squadSftpGpgPassphrase,
                 squadSftpPollInterval, squadSftpLastSync, squadSftpLastFile, squadSftpLastTxRef, squadSftpLastError, squadSftpLastStatus
             )
-            VALUES ("main", ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES ("main", ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ');
         $stmt->execute([
             $config['serverUrl'] ?? '',
@@ -618,6 +798,7 @@ class DB {
             $config['bankName'] ?? '',
             $config['bankBeneficiary'] ?? '',
             $config['bankInstructions'] ?? '',
+            isset($config['manualPaymentEnabled']) ? (int)$config['manualPaymentEnabled'] : 1,
             $config['chatbotInfo'] ?? '',
             $config['chatbotInstructions'] ?? '',
             $config['contactEmail'] ?? '',
@@ -931,6 +1112,53 @@ class DB {
         $stmt->execute([$token]);
     }
 
+    public static function invalidateUserSessions($userId) {
+        $pdo = self::getConnection();
+        $stmt = $pdo->prepare('DELETE FROM sessions WHERE userId = ?');
+        $stmt->execute([$userId]);
+    }
+
+    public static function createPasswordResetToken($userId, $tokenHash, $expiresAt) {
+        $pdo = self::getConnection();
+        $id = 'rst_' . time() . '_' . bin2hex(random_bytes(4));
+        $createdAt = date(DATE_ISO8601);
+
+        $stmt = $pdo->prepare("
+            INSERT INTO password_reset_tokens (id, userId, tokenHash, expiresAt, usedAt, createdAt)
+            VALUES (?, ?, ?, ?, NULL, ?)
+        ");
+        $stmt->execute([$id, $userId, $tokenHash, $expiresAt, $createdAt]);
+        return $id;
+    }
+
+    public static function getPasswordResetTokenByHash($tokenHash) {
+        $pdo = self::getConnection();
+        $stmt = $pdo->prepare("
+            SELECT * FROM password_reset_tokens WHERE tokenHash = ? ORDER BY createdAt DESC LIMIT 1
+        ");
+        $stmt->execute([$tokenHash]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    public static function markPasswordResetTokenUsed($id) {
+        $pdo = self::getConnection();
+        $usedAt = date(DATE_ISO8601);
+        $stmt = $pdo->prepare("UPDATE password_reset_tokens SET usedAt = ? WHERE id = ?");
+        $stmt->execute([$usedAt, $id]);
+    }
+
+    public static function getRecentResetRequestCount($userId, $windowSeconds = 120) {
+        $pdo = self::getConnection();
+        $cutoff = date(DATE_ISO8601, time() - $windowSeconds);
+        $stmt = $pdo->prepare("
+            SELECT COUNT(*) as count FROM password_reset_tokens WHERE userId = ? AND createdAt >= ?
+        ");
+        $stmt->execute([$userId, $cutoff]);
+        $row = $stmt->fetch();
+        return $row ? (int)$row['count'] : 0;
+    }
+
     public static function cleanupExpiredSessions() {
         $pdo = self::getConnection();
         $stmt = $pdo->prepare('DELETE FROM sessions WHERE expiresAt < ?');
@@ -1036,6 +1264,335 @@ class DB {
         $stmt->execute([$status, $now, $id]);
     }
 
+    public static function getAffiliateBalances($affiliateUserId) {
+        $pdo = self::getConnection();
+
+        // 1. Total commissions earned (all non-declined commissions)
+        $stmt = $pdo->prepare("
+            SELECT COALESCE(SUM(amount), 0) AS totalEarned
+            FROM commissions
+            WHERE affiliateId = ? AND status != 'Declined'
+        ");
+        $stmt->execute([$affiliateUserId]);
+        $totalEarned = (float)$stmt->fetchColumn();
+
+        // 2. Pending withdrawals (currently reserved)
+        $stmt = $pdo->prepare("
+            SELECT COALESCE(SUM(amount), 0) AS pendingAmount
+            FROM affiliate_withdrawals
+            WHERE affiliate_user_id = ? AND status = 'pending'
+        ");
+        $stmt->execute([$affiliateUserId]);
+        $pendingAmount = (float)$stmt->fetchColumn();
+
+        // 3. Settled / paid withdrawals
+        $stmt = $pdo->prepare("
+            SELECT COALESCE(SUM(amount), 0) AS paidAmount
+            FROM affiliate_withdrawals
+            WHERE affiliate_user_id = ? AND status = 'paid'
+        ");
+        $stmt->execute([$affiliateUserId]);
+        $paidAmount = (float)$stmt->fetchColumn();
+
+        // High precision integer cents/kobo calculation
+        $totalEarnedCents = (int)round($totalEarned * 100);
+        $pendingCents = (int)round($pendingAmount * 100);
+        $paidCents = (int)round($paidAmount * 100);
+        $availableCents = max(0, $totalEarnedCents - $pendingCents - $paidCents);
+
+        $availableAmount = round($availableCents / 100, 2);
+
+        return [
+            'totalEarnings' => round($totalEarned, 2),
+            'pendingWithdrawal' => round($pendingAmount, 2),
+            'totalPaidOut' => round($paidAmount, 2),
+            'availableEarnings' => $availableAmount,
+            'totalEarningsCents' => $totalEarnedCents,
+            'pendingCents' => $pendingCents,
+            'paidCents' => $paidCents,
+            'availableCents' => $availableCents
+        ];
+    }
+
+    public static function requestAffiliateWithdrawal($affiliateUserId, $bankName, $accountNumber, $accountName, $requestedAmount = null) {
+        $pdo = self::getConnection();
+        
+        $pdo->beginTransaction();
+        try {
+            // Lock user row and commissions for this affiliate to avoid race conditions
+            $stmtLock = $pdo->prepare("SELECT id, bankName, accountNumber, accountName FROM users WHERE id = ? FOR UPDATE");
+            $stmtLock->execute([$affiliateUserId]);
+            $userRow = $stmtLock->fetch();
+            if (!$userRow) {
+                throw new Exception("Affiliate user record not found.");
+            }
+
+            // Lock pending withdrawals
+            $stmtPending = $pdo->prepare("SELECT id FROM affiliate_withdrawals WHERE affiliate_user_id = ? AND status = 'pending' FOR UPDATE");
+            $stmtPending->execute([$affiliateUserId]);
+            $stmtPending->fetchAll();
+
+            // Calculate exact balance with locks held
+            $stmtComms = $pdo->prepare("SELECT COALESCE(SUM(amount), 0) FROM commissions WHERE affiliateId = ? AND status != 'Declined'");
+            $stmtComms->execute([$affiliateUserId]);
+            $totalEarned = (float)$stmtComms->fetchColumn();
+
+            $stmtWithPending = $pdo->prepare("SELECT COALESCE(SUM(amount), 0) FROM affiliate_withdrawals WHERE affiliate_user_id = ? AND status = 'pending'");
+            $stmtWithPending->execute([$affiliateUserId]);
+            $pendingWith = (float)$stmtWithPending->fetchColumn();
+
+            $stmtWithPaid = $pdo->prepare("SELECT COALESCE(SUM(amount), 0) FROM affiliate_withdrawals WHERE affiliate_user_id = ? AND status = 'paid'");
+            $stmtWithPaid->execute([$affiliateUserId]);
+            $paidWith = (float)$stmtWithPaid->fetchColumn();
+
+            $totalEarnedCents = (int)round($totalEarned * 100);
+            $pendingCents = (int)round($pendingWith * 100);
+            $paidCents = (int)round($paidWith * 100);
+            $availableCents = max(0, $totalEarnedCents - $pendingCents - $paidCents);
+            $availableAmount = round($availableCents / 100, 2);
+
+            if ($availableCents <= 0) {
+                throw new Exception("You have no available affiliate balance to withdraw.");
+            }
+
+            // Strict single-amount check: requested must match available balance
+            if ($requestedAmount !== null) {
+                $reqCents = (int)round(((float)$requestedAmount) * 100);
+                if ($reqCents !== $availableCents) {
+                    if ($reqCents < $availableCents) {
+                        throw new Exception("You must withdraw your full available earnings of ₦" . number_format($availableAmount, 2));
+                    } else {
+                        throw new Exception("Withdrawal amount cannot exceed your available earnings of ₦" . number_format($availableAmount, 2));
+                    }
+                }
+            }
+
+            $finalAmount = $availableAmount;
+            $id = self::generateUUID();
+            $now = date(DATE_ISO8601);
+
+            $stmtInsert = $pdo->prepare("
+                INSERT INTO affiliate_withdrawals (
+                    id, affiliate_user_id, amount, bank_name, account_number, account_name,
+                    status, admin_note, requested_at, processed_at, processed_by, payment_reference,
+                    decline_reason, created_at, updated_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?,
+                    'pending', NULL, ?, NULL, NULL, NULL,
+                    NULL, ?, ?
+                )
+            ");
+            $stmtInsert->execute([
+                $id,
+                $affiliateUserId,
+                $finalAmount,
+                trim($bankName),
+                trim($accountNumber),
+                trim($accountName),
+                $now,
+                $now,
+                $now
+            ]);
+
+            // Save user bank details for subsequent pre-fills
+            $stmtUpdateBank = $pdo->prepare("UPDATE users SET bankName = ?, accountNumber = ?, accountName = ? WHERE id = ?");
+            $stmtUpdateBank->execute([trim($bankName), trim($accountNumber), trim($accountName), $affiliateUserId]);
+
+            $pdo->commit();
+
+            return [
+                'id' => $id,
+                'affiliate_user_id' => $affiliateUserId,
+                'amount' => $finalAmount,
+                'bank_name' => trim($bankName),
+                'account_number' => trim($accountNumber),
+                'account_name' => trim($accountName),
+                'status' => 'pending',
+                'requested_at' => $now,
+                'created_at' => $now,
+                'updated_at' => $now
+            ];
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    public static function getAffiliateWithdrawals($affiliateUserId) {
+        $pdo = self::getConnection();
+        $stmt = $pdo->prepare("
+            SELECT * FROM affiliate_withdrawals
+            WHERE affiliate_user_id = ?
+            ORDER BY created_at DESC
+        ");
+        $stmt->execute([$affiliateUserId]);
+        $rows = $stmt->fetchAll();
+        foreach ($rows as &$r) {
+            $r['amount'] = (float)$r['amount'];
+        }
+        return $rows;
+    }
+
+    public static function getAffiliateWithdrawalById($id) {
+        $pdo = self::getConnection();
+        $stmt = $pdo->prepare("
+            SELECT w.*, 
+                   u.fullName, 
+                   u.fullName AS full_name, 
+                   u.fullName AS affiliateName, 
+                   u.username, 
+                   u.username AS affiliateUsername, 
+                   u.email, 
+                   u.email AS affiliateEmail,
+                   u.phone,
+                   u.accountStatus
+            FROM affiliate_withdrawals w
+            LEFT JOIN users u ON w.affiliate_user_id = u.id
+            WHERE w.id = ?
+        ");
+        $stmt->execute([$id]);
+        $row = $stmt->fetch();
+        if ($row) {
+            $row['amount'] = (float)$row['amount'];
+            $row['fullName'] = $row['fullName'] ?? ($row['affiliateName'] ?? '');
+            $row['full_name'] = $row['fullName'];
+            $row['username'] = $row['username'] ?? ($row['affiliateUsername'] ?? '');
+            $row['email'] = $row['email'] ?? ($row['affiliateEmail'] ?? '');
+            return $row;
+        }
+        return null;
+    }
+
+    public static function getAllAffiliateWithdrawals($statusFilter = null) {
+        $pdo = self::getConnection();
+        if ($statusFilter && in_array(strtolower($statusFilter), ['pending', 'paid', 'declined', 'cancelled'])) {
+            $stmt = $pdo->prepare("
+                SELECT w.*, 
+                       u.fullName, 
+                       u.fullName AS full_name, 
+                       u.fullName AS affiliateName, 
+                       u.username, 
+                       u.username AS affiliateUsername, 
+                       u.email, 
+                       u.email AS affiliateEmail,
+                       u.phone,
+                       u.accountStatus
+                FROM affiliate_withdrawals w
+                LEFT JOIN users u ON w.affiliate_user_id = u.id
+                WHERE w.status = ?
+                ORDER BY w.created_at DESC
+            ");
+            $stmt->execute([strtolower($statusFilter)]);
+        } else {
+            $stmt = $pdo->query("
+                SELECT w.*, 
+                       u.fullName, 
+                       u.fullName AS full_name, 
+                       u.fullName AS affiliateName, 
+                       u.username, 
+                       u.username AS affiliateUsername, 
+                       u.email, 
+                       u.email AS affiliateEmail,
+                       u.phone,
+                       u.accountStatus
+                FROM affiliate_withdrawals w
+                LEFT JOIN users u ON w.affiliate_user_id = u.id
+                ORDER BY w.created_at DESC
+            ");
+        }
+        $rows = $stmt->fetchAll();
+        foreach ($rows as &$r) {
+            $r['amount'] = (float)$r['amount'];
+            $r['fullName'] = $r['fullName'] ?? ($r['affiliateName'] ?? '');
+            $r['full_name'] = $r['fullName'];
+            $r['username'] = $r['username'] ?? ($r['affiliateUsername'] ?? '');
+            $r['email'] = $r['email'] ?? ($r['affiliateEmail'] ?? '');
+        }
+        return $rows;
+    }
+
+    public static function markAffiliateWithdrawalAsPaid($withdrawalId, $adminUsername, $paymentReference = null) {
+        $pdo = self::getConnection();
+        $pdo->beginTransaction();
+        try {
+            $stmt = $pdo->prepare("SELECT * FROM affiliate_withdrawals WHERE id = ? FOR UPDATE");
+            $stmt->execute([$withdrawalId]);
+            $withdrawal = $stmt->fetch();
+            if (!$withdrawal) {
+                throw new Exception("Withdrawal request not found.");
+            }
+            if ($withdrawal['status'] !== 'pending') {
+                throw new Exception("Only pending withdrawals can be marked as paid. Current status: " . $withdrawal['status']);
+            }
+
+            $now = date(DATE_ISO8601);
+            $cleanRef = !empty($paymentReference) ? trim($paymentReference) : null;
+
+            $stmtUpdate = $pdo->prepare("
+                UPDATE affiliate_withdrawals
+                SET status = 'paid',
+                    processed_at = ?,
+                    processed_by = ?,
+                    payment_reference = ?,
+                    updated_at = ?
+                WHERE id = ?
+            ");
+            $stmtUpdate->execute([$now, $adminUsername, $cleanRef, $now, $withdrawalId]);
+
+            $pdo->commit();
+
+            return self::getAffiliateWithdrawalById($withdrawalId);
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    public static function markAffiliateWithdrawalAsDeclined($withdrawalId, $adminUsername, $declineReason) {
+        $pdo = self::getConnection();
+        $pdo->beginTransaction();
+        try {
+            if (empty(trim($declineReason))) {
+                throw new Exception("A decline reason is mandatory.");
+            }
+
+            $stmt = $pdo->prepare("SELECT * FROM affiliate_withdrawals WHERE id = ? FOR UPDATE");
+            $stmt->execute([$withdrawalId]);
+            $withdrawal = $stmt->fetch();
+            if (!$withdrawal) {
+                throw new Exception("Withdrawal request not found.");
+            }
+            if ($withdrawal['status'] !== 'pending') {
+                throw new Exception("Only pending withdrawals can be declined. Current status: " . $withdrawal['status']);
+            }
+
+            $now = date(DATE_ISO8601);
+            $stmtUpdate = $pdo->prepare("
+                UPDATE affiliate_withdrawals
+                SET status = 'declined',
+                    decline_reason = ?,
+                    processed_at = ?,
+                    processed_by = ?,
+                    updated_at = ?
+                WHERE id = ?
+            ");
+            $stmtUpdate->execute([trim($declineReason), $now, $adminUsername, $now, $withdrawalId]);
+
+            $pdo->commit();
+
+            return self::getAffiliateWithdrawalById($withdrawalId);
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+    }
+
     public static function createMediaRequest($req) {
         $pdo = self::getConnection();
         $id = self::generateUUID();
@@ -1101,6 +1658,17 @@ class DB {
         $pdo = self::getConnection();
         $stmt = $pdo->query('SELECT * FROM broadcast_notifications ORDER BY createdAt DESC');
         return $stmt->fetchAll();
+    }
+
+    public static function deleteBroadcastNotification($id) {
+        $pdo = self::getConnection();
+        $stmt = $pdo->prepare('DELETE FROM broadcast_notifications WHERE id = ?');
+        return $stmt->execute([$id]);
+    }
+
+    public static function clearAllBroadcastNotifications() {
+        $pdo = self::getConnection();
+        return $pdo->exec('DELETE FROM broadcast_notifications');
     }
 
     public static function savePendingPayment($record) {
@@ -1234,5 +1802,183 @@ class DB {
         $pdo = self::getConnection();
         $stmt = $pdo->query("SELECT * FROM squad_mandates WHERE status = 'active' ORDER BY createdAt DESC");
         return $stmt->fetchAll() ?: [];
+    }
+
+    public static function getLandingContent() {
+        $pdo = self::getConnection();
+        $heroSlideDelaySeconds = 5;
+        try {
+            $stmt = $pdo->query("SELECT heroSlideDelaySeconds FROM system_config WHERE id = 'main'");
+            $row = $stmt->fetch();
+            if ($row && !empty($row['heroSlideDelaySeconds'])) {
+                $heroSlideDelaySeconds = intval($row['heroSlideDelaySeconds']);
+            }
+        } catch (Exception $e) {}
+
+        $heroSlides = [];
+        try {
+            $stmt = $pdo->query("SELECT * FROM landing_hero_slides ORDER BY slideOrder ASC, createdAt ASC");
+            $rows = $stmt->fetchAll();
+            foreach ($rows as $r) {
+                $heroSlides[] = [
+                    'id' => $r['id'],
+                    'title' => $r['title'],
+                    'tagline' => $r['tagline'] ?? '',
+                    'year' => $r['year'] ?? '',
+                    'rating' => $r['rating'] ?? '',
+                    'quality' => $r['quality'] ?? '',
+                    'duration' => $r['duration'] ?? '',
+                    'mediaType' => $r['mediaType'] ?? 'image',
+                    'mediaUrl' => $r['mediaUrl'] ?? '',
+                    'posterUrl' => $r['posterUrl'] ?? '',
+                    'announcement' => $r['announcement'] ?? '',
+                    'slideOrder' => intval($r['slideOrder'] ?? 0),
+                    'isActive' => boolval($r['isActive'] ?? 1)
+                ];
+            }
+        } catch (Exception $e) {}
+
+        $about = [
+            'header' => 'About',
+            'badge' => "⚡ NIGERIA'S HIGH-SPEED CINEMA NETWORK",
+            'subtitle' => 'Cinode: Unthrottled 4K Streaming for Everyone',
+            'contentHtml' => '<p>Cinode is a purpose-built, high-performance private streaming network engineered to deliver true 4K HDR and Full HD cinema directly to your screens without buffering or ISP throttling.</p>',
+            'imageUrl' => '',
+            'imageAlt' => 'Cinode 4K Cinema Engine',
+            'captionTitle' => 'Direct Cloud Storage Architecture',
+            'captionDesc' => '10,000+ Hours of 4K Remastered Cinema & TV Series',
+            'featurePills' => ["⚡ 45Mbps Direct Play Engine", "🛡️ 100% Ad-Free Private Profiles", "🍿 ₦600 All-Inclusive Pass"],
+            'cards' => []
+        ];
+        try {
+            $stmt = $pdo->query("SELECT * FROM landing_about WHERE id = 'main'");
+            $ab = $stmt->fetch();
+            if ($ab) {
+                $pills = !empty($ab['featurePillsJson']) ? json_decode($ab['featurePillsJson'], true) : [];
+                $cards = !empty($ab['cardsJson']) ? json_decode($ab['cardsJson'], true) : [];
+                $about = [
+                    'header' => $ab['header'] ?? 'About',
+                    'badge' => $ab['badge'] ?? '',
+                    'subtitle' => $ab['subtitle'] ?? '',
+                    'contentHtml' => $ab['contentHtml'] ?? '',
+                    'imageUrl' => $ab['imageUrl'] ?? '',
+                    'imageAlt' => $ab['imageAlt'] ?? '',
+                    'captionTitle' => $ab['captionTitle'] ?? '',
+                    'captionDesc' => $ab['captionDesc'] ?? '',
+                    'featurePills' => is_array($pills) ? $pills : [],
+                    'cards' => is_array($cards) ? $cards : []
+                ];
+            }
+        } catch (Exception $e) {}
+
+        $faqs = [];
+        try {
+            $stmt = $pdo->query("SELECT * FROM landing_faqs ORDER BY faqOrder ASC, createdAt ASC");
+            $rows = $stmt->fetchAll();
+            foreach ($rows as $r) {
+                $faqs[] = [
+                    'id' => $r['id'],
+                    'question' => $r['question'],
+                    'answer' => $r['answer'],
+                    'faqOrder' => intval($r['faqOrder'] ?? 0),
+                    'isActive' => boolval($r['isActive'] ?? 1)
+                ];
+            }
+        } catch (Exception $e) {}
+
+        return [
+            'heroSlides' => $heroSlides,
+            'heroSlideDelaySeconds' => $heroSlideDelaySeconds,
+            'about' => $about,
+            'faqs' => $faqs
+        ];
+    }
+
+    public static function saveHeroSlides($slides, $delaySeconds = null) {
+        $pdo = self::getConnection();
+        if ($delaySeconds !== null) {
+            $stmt = $pdo->prepare("UPDATE system_config SET heroSlideDelaySeconds = ? WHERE id = 'main'");
+            $stmt->execute([intval($delaySeconds)]);
+        }
+
+        $pdo->exec("DELETE FROM landing_hero_slides");
+        $ins = $pdo->prepare("
+            INSERT INTO landing_hero_slides (id, title, tagline, year, rating, quality, duration, mediaType, mediaUrl, posterUrl, announcement, slideOrder, isActive, createdAt, updatedAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ");
+        $now = date(DATE_ISO8601);
+        foreach ($slides as $idx => $s) {
+            $id = !empty($s['id']) ? $s['id'] : 'slide-' . time() . '-' . $idx;
+            $title = $s['title'] ?? 'Untitled Movie';
+            $tagline = $s['tagline'] ?? '';
+            $year = $s['year'] ?? '';
+            $rating = $s['rating'] ?? '9.0';
+            $quality = $s['quality'] ?? '4K HDR';
+            $duration = $s['duration'] ?? '';
+            $mediaType = $s['mediaType'] ?? 'image';
+            $mediaUrl = $s['mediaUrl'] ?? '';
+            $posterUrl = $s['posterUrl'] ?? '';
+            $announcement = $s['announcement'] ?? '';
+            $slideOrder = isset($s['slideOrder']) ? intval($s['slideOrder']) : $idx;
+            $isActive = isset($s['isActive']) ? ($s['isActive'] ? 1 : 0) : 1;
+
+            $ins->execute([$id, $title, $tagline, $year, $rating, $quality, $duration, $mediaType, $mediaUrl, $posterUrl, $announcement, $slideOrder, $isActive, $now, $now]);
+        }
+    }
+
+    public static function saveAboutConfig($about) {
+        $pdo = self::getConnection();
+        $pillsJson = json_encode($about['featurePills'] ?? []);
+        $cardsJson = json_encode($about['cards'] ?? []);
+        $now = date(DATE_ISO8601);
+
+        $stmt = $pdo->prepare("
+            INSERT INTO landing_about (id, header, badge, subtitle, contentHtml, imageUrl, imageAlt, captionTitle, captionDesc, featurePillsJson, cardsJson, updatedAt)
+            VALUES ('main', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                header = VALUES(header),
+                badge = VALUES(badge),
+                subtitle = VALUES(subtitle),
+                contentHtml = VALUES(contentHtml),
+                imageUrl = VALUES(imageUrl),
+                imageAlt = VALUES(imageAlt),
+                captionTitle = VALUES(captionTitle),
+                captionDesc = VALUES(captionDesc),
+                featurePillsJson = VALUES(featurePillsJson),
+                cardsJson = VALUES(cardsJson),
+                updatedAt = VALUES(updatedAt)
+        ");
+        $stmt->execute([
+            $about['header'] ?? 'About',
+            $about['badge'] ?? '',
+            $about['subtitle'] ?? '',
+            $about['contentHtml'] ?? '',
+            $about['imageUrl'] ?? '',
+            $about['imageAlt'] ?? '',
+            $about['captionTitle'] ?? '',
+            $about['captionDesc'] ?? '',
+            $pillsJson,
+            $cardsJson,
+            $now
+        ]);
+    }
+
+    public static function saveFaqs($faqs) {
+        $pdo = self::getConnection();
+        $pdo->exec("DELETE FROM landing_faqs");
+        $ins = $pdo->prepare("
+            INSERT INTO landing_faqs (id, question, answer, faqOrder, isActive, createdAt, updatedAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ");
+        $now = date(DATE_ISO8601);
+        foreach ($faqs as $idx => $f) {
+            $id = !empty($f['id']) ? $f['id'] : 'faq-' . time() . '-' . $idx;
+            $question = $f['question'] ?? ($f['q'] ?? '');
+            $answer = $f['answer'] ?? ($f['a'] ?? '');
+            $faqOrder = isset($f['faqOrder']) ? intval($f['faqOrder']) : $idx;
+            $isActive = isset($f['isActive']) ? ($f['isActive'] ? 1 : 0) : 1;
+
+            $ins->execute([$id, $question, $answer, $faqOrder, $isActive, $now, $now]);
+        }
     }
 }

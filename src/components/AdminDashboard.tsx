@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Users, CheckCircle, AlertTriangle, ShieldCheck, Search, RefreshCw, 
-  ArrowLeft, Loader2, Ban, PlusCircle, Activity, UserCheck, Tv,
+  ArrowLeft, Loader2, Ban, PlusCircle, Activity, UserCheck, Tv, Film, Bell, Menu,
   TrendingUp, DollarSign, Percent, Settings, Award, ShieldAlert, Edit, Check, Calendar, ArrowRight,
   Trash2, ChevronLeft, ChevronRight, UserPlus, Info, CalendarDays, MessageSquare, Phone,
   CreditCard, X, Smartphone, Download, Mail, Send, Code, FileText, Lock, Eye, RotateCcw, Layout, Maximize2, Monitor, HelpCircle, Copy, ExternalLink, Landmark,
-  Server, Key, FileSpreadsheet, UploadCloud, FolderSync, Shield, Terminal, CheckSquare, Globe, EyeOff, HardDrive, Link
+  Server, Key, FileSpreadsheet, UploadCloud, FolderSync, Shield, Terminal, CheckSquare, Globe, EyeOff, HardDrive, Link,
+  Wallet, Banknote, CheckCircle2, ArrowUpRight, Clock
 } from 'lucide-react';
-import { User, SquadSftpLog, SquadSftpStatus } from '../types';
+import { User, SquadSftpLog, SquadSftpStatus, AffiliateWithdrawal } from '../types';
 import { apiFetch } from '../lib/api';
+import LandingCmsTab from './LandingCmsTab';
 import { 
   DEFAULT_VERIFICATION_SUBJECT, 
   DEFAULT_VERIFICATION_TEMPLATE,
@@ -202,7 +204,8 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   };
 
   // Tab navigation state
-  const [activeTab, setActiveTab] = useState<'subscriptions' | 'payment_settings' | 'support_config' | 'mobile_app' | 'affiliates' | 'commissions' | 'reports' | 'payments' | 'affiliates_dashboard' | 'media_requests' | 'notifications' | 'smtp_email' | 'cpanel_deploy'>('subscriptions');
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<'subscriptions' | 'payment_settings' | 'support_config' | 'mobile_app' | 'affiliates' | 'commissions' | 'affiliate_withdrawals' | 'reports' | 'payments' | 'affiliates_dashboard' | 'media_requests' | 'notifications' | 'landing_cms' | 'smtp_email' | 'cpanel_deploy'>('subscriptions');
 
   // Production cPanel FTP Credentials & Deployment state
   const [showFtpPassword, setShowFtpPassword] = useState(false);
@@ -665,6 +668,32 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
     }
   };
 
+  const handleDeleteNotification = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this notification?')) return;
+    try {
+      const res = await apiFetch(`/api/admin/notifications/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to delete notification');
+      setSentNotifications(prev => prev.filter(n => n.id !== id));
+      showToast('Notification deleted successfully', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Error deleting notification', 'error');
+    }
+  };
+
+  const handleClearAllNotifications = async () => {
+    if (!window.confirm('Are you sure you want to clear ALL notifications? The notification list will be completely empty until you send a new one.')) return;
+    try {
+      const res = await apiFetch('/api/admin/notifications/all', { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to clear notifications');
+      setSentNotifications([]);
+      showToast('All notifications have been cleared from the queue', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Error clearing notifications', 'error');
+    }
+  };
+
   const fetchAffiliates = async () => {
     setAffiliatesLoading(true);
     try {
@@ -852,6 +881,18 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   const [commissions, setCommissions] = useState<any[]>([]);
   const [commissionsLoading, setCommissionsLoading] = useState(false);
 
+  // Affiliate Manual Withdrawals state
+  const [adminWithdrawals, setAdminWithdrawals] = useState<AffiliateWithdrawal[]>([]);
+  const [loadingWithdrawals, setLoadingWithdrawals] = useState(false);
+  const [withdrawalFilter, setWithdrawalFilter] = useState<'all' | 'pending' | 'paid' | 'declined'>('all');
+  const [selectedWithdrawalForPay, setSelectedWithdrawalForPay] = useState<AffiliateWithdrawal | null>(null);
+  const [paymentReferenceInput, setPaymentReferenceInput] = useState('');
+  const [payingWithdrawal, setPayingWithdrawal] = useState(false);
+  const [selectedWithdrawalForDecline, setSelectedWithdrawalForDecline] = useState<AffiliateWithdrawal | null>(null);
+  const [declineReasonInput, setDeclineReasonInput] = useState('');
+  const [decliningWithdrawal, setDecliningWithdrawal] = useState(false);
+  const [copiedAccId, setCopiedAccId] = useState<string | null>(null);
+
   // Affiliate Partner edit settings modal state
   const [editingAffiliateUser, setEditingAffiliateUser] = useState<User | null>(null);
   const [editIsAffiliate, setEditIsAffiliate] = useState(false);
@@ -866,6 +907,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   const [bankName, setBankName] = useState('');
   const [bankBeneficiary, setBankBeneficiary] = useState('');
   const [bankInstructions, setBankInstructions] = useState('');
+  const [manualPaymentEnabled, setManualPaymentEnabled] = useState(true);
 
   // Monnify Payment Gateway config states
   const [monnifyEnabled, setMonnifyEnabled] = useState(false);
@@ -981,6 +1023,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
         setBankName(data.bankName || '');
         setBankBeneficiary(data.bankBeneficiary || '');
         setBankInstructions(data.bankInstructions || '');
+        setManualPaymentEnabled(data.manualPaymentEnabled !== undefined ? Boolean(Number(data.manualPaymentEnabled)) : true);
         setChatbotInfo(data.chatbotInfo || '');
         setChatbotInstructions(data.chatbotInstructions || '');
         setContactEmail(data.contactEmail || '');
@@ -1072,14 +1115,101 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
     }
   };
 
+  const fetchAdminWithdrawals = async () => {
+    setLoadingWithdrawals(true);
+    try {
+      const response = await apiFetch('/api/admin/affiliate-withdrawals');
+      if (response.ok) {
+        const data = await response.json();
+        setAdminWithdrawals(data.withdrawals || []);
+      }
+    } catch (err) {
+      console.error('Error fetching affiliate withdrawals:', err);
+    } finally {
+      setLoadingWithdrawals(false);
+    }
+  };
+
+  const handleCopyAccount = (accNo: string, id: string) => {
+    navigator.clipboard.writeText(accNo);
+    setCopiedAccId(id);
+    showToast(`Account number (${accNo}) copied to clipboard!`, 'success');
+    setTimeout(() => setCopiedAccId(null), 2000);
+  };
+
+  const handleConfirmPayWithdrawal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedWithdrawalForPay) return;
+    setPayingWithdrawal(true);
+    try {
+      const response = await apiFetch(`/api/admin/affiliate-withdrawals/${selectedWithdrawalForPay.id}/pay`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          payment_reference: paymentReferenceInput.trim()
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to mark withdrawal as paid.');
+      }
+
+      showToast(data.message || 'Affiliate withdrawal successfully marked as paid!', 'success');
+      setSelectedWithdrawalForPay(null);
+      setPaymentReferenceInput('');
+      fetchAdminWithdrawals();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to execute payment confirmation.', 'error');
+    } finally {
+      setPayingWithdrawal(false);
+    }
+  };
+
+  const handleConfirmDeclineWithdrawal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedWithdrawalForDecline) return;
+    if (!declineReasonInput.trim()) {
+      showToast('Please enter a decline reason for the affiliate.', 'error');
+      return;
+    }
+    setDecliningWithdrawal(true);
+    try {
+      const response = await apiFetch(`/api/admin/affiliate-withdrawals/${selectedWithdrawalForDecline.id}/decline`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          decline_reason: declineReasonInput.trim()
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to decline withdrawal.');
+      }
+
+      showToast(data.message || 'Withdrawal declined and balance restored to affiliate.', 'success');
+      setSelectedWithdrawalForDecline(null);
+      setDeclineReasonInput('');
+      fetchAdminWithdrawals();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to decline withdrawal.', 'error');
+    } finally {
+      setDecliningWithdrawal(false);
+    }
+  };
+
   useEffect(() => {
     fetchUsers();
     fetchConfig();
+    fetchAdminWithdrawals();
   }, [searchQuery]);
 
   useEffect(() => {
     if (activeTab === 'commissions' || activeTab === 'reports') {
       fetchCommissions();
+    } else if (activeTab === 'affiliate_withdrawals') {
+      fetchAdminWithdrawals();
     } else if (activeTab === 'affiliates_dashboard') {
       fetchAffiliates();
     } else if (activeTab === 'media_requests') {
@@ -1112,6 +1242,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
           bankName,
           bankBeneficiary,
           bankInstructions,
+          manualPaymentEnabled,
           chatbotInfo,
           chatbotInstructions,
           contactEmail,
@@ -1539,231 +1670,591 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
   const sortedTopAffiliates = Object.values(affiliateRecordsMap).sort((a, b) => b.total - a.total);
 
   return (
-    <div className="min-h-screen bg-[#090a0f] py-4 sm:py-8 px-3 sm:px-6 lg:px-8 selection:bg-rose-600 selection:text-white relative" id="admin-dashboard-root">
+    <div className="min-h-screen bg-[#0a0304] text-white flex flex-col md:flex-row selection:bg-[#d31d38] selection:text-white relative" id="admin-dashboard-root">
       
       {/* Floating Toast Notification */}
       {toast && (
-        <div className={`fixed top-6 right-6 z-[100] max-w-sm w-full bg-[#11131e]/95 backdrop-blur-md border-l-4 ${toast.type === 'success' ? 'border-emerald-500' : 'border-rose-500'} rounded-xl shadow-2xl p-4 flex items-start gap-3 animate-in fade-in slide-in-from-top-4 duration-300`}>
+        <div className={`fixed top-6 right-6 z-[100] max-w-sm w-full bg-[#120507]/95 backdrop-blur-md border-l-4 ${toast.type === 'success' ? 'border-emerald-500' : 'border-[#d31d38]'} rounded-xl shadow-2xl p-4 flex items-start gap-3 border border-[#2e1015] animate-in fade-in slide-in-from-top-4 duration-300`}>
           <div className="mt-0.5 shrink-0">
             {toast.type === 'success' ? (
               <CheckCircle className="w-5 h-5 text-emerald-400" />
             ) : (
-              <AlertTriangle className="w-5 h-5 text-rose-500" />
+              <AlertTriangle className="w-5 h-5 text-[#d31d38]" />
             )}
           </div>
           <div className="flex-1 min-w-0">
             <h4 className="text-xs font-bold text-white uppercase tracking-wider font-display">
               {toast.type === 'success' ? 'Action Successful' : 'Action Failed'}
             </h4>
-            <p className="text-[11px] text-slate-300 mt-1 leading-normal">{toast.message}</p>
+            <p className="text-[11px] text-zinc-300 mt-1 leading-normal">{toast.message}</p>
           </div>
           <button 
             onClick={() => setToast(null)}
-            className="text-slate-500 hover:text-white transition font-bold text-xs p-1 cursor-pointer"
+            className="text-zinc-500 hover:text-white transition font-bold text-xs p-1 cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
-      
-      {/* Top Header Controls bar */}
-      <nav className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6 border-b border-slate-800/60 pb-6">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full md:w-auto">
-          <div className="flex flex-row gap-2 w-full sm:w-auto">
-            <button 
-              onClick={onBackToPortal}
-              className="flex-1 sm:flex-none text-slate-300 hover:text-white transition flex items-center justify-center gap-2 text-[11px] font-bold uppercase tracking-wider cursor-pointer bg-slate-900 border border-slate-800 px-3.5 py-2.5 rounded-xl shadow-md"
+
+      {/* MOBILE TOPBAR */}
+      <header className="md:hidden sticky top-0 z-30 bg-[#120507]/95 backdrop-blur-md border-b border-[#2e1015] px-4 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setMobileSidebarOpen(true)}
+            className="p-2 rounded-xl bg-[#180608] border border-[#2e1015] text-zinc-300 hover:text-white cursor-pointer"
+            title="Open Admin Navigation"
+          >
+            <Menu className="w-5 h-5 text-[#d31d38]" />
+          </button>
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 bg-gradient-to-tr from-[#d31d38] to-[#ff2b47] rounded-full flex items-center justify-center text-white shadow-[0_0_12px_rgba(211,29,56,0.5)]">
+              <ShieldAlert className="w-4 h-4" />
+            </div>
+            <span className="font-display font-black text-lg tracking-wider text-white">
+              CIN<span className="text-[#d31d38]">ODE</span>
+            </span>
+            <span className="text-[9px] bg-[#d31d38]/20 text-[#ff4d64] font-extrabold px-1.5 py-0.5 rounded border border-[#d31d38]/30 uppercase">ADMIN</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onBackToPortal}
+            className="text-xs bg-[#180608] hover:bg-[#220a0e] text-zinc-300 border border-[#2e1015] font-bold py-1.5 px-3 rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 text-[#d31d38]" /> Portal
+          </button>
+        </div>
+      </header>
+
+      {/* MOBILE SLIDE-OVER DRAWER */}
+      {mobileSidebarOpen && (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <div 
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity" 
+            onClick={() => setMobileSidebarOpen(false)}
+          />
+          <div className="fixed inset-y-0 left-0 max-w-xs w-full bg-[#120507] border-r border-[#2e1015] p-5 flex flex-col justify-between shadow-2xl z-50 animate-in slide-in-from-left duration-200 overflow-y-auto">
+            <div>
+              <div className="flex items-center justify-between pb-4 border-b border-[#2e1015] mb-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 bg-gradient-to-tr from-[#d31d38] to-[#ff2b47] rounded-xl flex items-center justify-center text-white shadow-[0_0_15px_rgba(211,29,56,0.5)]">
+                    <ShieldAlert className="w-4.5 h-4.5" />
+                  </div>
+                  <div>
+                    <span className="font-display font-black text-lg tracking-wider text-white block leading-none">
+                      CIN<span className="text-[#d31d38]">ODE</span>
+                    </span>
+                    <span className="text-[9px] text-[#ff4d64] font-bold uppercase tracking-widest block mt-0.5">Admin Suite</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setMobileSidebarOpen(false)}
+                  className="p-1.5 rounded-lg bg-[#180608] text-zinc-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Admin quick status card */}
+              <div className="bg-[#180608] border border-[#2e1015] rounded-xl p-3 mb-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-white">Administrator</span>
+                  <span className="text-[9px] bg-emerald-500/15 text-emerald-400 font-bold px-2 py-0.5 rounded-full border border-emerald-500/20">Active</span>
+                </div>
+                <div className="text-[10px] text-zinc-500 font-mono mt-1">@{currentUser.username}</div>
+              </div>
+
+              {/* Grouped Navigation Links */}
+              <nav className="space-y-4">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 px-2 mb-1.5">Core Operations</div>
+                  <div className="space-y-1">
+                    {[
+                      { id: 'subscriptions', label: 'Subscriptions & Members', icon: Tv, badge: totalUsersCount },
+                      { id: 'payments', label: 'Payment Verification', icon: CreditCard, badge: users.filter(u => u.paymentStatus === 'Pending Verification').length, alert: true },
+                      { id: 'media_requests', label: 'Movie & Show Requests', icon: Film, badge: mediaRequests.filter(r => r.status === 'Pending').length, alert: true },
+                    ].map((item) => {
+                      const Icon = item.icon;
+                      const isSelected = activeTab === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            setActiveTab(item.id as any);
+                            setMobileSidebarOpen(false);
+                          }}
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+                            isSelected 
+                              ? 'bg-gradient-to-r from-[#d31d38] to-[#b0162c] text-white shadow-[0_4px_15px_rgba(211,29,56,0.35)]' 
+                              : 'text-zinc-400 hover:text-white hover:bg-[#180608]'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 truncate">
+                            <Icon className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white' : 'text-[#d31d38]'}`} />
+                            <span className="truncate">{item.label}</span>
+                          </div>
+                          {item.badge !== undefined && item.badge > 0 && (
+                            <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded-full ${item.alert ? 'bg-amber-500 text-black animate-pulse' : isSelected ? 'bg-white/20 text-white' : 'bg-[#180608] text-zinc-400 border border-[#2e1015]'}`}>
+                              {item.badge}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 px-2 mb-1.5">Finance & Gateway</div>
+                  <div className="space-y-1">
+                    {[
+                      { id: 'payment_settings', label: 'Gateway & Direct Debit', icon: Landmark },
+                      { id: 'affiliate_withdrawals', label: 'Affiliate Withdrawals', icon: Wallet, badge: adminWithdrawals.filter(w => w.status === 'pending').length, alert: true },
+                      { id: 'commissions', label: 'Commission Ledger', icon: DollarSign, badge: commissions.filter(c => c.status === 'pending').length, alert: true },
+                      { id: 'reports', label: 'Financial Reports', icon: TrendingUp },
+                    ].map((item) => {
+                      const Icon = item.icon;
+                      const isSelected = activeTab === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            setActiveTab(item.id as any);
+                            setMobileSidebarOpen(false);
+                          }}
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+                            isSelected 
+                              ? 'bg-gradient-to-r from-[#d31d38] to-[#b0162c] text-white shadow-[0_4px_15px_rgba(211,29,56,0.35)]' 
+                              : 'text-zinc-400 hover:text-white hover:bg-[#180608]'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 truncate">
+                            <Icon className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white' : 'text-emerald-400'}`} />
+                            <span className="truncate">{item.label}</span>
+                          </div>
+                          {item.badge !== undefined && item.badge > 0 && (
+                            <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-full bg-amber-500 text-black animate-pulse">
+                              {item.badge}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 px-2 mb-1.5">Growth & Marketing</div>
+                  <div className="space-y-1">
+                    {[
+                      { id: 'affiliates', label: 'Affiliate Partners', icon: Users, badge: affiliatePartnersCount },
+                      { id: 'affiliates_dashboard', label: 'Affiliate Analytics', icon: Award },
+                      { id: 'notifications', label: 'Broadcast Notifications', icon: Bell },
+                      { id: 'landing_cms', label: 'Landing Page CMS', icon: Layout },
+                    ].map((item) => {
+                      const Icon = item.icon;
+                      const isSelected = activeTab === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            setActiveTab(item.id as any);
+                            setMobileSidebarOpen(false);
+                          }}
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+                            isSelected 
+                              ? 'bg-gradient-to-r from-[#d31d38] to-[#b0162c] text-white shadow-[0_4px_15px_rgba(211,29,56,0.35)]' 
+                              : 'text-zinc-400 hover:text-white hover:bg-[#180608]'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 truncate">
+                            <Icon className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white' : 'text-emerald-400'}`} />
+                            <span className="truncate">{item.label}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 px-2 mb-1.5">System & Server</div>
+                  <div className="space-y-1">
+                    {[
+                      { id: 'mobile_app', label: 'Mobile App Downloads', icon: Smartphone },
+                      { id: 'support_config', label: 'Support & Bank Config', icon: HelpCircle },
+                      { id: 'smtp_email', label: 'SMTP & Email Templates', icon: Mail },
+                      { id: 'cpanel_deploy', label: 'cPanel / FTP Deploy', icon: Server },
+                    ].map((item) => {
+                      const Icon = item.icon;
+                      const isSelected = activeTab === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => {
+                            setActiveTab(item.id as any);
+                            setMobileSidebarOpen(false);
+                          }}
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+                            isSelected 
+                              ? 'bg-gradient-to-r from-[#d31d38] to-[#b0162c] text-white shadow-[0_4px_15px_rgba(211,29,56,0.35)]' 
+                              : 'text-zinc-400 hover:text-white hover:bg-[#180608]'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 truncate">
+                            <Icon className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white' : 'text-sky-400'}`} />
+                            <span className="truncate">{item.label}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </nav>
+            </div>
+
+            <div className="pt-4 border-t border-[#2e1015] space-y-2">
+              <button
+                onClick={onBackToPortal}
+                className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-[#180608] hover:bg-[#220a0e] text-zinc-300 text-xs font-bold border border-[#2e1015] transition cursor-pointer"
+              >
+                <ArrowLeft className="w-3.5 h-3.5 text-[#d31d38]" /> Back to Portal
+              </button>
+              <button
+                onClick={() => { window.location.hash = '#landing'; }}
+                className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-[#180608] hover:bg-[#220a0e] text-zinc-300 text-xs font-bold border border-[#2e1015] transition cursor-pointer"
+              >
+                <ArrowLeft className="w-3.5 h-3.5 text-amber-500" /> Landing Page
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DESKTOP APP SIDEBAR */}
+      <aside className="hidden md:flex md:w-64 lg:w-72 md:sticky md:top-0 md:h-screen flex-col justify-between bg-[#120507] border-r border-[#2e1015] p-5 shrink-0 z-20 overflow-y-auto">
+        <div>
+          {/* Brand header */}
+          <div className="flex items-center gap-3 pb-4 border-b border-[#2e1015] mb-4">
+            <div className="w-9 h-9 bg-gradient-to-tr from-[#d31d38] to-[#ff2b47] rounded-xl flex items-center justify-center text-white shadow-[0_0_18px_rgba(211,29,56,0.6)] shrink-0">
+              <ShieldAlert className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="font-display font-black text-xl tracking-wider text-white block leading-none">
+                CIN<span className="text-[#d31d38]">ODE</span>
+              </span>
+              <span className="text-[9px] text-[#ff4d64] font-bold uppercase tracking-widest block mt-1">Admin Central</span>
+            </div>
+          </div>
+
+          {/* Admin mini profile badge */}
+          <div className="bg-[#180608] border border-[#2e1015] rounded-2xl p-3 mb-4 shadow-inner">
+            <div className="flex items-center justify-between">
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-extrabold text-white truncate">Administrator</div>
+                <div className="text-[10px] text-zinc-400 font-mono truncate">@{currentUser.username}</div>
+              </div>
+              <button
+                onClick={fetchUsers}
+                disabled={loading}
+                className="p-1.5 rounded-lg bg-[#120507] text-zinc-400 hover:text-white border border-[#2e1015] transition cursor-pointer"
+                title="Reload Data"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-[#d31d38] ${loading ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+          </div>
+
+          {/* Grouped Sidebar Navigation */}
+          <nav className="space-y-4">
+            <div>
+              <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 px-2 mb-1.5">Core Operations</div>
+              <div className="space-y-1">
+                {[
+                  { id: 'subscriptions', label: 'Subscriptions & Members', icon: Tv, badge: totalUsersCount },
+                  { id: 'payments', label: 'Payment Verification', icon: CreditCard, badge: users.filter(u => u.paymentStatus === 'Pending Verification').length, alert: true },
+                  { id: 'media_requests', label: 'Movie & Show Requests', icon: Film, badge: mediaRequests.filter(r => r.status === 'Pending').length, alert: true },
+                ].map((item) => {
+                  const Icon = item.icon;
+                  const isSelected = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => setActiveTab(item.id as any)}
+                      className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+                        isSelected 
+                          ? 'bg-gradient-to-r from-[#d31d38] to-[#b0162c] text-white shadow-[0_4px_18px_rgba(211,29,56,0.35)]' 
+                          : 'text-zinc-400 hover:text-white hover:bg-[#180608]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 truncate">
+                        <Icon className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white' : 'text-[#d31d38]'}`} />
+                        <span className="truncate">{item.label}</span>
+                      </div>
+                      {item.badge !== undefined && item.badge > 0 && (
+                        <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded-full ${item.alert ? 'bg-amber-500 text-black animate-pulse' : isSelected ? 'bg-white/20 text-white' : 'bg-[#180608] text-zinc-400 border border-[#2e1015]'}`}>
+                          {item.badge}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 px-2 mb-1.5">Finance & Gateway</div>
+              <div className="space-y-1">
+                {[
+                  { id: 'payment_settings', label: 'Gateway & Direct Debit', icon: Landmark },
+                  { id: 'affiliate_withdrawals', label: 'Affiliate Withdrawals', icon: Wallet, badge: adminWithdrawals.filter(w => w.status === 'pending').length, alert: true },
+                  { id: 'commissions', label: 'Commission Ledger', icon: DollarSign, badge: commissions.filter(c => c.status === 'pending').length, alert: true },
+                  { id: 'reports', label: 'Financial Reports', icon: TrendingUp },
+                ].map((item) => {
+                  const Icon = item.icon;
+                  const isSelected = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => setActiveTab(item.id as any)}
+                      className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+                        isSelected 
+                          ? 'bg-gradient-to-r from-[#d31d38] to-[#b0162c] text-white shadow-[0_4px_18px_rgba(211,29,56,0.35)]' 
+                          : 'text-zinc-400 hover:text-white hover:bg-[#180608]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 truncate">
+                        <Icon className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white' : 'text-emerald-400'}`} />
+                        <span className="truncate">{item.label}</span>
+                      </div>
+                      {item.badge !== undefined && item.badge > 0 && (
+                        <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-full bg-amber-500 text-black animate-pulse">
+                          {item.badge}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 px-2 mb-1.5">Growth & Marketing</div>
+              <div className="space-y-1">
+                {[
+                  { id: 'affiliates', label: 'Affiliate Partners', icon: Users, badge: affiliatePartnersCount },
+                  { id: 'affiliates_dashboard', label: 'Affiliate Analytics', icon: Award },
+                  { id: 'notifications', label: 'Broadcast Notifications', icon: Bell },
+                  { id: 'landing_cms', label: 'Landing Page CMS', icon: Layout },
+                ].map((item) => {
+                  const Icon = item.icon;
+                  const isSelected = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => setActiveTab(item.id as any)}
+                      className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+                        isSelected 
+                          ? 'bg-gradient-to-r from-[#d31d38] to-[#b0162c] text-white shadow-[0_4px_18px_rgba(211,29,56,0.35)]' 
+                          : 'text-zinc-400 hover:text-white hover:bg-[#180608]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 truncate">
+                        <Icon className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white' : 'text-emerald-400'}`} />
+                        <span className="truncate">{item.label}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 px-2 mb-1.5">System & Server</div>
+              <div className="space-y-1">
+                {[
+                  { id: 'mobile_app', label: 'Mobile App Downloads', icon: Smartphone },
+                  { id: 'support_config', label: 'Support & Bank Config', icon: HelpCircle },
+                  { id: 'smtp_email', label: 'SMTP & Email Templates', icon: Mail },
+                  { id: 'cpanel_deploy', label: 'cPanel / FTP Deploy', icon: Server },
+                ].map((item) => {
+                  const Icon = item.icon;
+                  const isSelected = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => setActiveTab(item.id as any)}
+                      className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+                        isSelected 
+                          ? 'bg-gradient-to-r from-[#d31d38] to-[#b0162c] text-white shadow-[0_4px_18px_rgba(211,29,56,0.35)]' 
+                          : 'text-zinc-400 hover:text-white hover:bg-[#180608]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 truncate">
+                        <Icon className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white' : 'text-sky-400'}`} />
+                        <span className="truncate">{item.label}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </nav>
+        </div>
+
+        {/* Sidebar Footer Controls */}
+        <div className="pt-4 border-t border-[#2e1015] space-y-2">
+          <button
+            onClick={onBackToPortal}
+            className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-[#180608] hover:bg-[#220a0e] text-zinc-300 text-xs font-bold border border-[#2e1015] transition cursor-pointer"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 text-[#d31d38]" /> Back to Portal
+          </button>
+          <button
+            onClick={() => { window.location.hash = '#landing'; }}
+            className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-[#180608] hover:bg-[#220a0e] text-zinc-300 text-xs font-bold border border-[#2e1015] transition cursor-pointer"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 text-amber-500" /> Landing Page
+          </button>
+        </div>
+      </aside>
+
+      {/* MAIN SCREEN CANVAS */}
+      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto w-full pb-24 md:pb-8 space-y-6">
+        
+        {/* Desktop Screen Header Bar */}
+        <div className="hidden md:flex items-center justify-between pb-6 border-b border-[#2e1015]">
+          <div>
+            <div className="text-[10px] text-[#ff4d64] font-extrabold uppercase tracking-widest flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#d31d38]"></span>
+              CINODE ADMIN CONSOLE / {activeTab.replace('_', ' ').toUpperCase()}
+            </div>
+            <h2 className="text-2xl font-display font-extrabold text-white mt-1 capitalize">
+              {activeTab === 'subscriptions' && 'Subscription & Jellyfin Accounts'}
+              {activeTab === 'payments' && 'Pending & Verified Transactions'}
+              {activeTab === 'payment_settings' && 'Squad & Direct Debit Gateways'}
+              {activeTab === 'support_config' && 'Customer Support & Bank Details'}
+              {activeTab === 'mobile_app' && 'Mobile App Download & APK Links'}
+              {activeTab === 'affiliates' && 'Affiliate Partner Accounts'}
+              {activeTab === 'affiliates_dashboard' && 'Affiliate Performance & Metrics'}
+              {activeTab === 'affiliate_withdrawals' && 'Affiliate Withdrawal Requests & Bank Transfers'}
+              {activeTab === 'commissions' && 'Commission Payout Approvals'}
+              {activeTab === 'reports' && 'Revenue & Growth Analytics'}
+              {activeTab === 'media_requests' && 'Movie & TV Show Requests'}
+              {activeTab === 'notifications' && 'Broadcast Announcement Center'}
+              {activeTab === 'landing_cms' && 'Landing Page CMS & Live Content'}
+              {activeTab === 'smtp_email' && 'SMTP Settings & Email Templates'}
+              {activeTab === 'cpanel_deploy' && 'Production cPanel / FTP Deployment'}
+            </h2>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={fetchUsers}
+              disabled={loading}
+              className="bg-[#120507] hover:bg-[#1c080b] border border-[#2e1015] hover:border-[#d31d38]/50 text-zinc-300 text-xs font-bold py-2.5 px-4 rounded-xl transition flex items-center gap-2 cursor-pointer shadow"
             >
-              <ArrowLeft className="w-3.5 h-3.5 text-rose-500" /> Portal
+              <RefreshCw className={`w-3.5 h-3.5 text-[#d31d38] ${loading ? 'animate-spin' : ''}`} /> Refresh Data
             </button>
-            <button 
-              onClick={() => { window.location.hash = '#landing'; }}
-              className="flex-1 sm:flex-none text-slate-300 hover:text-white transition flex items-center justify-center gap-2 text-[11px] font-bold uppercase tracking-wider cursor-pointer bg-slate-900 border border-slate-800 px-3.5 py-2.5 rounded-xl shadow-md"
+            <button
+              onClick={onBackToPortal}
+              className="bg-[#120507] hover:bg-[#1c080b] border border-[#2e1015] hover:border-[#d31d38]/50 text-zinc-300 text-xs font-bold py-2.5 px-4 rounded-xl transition flex items-center gap-2 cursor-pointer shadow"
             >
-              <ArrowLeft className="w-3.5 h-3.5 text-amber-500" /> Landing
+              <ArrowLeft className="w-3.5 h-3.5 text-[#d31d38]" /> User Portal
             </button>
           </div>
-          <div className="h-6 w-[1px] bg-slate-800/80 hidden sm:block"></div>
-          <h1 className="font-display font-extrabold text-sm sm:text-lg tracking-tight text-white text-center sm:text-left">
-            Administrator Central Console
-          </h1>
         </div>
-        
-        <div className="flex items-center justify-center md:justify-end w-full md:w-auto">
-          <span className="text-[10px] sm:text-xs bg-rose-500/10 text-rose-400 border border-rose-500/20 py-2 px-4 rounded-xl font-semibold tracking-wider uppercase">
-            Overseer Control Mode
-          </span>
-        </div>
-      </nav>
 
-      <main className="max-w-7xl mx-auto space-y-8">
-        
         {/* Core Administrative Summary Grid */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" id="admin-stats-container">
-          <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-5 flex items-center gap-4 shadow-xl">
-            <div className="p-2.5 bg-rose-500/10 text-rose-500 rounded-xl border border-rose-500/20 hidden sm:block">
+          <div 
+            onClick={() => setActiveTab('subscriptions')}
+            className={`bg-[#120507] border ${activeTab === 'subscriptions' ? 'border-[#d31d38]/50' : 'border-[#2e1015]'} rounded-2xl p-4 sm:p-5 flex items-center gap-3 sm:gap-4 shadow-xl cursor-pointer hover:border-[#d31d38]/40 transition`}
+          >
+            <div className="p-2.5 bg-[#d31d38]/10 text-[#d31d38] rounded-xl border border-[#d31d38]/20 hidden sm:block">
               <Users className="w-5 h-5" />
             </div>
             <div>
-              <span className="block text-[10px] text-slate-400 font-medium uppercase tracking-wider">Total Members</span>
+              <span className="block text-[10px] text-zinc-400 font-medium uppercase tracking-wider">Total Members</span>
               <span className="text-2xl font-extrabold text-white">{totalUsersCount}</span>
             </div>
           </div>
 
-          <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-5 flex items-center gap-4 shadow-xl">
+          <div 
+            onClick={() => setActiveTab('subscriptions')}
+            className="bg-[#120507] border border-[#2e1015] rounded-2xl p-4 sm:p-5 flex items-center gap-3 sm:gap-4 shadow-xl cursor-pointer hover:border-emerald-500/40 transition"
+          >
             <div className="p-2.5 bg-emerald-500/10 text-emerald-400 rounded-xl border border-emerald-500/20 hidden sm:block">
               <CheckCircle className="w-5 h-5" />
             </div>
             <div>
-              <span className="block text-[10px] text-slate-400 font-medium uppercase tracking-wider">Active Streamers</span>
+              <span className="block text-[10px] text-zinc-400 font-medium uppercase tracking-wider">Active Streamers</span>
               <span className="text-2xl font-extrabold text-white">{activeSubsCount}</span>
             </div>
           </div>
 
-          <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-5 flex items-center gap-4 shadow-xl">
-            <div className="p-2.5 bg-rose-500/10 text-rose-400 rounded-xl border border-rose-500/20 hidden sm:block">
+          <div 
+            onClick={() => setActiveTab('subscriptions')}
+            className="bg-[#120507] border border-[#2e1015] rounded-2xl p-4 sm:p-5 flex items-center gap-3 sm:gap-4 shadow-xl cursor-pointer hover:border-[#d31d38]/40 transition"
+          >
+            <div className="p-2.5 bg-[#d31d38]/10 text-[#ff4d64] rounded-xl border border-[#d31d38]/20 hidden sm:block">
               <AlertTriangle className="w-5 h-5" />
             </div>
             <div>
-              <span className="block text-[10px] text-slate-400 font-medium uppercase tracking-wider">Expired Accounts</span>
+              <span className="block text-[10px] text-zinc-400 font-medium uppercase tracking-wider">Expired Accounts</span>
               <span className="text-2xl font-extrabold text-white">{expiredSubsCount}</span>
             </div>
           </div>
 
-          <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-5 flex items-center gap-4 shadow-xl">
+          <div 
+            onClick={() => setActiveTab('affiliates')}
+            className={`bg-[#120507] border ${activeTab === 'affiliates' ? 'border-emerald-500/50' : 'border-[#2e1015]'} rounded-2xl p-4 sm:p-5 flex items-center gap-3 sm:gap-4 shadow-xl cursor-pointer hover:border-emerald-500/40 transition`}
+          >
             <div className="p-2.5 bg-emerald-500/10 text-emerald-400 rounded-xl border border-emerald-500/20 hidden sm:block">
               <Percent className="w-5 h-5" />
             </div>
             <div>
-              <span className="block text-[10px] text-slate-400 font-medium uppercase tracking-wider">Affiliate Partners</span>
+              <span className="block text-[10px] text-zinc-400 font-medium uppercase tracking-wider">Affiliate Partners</span>
               <span className="text-2xl font-extrabold text-white">{affiliatePartnersCount}</span>
             </div>
           </div>
         </div>
 
         {error && (
-          <div className="p-4 bg-rose-500/10 border border-rose-500/20 text-rose-200 text-xs rounded-xl flex justify-between items-center">
+          <div className="p-4 bg-[#d31d38]/10 border border-[#d31d38]/20 text-rose-200 text-xs rounded-xl flex justify-between items-center shadow-lg">
             <span>{error}</span>
-            <button onClick={() => setError(null)} className="text-rose-400 hover:text-white font-bold">×</button>
+            <button onClick={() => setError(null)} className="text-[#ff4d64] hover:text-white font-bold cursor-pointer">×</button>
           </div>
         )}
 
         {success && (
-          <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 text-emerald-200 text-xs rounded-xl flex justify-between items-center">
+          <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 text-emerald-200 text-xs rounded-xl flex justify-between items-center shadow-lg">
             <span>{success}</span>
-            <button onClick={() => setSuccess(null)} className="text-emerald-400 hover:text-white font-bold">×</button>
+            <button onClick={() => setSuccess(null)} className="text-emerald-400 hover:text-white font-bold cursor-pointer">×</button>
           </div>
         )}
 
-        {/* Tab Controls Navigation */}
-        <div className="flex border-b border-slate-800/80 gap-2 overflow-x-auto pb-px" id="admin-tabs">
-          <button
-            onClick={() => setActiveTab('subscriptions')}
-            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'subscriptions' ? 'border-rose-500 text-rose-400 bg-rose-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
-          >
-            <Tv className="w-4 h-4" /> Subscription Control
-          </button>
-          <button
-            onClick={() => setActiveTab('payments')}
-            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'payments' ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
-          >
-            <CreditCard className="w-4 h-4" /> Verify Payments
-            {users.filter(u => u.paymentStatus === 'Pending Verification').length > 0 && (
-              <span className="bg-rose-600 text-white font-extrabold text-[10px] px-1.5 py-0.5 rounded-full min-w-4 text-center ml-1 animate-pulse">
-                {users.filter(u => u.paymentStatus === 'Pending Verification').length}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => setActiveTab('payment_settings')}
-            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'payment_settings' ? 'border-sky-500 text-sky-400 bg-sky-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
-          >
-            <CreditCard className="w-4 h-4" /> Payment Settings & Monnify
-          </button>
-          <button
-            onClick={() => setActiveTab('support_config')}
-            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'support_config' ? 'border-indigo-500 text-indigo-400 bg-indigo-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
-          >
-            <HelpCircle className="w-4 h-4" /> Support & Chatbot
-          </button>
-          <button
-            onClick={() => setActiveTab('mobile_app')}
-            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'mobile_app' ? 'border-rose-400 text-rose-300 bg-rose-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
-          >
-            <Smartphone className="w-4 h-4" /> Mobile Apps
-          </button>
-          <button
-            onClick={() => setActiveTab('affiliates')}
-            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'affiliates' ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
-          >
-            <Percent className="w-4 h-4" /> Affiliates Program
-          </button>
-          <button
-            onClick={() => setActiveTab('affiliates_dashboard')}
-            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'affiliates_dashboard' ? 'border-indigo-500 text-indigo-400 bg-indigo-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
-          >
-            <Award className="w-4 h-4" /> Affiliate Partners
-          </button>
-          <button
-            onClick={() => setActiveTab('commissions')}
-            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'commissions' ? 'border-amber-500 text-amber-400 bg-amber-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
-          >
-            <DollarSign className="w-4 h-4" /> Commissions Ledger
-          </button>
-          <button
-            onClick={() => setActiveTab('reports')}
-            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'reports' ? 'border-violet-500 text-violet-400 bg-violet-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
-          >
-            <TrendingUp className="w-4 h-4" /> BI Reports
-          </button>
-          <button
-            onClick={() => setActiveTab('media_requests')}
-            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'media_requests' ? 'border-cyan-500 text-cyan-400 bg-cyan-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
-          >
-            <PlusCircle className="w-4 h-4" /> Content Requests
-            {mediaRequests.filter(r => r.status === 'Pending').length > 0 && (
-              <span className="bg-cyan-600 text-white font-extrabold text-[10px] px-1.5 py-0.5 rounded-full min-w-4 text-center ml-1 animate-pulse">
-                {mediaRequests.filter(r => r.status === 'Pending').length}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => setActiveTab('notifications')}
-            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'notifications' ? 'border-sky-500 text-sky-400 bg-sky-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
-          >
-            <MessageSquare className="w-4 h-4" /> Send Broadcasts
-          </button>
-          <button
-            onClick={() => setActiveTab('smtp_email')}
-            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'smtp_email' ? 'border-purple-500 text-purple-400 bg-purple-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
-          >
-            <Mail className="w-4 h-4" /> SMTP & Verification
-          </button>
-          <button
-            onClick={() => setActiveTab('cpanel_deploy')}
-            className={`py-3 px-5 border-b-2 font-display font-bold text-xs uppercase tracking-wider transition cursor-pointer shrink-0 flex items-center gap-1.5 ${activeTab === 'cpanel_deploy' ? 'border-amber-500 text-amber-400 bg-amber-500/5' : 'border-transparent text-slate-400 hover:text-white'}`}
-          >
-            <Server className="w-4 h-4 text-amber-400" /> Production FTP & Deploy
-          </button>
-        </div>        {/* TAB 1: SUBSCRIPTION CONTROL */}
+        {/* Tab Screens */}
         {activeTab === 'subscriptions' && (
           <div className="space-y-6">
             
             {/* Action Bar */}
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-4 flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-4">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-4 flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-4">
               
               <div className="flex flex-wrap items-center gap-3">
                 {/* View Toggler */}
-                <div className="flex bg-[#07080c] p-1 rounded-xl border border-slate-800/80">
+                <div className="flex bg-[#080203] p-1 rounded-xl border border-[#2e1015]">
                   <button
                     onClick={() => setSubViewMode('list')}
-                    className={`py-1.5 px-3 rounded-lg text-[10px] font-bold uppercase tracking-wider transition cursor-pointer whitespace-nowrap ${subViewMode === 'list' ? 'bg-rose-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                    className={`py-1.5 px-3 rounded-lg text-[10px] font-bold uppercase tracking-wider transition cursor-pointer whitespace-nowrap ${subViewMode === 'list' ? 'bg-[#d31d38] text-white shadow-md shadow-[#d31d38]/20' : 'text-zinc-400 hover:text-white'}`}
                   >
                     Registry List
                   </button>
                   <button
                     onClick={() => setSubViewMode('calendar')}
-                    className={`py-1.5 px-3 rounded-lg text-[10px] font-bold uppercase tracking-wider transition cursor-pointer whitespace-nowrap ${subViewMode === 'calendar' ? 'bg-rose-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                    className={`py-1.5 px-3 rounded-lg text-[10px] font-bold uppercase tracking-wider transition cursor-pointer whitespace-nowrap ${subViewMode === 'calendar' ? 'bg-[#d31d38] text-white shadow-md shadow-[#d31d38]/20' : 'text-zinc-400 hover:text-white'}`}
                   >
                     Expiry Calendar
                   </button>
@@ -1771,12 +2262,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
                 {/* Filter Tabs */}
                 {subViewMode === 'list' && (
-                  <div className="flex items-center gap-1 overflow-x-auto bg-[#07080c] p-1 rounded-xl border border-slate-800/80">
+                  <div className="flex items-center gap-1 overflow-x-auto bg-[#080203] p-1 rounded-xl border border-[#2e1015]">
                     {(['All', 'Active', 'Expiring', 'Expired', 'Disabled'] as const).map((filter) => (
                       <button
                         key={filter}
                         onClick={() => setSubStatusFilter(filter)}
-                        className={`py-1.5 px-3 rounded-lg text-[10px] font-bold uppercase tracking-wider transition cursor-pointer whitespace-nowrap ${subStatusFilter === filter ? 'bg-rose-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                        className={`py-1.5 px-3 rounded-lg text-[10px] font-bold uppercase tracking-wider transition cursor-pointer whitespace-nowrap ${subStatusFilter === filter ? 'bg-[#d31d38] text-white shadow-md shadow-[#d31d38]/20' : 'text-zinc-400 hover:text-white'}`}
                       >
                         {filter}
                       </button>
@@ -1790,7 +2281,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 <button
                   type="button"
                   onClick={openAddModal}
-                  className="bg-emerald-600 hover:bg-emerald-700 border border-emerald-500/20 text-white font-bold py-2.5 px-4 rounded-xl text-xs uppercase tracking-wider transition cursor-pointer flex items-center justify-center gap-2"
+                  className="bg-emerald-600 hover:bg-emerald-700 border border-emerald-500/20 text-white font-bold py-2.5 px-4 rounded-xl text-xs uppercase tracking-wider transition cursor-pointer flex items-center justify-center gap-2 shadow-lg"
                 >
                   <UserPlus className="w-3.5 h-3.5" />
                   Add Member
@@ -1800,19 +2291,19 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   type="button"
                   onClick={runManualExpiryCheck}
                   disabled={auditLoading}
-                  className="bg-rose-950/20 hover:bg-rose-950/40 border border-rose-900/30 text-rose-400 font-bold py-2.5 px-4 rounded-xl text-xs uppercase tracking-wider transition cursor-pointer flex items-center justify-center gap-2"
+                  className="bg-[#d31d38]/15 hover:bg-[#d31d38]/25 border border-[#d31d38]/30 text-[#ff4d64] font-bold py-2.5 px-4 rounded-xl text-xs uppercase tracking-wider transition cursor-pointer flex items-center justify-center gap-2"
                 >
-                  {auditLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5 text-rose-500" />}
+                  {auditLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5 text-[#d31d38]" />}
                   Audit Expiries
                 </button>
 
                 {subViewMode === 'list' && (
                   <div className="relative">
-                    <Search className="absolute inset-y-0 left-3.5 h-full w-3.5 text-slate-500 flex items-center" />
+                    <Search className="absolute inset-y-0 left-3.5 h-full w-3.5 text-zinc-500 flex items-center" />
                     <input 
                       type="text" 
                       placeholder="Search members..." 
-                      className="w-full sm:w-48 bg-[#07080c] border border-slate-800 rounded-xl py-2 pl-9 pr-4 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                      className="w-full sm:w-48 bg-[#080203] border border-[#2e1015] rounded-xl py-2 pl-9 pr-4 text-white text-xs focus:outline-none focus:border-[#d31d38] transition placeholder:text-zinc-600"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                     />
@@ -1824,11 +2315,11 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
             {/* Subscriptions Table List View */}
             {subViewMode === 'list' && (
-              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-4 sm:p-6 shadow-xl">
-                <div className="overflow-x-auto border border-slate-800/80 rounded-xl bg-[#07080c]">
-                  <table className="min-w-full divide-y divide-slate-800/60">
-                    <thead className="bg-[#0e1018]">
-                      <tr className="text-left text-xs font-semibold text-slate-400 tracking-wider">
+              <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-4 sm:p-6 shadow-xl">
+                <div className="overflow-x-auto border border-[#2e1015] rounded-xl bg-[#080203]">
+                  <table className="min-w-full divide-y divide-[#2e1015]">
+                    <thead className="bg-[#180608]">
+                      <tr className="text-left text-xs font-semibold text-zinc-400 tracking-wider">
                         <th className="px-6 py-4">Subscriber Details</th>
                         <th className="px-6 py-4">Signed Up Date & Day</th>
                         <th className="px-6 py-4">Plan Status</th>
@@ -1836,17 +2327,17 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                         <th className="px-6 py-4 text-right">Expiration Action Controls</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-800/40 text-sm">
+                    <tbody className="divide-y divide-[#2e1015]/60 text-sm">
                       {loading ? (
                         <tr>
-                          <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
-                            <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-rose-500" />
+                          <td colSpan={5} className="px-6 py-12 text-center text-zinc-500">
+                            <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-[#d31d38]" />
                             <span className="text-xs">Fetching records...</span>
                           </td>
                         </tr>
                       ) : filteredUsersForSubs.length === 0 ? (
                         <tr>
-                          <td colSpan={5} className="px-6 py-12 text-center text-slate-400 font-medium text-xs">
+                          <td colSpan={5} className="px-6 py-12 text-center text-zinc-400 font-medium text-xs">
                             No subscriber accounts match this filter.
                           </td>
                         </tr>
@@ -1855,28 +2346,28 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                           const expiringNow = isExpiring(user.subscriptionExpiryDate);
                           const isNew = isNewUser(user.registrationDate);
                           return (
-                            <tr key={user.id} className="hover:bg-[#11131e]/50 transition text-xs">
+                            <tr key={user.id} className="hover:bg-[#180608]/50 transition text-xs">
                               <td 
-                                className="px-6 py-4 cursor-pointer group hover:bg-[#151726]/80 transition-colors"
+                                className="px-6 py-4 cursor-pointer group hover:bg-[#1c080b]/80 transition-colors"
                                 onClick={() => setSelectedUserForView(user)}
                                 title="Click to open Birds-eye View & User Management"
                               >
-                                <span className="font-bold text-white text-sm group-hover:text-rose-400 group-hover:underline transition-colors flex items-center gap-1.5 flex-wrap">
+                                <span className="font-bold text-white text-sm group-hover:text-[#ff4d64] group-hover:underline transition-colors flex items-center gap-1.5 flex-wrap">
                                   {user.fullName}
                                   {isNew && (
                                     <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider font-mono">
                                       (NEW)
                                     </span>
                                   )}
-                                  <span className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] bg-rose-500/15 text-rose-300 font-normal px-1.5 py-0.5 rounded border border-rose-500/20 font-sans">
+                                  <span className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] bg-[#d31d38]/15 text-[#ff4d64] font-normal px-1.5 py-0.5 rounded border border-[#d31d38]/20 font-sans">
                                     Manage
                                   </span>
                                 </span>
-                                <span className="block text-[11px] text-slate-400 mt-0.5">@{user.username} • {user.email}</span>
+                                <span className="block text-[11px] text-zinc-400 mt-0.5">@{user.username} • {user.email}</span>
                               </td>
                               <td className="px-6 py-4">
                                 <div className="flex flex-col gap-1 items-start">
-                                  <span className="text-slate-200 font-medium text-xs flex items-center gap-1.5">
+                                  <span className="text-zinc-200 font-medium text-xs flex items-center gap-1.5">
                                     <CalendarDays className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                                     {formatSignupDateAndDay(user.registrationDate)}
                                   </span>
@@ -1891,27 +2382,27 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                               <td className="px-6 py-4">
                                 <div className="flex flex-col gap-1 items-start">
                                   {user.role === 'admin' ? (
-                                    <span className="bg-rose-500/10 text-rose-400 border border-rose-500/20 text-[9px] font-bold px-2 py-0.5 rounded">ADMIN</span>
+                                    <span className="bg-[#d31d38]/10 text-[#ff4d64] border border-[#d31d38]/20 text-[9px] font-bold px-2 py-0.5 rounded">ADMIN</span>
                                   ) : user.subscriptionStatus === 'Active' ? (
                                     <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[9px] font-bold px-2 py-0.5 rounded flex items-center gap-1">
                                       <CheckCircle className="w-3 h-3" /> ACTIVE {expiringNow && '• EXPIRING'}
                                     </span>
                                   ) : user.subscriptionStatus === 'Disabled' ? (
-                                    <span className="bg-slate-800 text-slate-400 border border-slate-700 text-[9px] font-bold px-2 py-0.5 rounded">LOCKED</span>
+                                    <span className="bg-zinc-800 text-zinc-400 border border-zinc-700 text-[9px] font-bold px-2 py-0.5 rounded">LOCKED</span>
                                   ) : (
-                                    <span className="bg-rose-500/10 text-rose-400 border border-rose-500/20 text-[9px] font-bold px-2 py-0.5 rounded">EXPIRED</span>
+                                    <span className="bg-[#d31d38]/10 text-[#ff4d64] border border-[#d31d38]/20 text-[9px] font-bold px-2 py-0.5 rounded">EXPIRED</span>
                                   )}
                                   
                                   {user.subscriptionExpiryDate && user.role !== 'admin' && (
-                                    <span className={`block text-[10px] mt-0.5 font-semibold ${expiringNow ? 'text-amber-400' : 'text-slate-500'}`}>
+                                    <span className={`block text-[10px] mt-0.5 font-semibold ${expiringNow ? 'text-amber-400' : 'text-zinc-500'}`}>
                                       Expiry: {new Date(user.subscriptionExpiryDate).toLocaleDateString()}
                                     </span>
                                   )}
                                 </div>
                               </td>
-                              <td className="px-6 py-4 font-mono text-[11px] text-slate-400">
+                              <td className="px-6 py-4 font-mono text-[11px] text-zinc-400">
                                 {user.role === 'admin' ? (
-                                  <span className="text-slate-600 font-medium font-sans">Bypassed</span>
+                                  <span className="text-zinc-600 font-medium font-sans">Bypassed</span>
                                 ) : (
                                   <span className="truncate block max-w-[130px]" title={user.jellyfinUserId}>{user.jellyfinUserId || 'Sync Pending'}</span>
                                 )}
@@ -1922,7 +2413,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                                   <button
                                     onClick={() => openEditModal(user)}
                                     title="Edit Profile"
-                                    className="bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white font-bold p-1.5 rounded-lg transition cursor-pointer flex items-center justify-center"
+                                    className="bg-[#080203] hover:bg-[#180608] border border-[#2e1015] text-zinc-300 hover:text-white font-bold p-1.5 rounded-lg transition cursor-pointer flex items-center justify-center"
                                   >
                                     <Edit className="w-3.5 h-3.5 text-amber-400" />
                                   </button>
@@ -1933,12 +2424,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                                       setIsDeleteModalOpen(true);
                                     }}
                                     title="Delete Member"
-                                    className="bg-rose-950/20 hover:bg-rose-950/40 border border-rose-900/30 text-rose-400 hover:text-rose-200 font-bold p-1.5 rounded-lg transition cursor-pointer flex items-center justify-center"
+                                    className="bg-[#d31d38]/15 hover:bg-[#d31d38]/30 border border-[#d31d38]/30 text-[#ff4d64] hover:text-rose-200 font-bold p-1.5 rounded-lg transition cursor-pointer flex items-center justify-center"
                                   >
-                                    <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                                    <Trash2 className="w-3.5 h-3.5 text-[#d31d38]" />
                                   </button>
 
-                                  <div className="h-4 w-[1px] bg-slate-800 mx-1"></div>
+                                  <div className="h-4 w-[1px] bg-[#2e1015] mx-1"></div>
 
                                   {user.role !== 'admin' && (
                                     <>
@@ -1953,13 +2444,13 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                                         <>
                                           <button
                                             onClick={() => handleUserAction(user.id, 'extend')}
-                                            className="bg-[#11131e] hover:bg-[#151726] border border-slate-800 hover:border-slate-700 text-slate-200 font-bold py-1.5 px-3 rounded-lg text-[11px] transition cursor-pointer flex items-center gap-1"
+                                            className="bg-[#180608] hover:bg-[#25090e] border border-[#2e1015] hover:border-[#d31d38]/40 text-zinc-200 font-bold py-1.5 px-3 rounded-lg text-[11px] transition cursor-pointer flex items-center gap-1"
                                           >
-                                            <RefreshCw className="w-3 h-3 text-rose-500" /> Renew 30 Days
+                                            <RefreshCw className="w-3 h-3 text-[#d31d38]" /> Renew 30 Days
                                           </button>
                                           <button
                                             onClick={() => handleUserAction(user.id, 'disable')}
-                                            className="bg-rose-950/20 hover:bg-rose-950/40 border border-rose-900/30 text-rose-400 font-bold py-1.5 px-3 rounded-lg text-[11px] transition cursor-pointer flex items-center gap-1"
+                                            className="bg-[#d31d38]/15 hover:bg-[#d31d38]/30 border border-[#d31d38]/30 text-[#ff4d64] font-bold py-1.5 px-3 rounded-lg text-[11px] transition cursor-pointer flex items-center gap-1"
                                           >
                                             <Ban className="w-3 h-3" /> Lock Accounts
                                           </button>
@@ -1968,7 +2459,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                                       {user.subscriptionStatus === 'Disabled' && (
                                         <button
                                           onClick={() => handleUserAction(user.id, 'reactivate')}
-                                          className="bg-rose-600 hover:bg-rose-700 text-white font-bold py-1.5 px-3 rounded-lg text-[11px] transition cursor-pointer"
+                                          className="bg-[#d31d38] hover:bg-[#b0162c] text-white font-bold py-1.5 px-3 rounded-lg text-[11px] transition cursor-pointer shadow-md"
                                         >
                                           Unlock
                                         </button>
@@ -1989,28 +2480,28 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
             {/* Expiry Calendar View */}
             {subViewMode === 'calendar' && (
-              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl space-y-6">
+              <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl space-y-6">
                 
                 {/* Calendar Header with month selector */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#2e1015] pb-4">
                   <div>
                     <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
-                      <CalendarDays className="w-5 h-5 text-rose-500" />
+                      <CalendarDays className="w-5 h-5 text-[#d31d38]" />
                       <span>Subscription Expiry Calendar</span>
                     </h3>
-                    <p className="text-slate-400 text-xs mt-0.5">
+                    <p className="text-zinc-400 text-xs mt-0.5">
                       Visual calendar showing which user subscriptions expire on each day of the month.
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-2 self-center sm:self-auto bg-[#07080c] border border-slate-800 rounded-xl p-1.5">
+                  <div className="flex items-center gap-2 self-center sm:self-auto bg-[#080203] border border-[#2e1015] rounded-xl p-1.5">
                     <button
                       onClick={() => {
                         const prevMonth = new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1);
                         setCalendarDate(prevMonth);
                         setSelectedCalendarDay(null);
                       }}
-                      className="p-1.5 hover:bg-slate-900 rounded-lg text-slate-400 hover:text-white transition cursor-pointer"
+                      className="p-1.5 hover:bg-[#180608] rounded-lg text-zinc-400 hover:text-white transition cursor-pointer"
                     >
                       <ChevronLeft className="w-4 h-4" />
                     </button>
@@ -2023,7 +2514,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                         setCalendarDate(nextMonth);
                         setSelectedCalendarDay(null);
                       }}
-                      className="p-1.5 hover:bg-slate-900 rounded-lg text-slate-400 hover:text-white transition cursor-pointer"
+                      className="p-1.5 hover:bg-[#180608] rounded-lg text-zinc-400 hover:text-white transition cursor-pointer"
                     >
                       <ChevronRight className="w-4 h-4" />
                     </button>
@@ -2034,7 +2525,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 <div className="grid grid-cols-7 gap-2">
                   {/* Days of week headers */}
                   {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-                    <div key={day} className="text-center text-[10px] font-bold text-slate-500 uppercase tracking-widest py-2">
+                    <div key={day} className="text-center text-[10px] font-bold text-zinc-500 uppercase tracking-widest py-2">
                       {day}
                     </div>
                   ))}
@@ -2059,7 +2550,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     const cells = [];
                     // Empty cells before start day of week
                     for (let i = 0; i < startDayOfWeek; i++) {
-                      cells.push(<div key={`empty-${i}`} className="aspect-square bg-[#07080c]/30 rounded-xl border border-transparent"></div>);
+                      cells.push(<div key={`empty-${i}`} className="aspect-square bg-[#080203]/30 rounded-xl border border-transparent"></div>);
                     }
 
                     // Days of month cells
@@ -2074,13 +2565,13 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                           onClick={() => setSelectedCalendarDay(isSelected ? null : day)}
                           className={`aspect-square p-2 rounded-xl border flex flex-col justify-between items-start text-left transition relative cursor-pointer group ${
                             isSelected 
-                              ? 'bg-rose-500/15 border-rose-500 shadow-lg shadow-rose-500/5' 
+                              ? 'bg-[#d31d38]/20 border-[#d31d38] shadow-lg shadow-[#d31d38]/10' 
                               : hasExpiries
                               ? 'bg-amber-500/5 border-amber-500/30 hover:border-amber-500/60'
-                              : 'bg-[#07080c] border-slate-800 hover:border-slate-700'
+                              : 'bg-[#080203] border-[#2e1015] hover:border-[#42141c]'
                           }`}
                         >
-                          <span className={`text-xs font-bold ${hasExpiries ? 'text-amber-400 font-extrabold' : 'text-slate-500'}`}>
+                          <span className={`text-xs font-bold ${hasExpiries ? 'text-amber-400 font-extrabold' : 'text-zinc-500'}`}>
                             {day}
                           </span>
 
@@ -2097,7 +2588,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                                   </div>
                                 ))}
                                 {expiringUsers.length > 2 && (
-                                  <div className="text-[8px] text-slate-500 font-extrabold pl-1 uppercase">
+                                  <div className="text-[8px] text-zinc-500 font-extrabold pl-1 uppercase">
                                     + {expiringUsers.length - 2} more
                                   </div>
                                 )}
@@ -2125,26 +2616,26 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   };
                   const expiringUsers = getUsersExpiringOnDay(selectedCalendarDay);
                   return (
-                    <div className="bg-[#07080c] border border-slate-800/80 rounded-xl p-5 mt-4 space-y-4">
-                      <div className="flex justify-between items-center border-b border-slate-800/60 pb-3">
-                        <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-                          <Calendar className="w-4 h-4 text-rose-500" />
+                    <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-5 mt-4 space-y-4">
+                      <div className="flex justify-between items-center border-b border-[#2e1015] pb-3">
+                        <h4 className="text-xs font-bold text-zinc-300 uppercase tracking-wider flex items-center gap-2">
+                          <Calendar className="w-4 h-4 text-[#d31d38]" />
                           <span>Expiries on {calendarDate.toLocaleString('default', { month: 'long' })} {selectedCalendarDay}, {calendarDate.getFullYear()}</span>
                         </h4>
-                        <span className="text-[10px] bg-rose-500/10 text-rose-400 border border-rose-500/20 font-bold px-2.5 py-1 rounded-xl uppercase">
+                        <span className="text-[10px] bg-[#d31d38]/10 text-[#ff4d64] border border-[#d31d38]/20 font-bold px-2.5 py-1 rounded-xl uppercase">
                           {expiringUsers.length} Expiring Member{expiringUsers.length !== 1 && 's'}
                         </span>
                       </div>
 
                       {expiringUsers.length === 0 ? (
-                        <p className="text-xs text-slate-500 italic py-2">No user subscriptions expire on this day.</p>
+                        <p className="text-xs text-zinc-500 italic py-2">No user subscriptions expire on this day.</p>
                       ) : (
-                        <div className="divide-y divide-slate-800/40 max-h-72 overflow-y-auto pr-1">
+                        <div className="divide-y divide-[#2e1015]/60 max-h-72 overflow-y-auto pr-1">
                           {expiringUsers.map(user => (
                             <div key={user.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
                               <div>
                                 <span className="font-bold text-white text-sm block">{user.fullName}</span>
-                                <span className="text-slate-400 block text-[10px]">@{user.username} • {user.email}</span>
+                                <span className="text-zinc-400 block text-[10px]">@{user.username} • {user.email}</span>
                               </div>
                               <div className="flex items-center gap-2">
                                 <button
@@ -2155,7 +2646,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                                 </button>
                                 <button
                                   onClick={() => openEditModal(user)}
-                                  className="bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 font-bold py-1.5 px-2 rounded-lg transition cursor-pointer flex items-center justify-center"
+                                  className="bg-[#180608] hover:bg-[#25090e] border border-[#2e1015] text-zinc-300 font-bold py-1.5 px-2 rounded-lg transition cursor-pointer flex items-center justify-center"
                                 >
                                   <Edit className="w-3.5 h-3.5 text-amber-400" />
                                 </button>
@@ -2179,7 +2670,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
           <div className="space-y-6">
             
             {/* Monnify Payment Gateway Configuration */}
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-[3px] bg-sky-500"></div>
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
@@ -2187,16 +2678,16 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     <CreditCard className="w-4.5 h-4.5 text-sky-400" />
                     <span>Monnify Web Checkout Gateway</span>
                   </h3>
-                  <p className="text-slate-400 text-xs mt-1 leading-relaxed max-w-2xl">
+                  <p className="text-zinc-400 text-xs mt-1 leading-relaxed max-w-2xl">
                     Configure Monnify API credentials to enable instant automated payments via Card, Bank Transfer, USSD, and Mobile Wallet.
                   </p>
                 </div>
                 
                 {/* Gateway Feature Toggle */}
-                <div className="flex items-center gap-3 bg-[#07080c] p-2.5 px-4 rounded-xl border border-slate-800">
+                <div className="flex items-center gap-3 bg-[#080203] p-2.5 px-4 rounded-xl border border-[#2e1015]">
                   <div className="text-right">
-                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Gateway Status</div>
-                    <div className={`text-xs font-bold ${monnifyEnabled ? 'text-emerald-400' : 'text-slate-500'}`}>
+                    <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Gateway Status</div>
+                    <div className={`text-xs font-bold ${monnifyEnabled ? 'text-emerald-400' : 'text-zinc-500'}`}>
                       {monnifyEnabled ? 'FEATURE ENABLED' : 'FEATURE TOTALLY OFF'}
                     </div>
                   </div>
@@ -2207,43 +2698,43 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       checked={monnifyEnabled}
                       onChange={(e) => setMonnifyEnabled(e.target.checked)}
                     />
-                    <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-500"></div>
+                    <div className="w-11 h-6 bg-[#220a0e] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-500"></div>
                   </label>
                 </div>
               </div>
 
               {/* Mode & Subscription Fee */}
-              <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4 bg-[#08090f] p-4 rounded-xl border border-slate-800/80">
+              <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4 bg-[#0c0305] p-4 rounded-xl border border-[#2e1015]">
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">
                     Environment Mode <span className="text-sky-400">*</span>
                   </label>
                   <select
                     value={monnifyMode}
                     onChange={(e: any) => setMonnifyMode(e.target.value)}
-                    className="w-full bg-[#11131e] border border-slate-700 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition cursor-pointer font-bold"
+                    className="w-full bg-[#120507] border border-[#3d1319] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition cursor-pointer font-bold"
                   >
                     <option value="live">🟢 Live / Production Mode</option>
                     <option value="test">🟡 Test / Sandbox Mode</option>
                   </select>
-                  <p className="text-[10px] text-slate-500 mt-0.5">
+                  <p className="text-[10px] text-zinc-500 mt-0.5">
                     {monnifyMode === 'test' ? 'Test mode uses Monnify sandbox endpoints and test card/transfer simulations.' : 'Live mode accepts real monetary payments from subscribers.'}
                   </p>
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">
                     Subscription Fee (₦ NGN) <span className="text-sky-400">*</span>
                   </label>
                   <input
                     type="number"
                     step="0.01"
                     placeholder="600.00"
-                    className="w-full bg-[#11131e] border border-slate-700 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition font-mono font-bold"
+                    className="w-full bg-[#120507] border border-[#3d1319] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition font-mono font-bold"
                     value={subscriptionAmount}
                     onChange={(e) => setSubscriptionAmount(e.target.value)}
                   />
-                  <p className="text-[10px] text-slate-500 mt-0.5">
+                  <p className="text-[10px] text-zinc-500 mt-0.5">
                     Amount charged per 30-day access period.
                   </p>
                 </div>
@@ -2252,39 +2743,39 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               {/* Required Keys */}
               <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                  <label className="block text-[10px] font-bold text-zinc-300 uppercase tracking-wider flex items-center justify-between">
                     <span>Public Key / API Key <span className="text-sky-400">*</span></span>
                   </label>
                   <input
                     type="text"
                     placeholder="e.g. MK_PROD_FLX4P92EDF or MK_TEST_..."
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition font-mono"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition font-mono"
                     value={monnifyApiKey}
                     onChange={(e) => setMonnifyApiKey(e.target.value)}
                   />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                  <label className="block text-[10px] font-bold text-zinc-300 uppercase tracking-wider flex items-center justify-between">
                     <span>Contract Key / Code <span className="text-sky-400">*</span></span>
                   </label>
                   <input
                     type="text"
                     placeholder="e.g. 626609763141"
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition font-mono"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition font-mono"
                     value={monnifyContractCode}
                     onChange={(e) => setMonnifyContractCode(e.target.value)}
                   />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                  <label className="block text-[10px] font-bold text-zinc-300 uppercase tracking-wider flex items-center justify-between">
                     <span>Secret Key <span className="text-sky-400">*</span></span>
                   </label>
                   <input
                     type="password"
                     placeholder="e.g. MK_SECRET_..."
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition font-mono"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition font-mono"
                     value={monnifySecretKey}
                     onChange={(e) => setMonnifySecretKey(e.target.value)}
                   />
@@ -2292,13 +2783,13 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               </div>
 
               {/* Webhook Configuration Field */}
-              <div className="mt-5 p-4 rounded-xl bg-[#080a12] border border-slate-800 space-y-2">
+              <div className="mt-5 p-4 rounded-xl bg-[#0c0305] border border-[#2e1015] space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="text-[11px] font-bold text-sky-400 uppercase tracking-wider flex items-center gap-1.5">
                     <Code className="w-3.5 h-3.5 text-sky-400" />
                     <span>Monnify Webhook URL (Full Production & Sandbox Endpoint)</span>
                   </label>
-                  <span className="text-[10px] text-slate-500">Copy & paste into Monnify Developer Dashboard</span>
+                  <span className="text-[10px] text-zinc-500">Copy & paste into Monnify Developer Dashboard</span>
                 </div>
                 
                 <div className="flex items-center gap-2">
@@ -2306,12 +2797,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     type="text"
                     readOnly
                     value={getFullWebhookUrl()}
-                    className="w-full bg-[#030407] border border-slate-800 text-slate-200 text-xs font-mono py-2 px-3 rounded-lg focus:outline-none select-all"
+                    className="w-full bg-[#050102] border border-[#2e1015] text-zinc-200 text-xs font-mono py-2 px-3 rounded-lg focus:outline-none select-all"
                   />
                   <button
                     type="button"
                     onClick={handleCopyWebhook}
-                    className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                    className="bg-[#220a0e] hover:bg-[#381018] text-white font-bold py-2 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
                   >
                     {copiedWebhook ? (
                       <>
@@ -2320,19 +2811,19 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       </>
                     ) : (
                       <>
-                        <Copy className="w-3.5 h-3.5 text-slate-300" />
+                        <Copy className="w-3.5 h-3.5 text-zinc-300" />
                         <span>Copy URL</span>
                       </>
                     )}
                   </button>
                 </div>
-                <p className="text-[10px] text-slate-500 leading-normal">
-                  In your Monnify portal under <strong>Settings &gt; Webhook URL</strong>, set this exact URL. Our server also listens to <code className="text-slate-400">/api/monnify/webhook</code> for maximum compatibility.
+                <p className="text-[10px] text-zinc-500 leading-normal">
+                  In your Monnify portal under <strong>Settings &gt; Webhook URL</strong>, set this exact URL. Our server also listens to <code className="text-zinc-400">/api/monnify/webhook</code> for maximum compatibility.
                 </p>
               </div>
 
-              <div className="mt-5 flex items-center justify-between pt-4 border-t border-slate-800/60">
-                <span className="text-[11px] text-slate-400">
+              <div className="mt-5 flex items-center justify-between pt-4 border-t border-[#2e1015]/60">
+                <span className="text-[11px] text-zinc-400">
                   Status: {monnifyEnabled ? <span className="text-emerald-400 font-bold">Active ({monnifyMode.toUpperCase()} MODE)</span> : <span className="text-rose-400 font-bold">Disabled</span>}
                 </span>
                 <button
@@ -2347,71 +2838,119 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             </div>
 
             {/* Configurable Banking Details & Pay Instructions */}
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
-              <div className="absolute top-0 left-0 w-full h-[3px] bg-rose-500"></div>
-              <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
-                <DollarSign className="w-4.5 h-4.5 text-rose-400" />
-                <span>Banking Configuration for Manual Payments</span>
-              </h3>
-              <p className="text-slate-400 text-xs mt-1 leading-relaxed max-w-2xl">
-                Set up the bank account information and manual payment instructions shown to new members when they choose to renew manually.
-              </p>
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl relative overflow-hidden">
+              <div className={`absolute top-0 left-0 w-full h-[3px] ${manualPaymentEnabled ? 'bg-rose-500' : 'bg-zinc-700'}`}></div>
+              
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-[#2e1015]/60 pb-5 mb-5">
+                <div>
+                  <div className="flex items-center gap-2.5">
+                    <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
+                      <DollarSign className={`w-4.5 h-4.5 ${manualPaymentEnabled ? 'text-rose-400' : 'text-zinc-500'}`} />
+                      <span>Banking Configuration for Manual Payments</span>
+                    </h3>
+                    <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border ${
+                      manualPaymentEnabled 
+                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' 
+                        : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                    }`}>
+                      {manualPaymentEnabled ? 'ACTIVE & VISIBLE' : 'DISABLED / HIDDEN'}
+                    </span>
+                  </div>
+                  <p className="text-zinc-400 text-xs mt-1 leading-relaxed max-w-2xl">
+                    Control visibility of the manual bank transfer payment method. When enabled, users can view your account details and upload payment receipts. When disabled, manual payment is completely hidden from the user portal.
+                  </p>
+                </div>
+
+                {/* Feature Toggle switch */}
+                <div className="flex items-center gap-3 bg-[#080203] p-2.5 px-4 rounded-xl border border-[#2e1015] shrink-0">
+                  <div className="text-right">
+                    <div className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider">Manual Payment</div>
+                    <div className={`text-xs font-bold ${manualPaymentEnabled ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {manualPaymentEnabled ? 'Enabled' : 'Disabled'}
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      id="manual-payment-enabled-toggle"
+                      className="sr-only peer" 
+                      checked={manualPaymentEnabled} 
+                      onChange={(e) => setManualPaymentEnabled(e.target.checked)} 
+                    />
+                    <div className="w-11 h-6 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                  </label>
+                </div>
+              </div>
+
+              {/* Status Notice when Disabled */}
+              {!manualPaymentEnabled && (
+                <div className="mb-5 p-3.5 bg-rose-500/10 border border-rose-500/25 rounded-xl flex items-center gap-3 text-xs text-rose-300">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+                  <span>Manual bank transfer payments are currently <strong>disabled</strong>. The manual payment button, bank details, and proof-of-payment receipt uploader are hidden from all users.</span>
+                </div>
+              )}
               
               <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Bank Name</label>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Bank Name</label>
                   <input 
                     type="text" 
                     placeholder="e.g. Zenith Bank" 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={bankName}
                     onChange={(e) => setBankName(e.target.value)}
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Account Number</label>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Account Number</label>
                   <input 
                     type="text" 
                     placeholder="e.g. 1234567890" 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={bankAccountNo}
                     onChange={(e) => setBankAccountNo(e.target.value)}
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Beneficiary Name</label>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Beneficiary Name</label>
                   <input 
                     type="text" 
                     placeholder="e.g. John Doe" 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={bankBeneficiary}
                     onChange={(e) => setBankBeneficiary(e.target.value)}
                   />
                 </div>
               </div>
               <div className="mt-4 space-y-1">
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Additional Instructions</label>
+                <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Additional Instructions</label>
                 <textarea 
                   rows={2}
                   placeholder="e.g. Send receipt via WhatsApp to +234..." 
-                  className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition resize-none"
+                  className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition resize-none"
                   value={bankInstructions}
                   onChange={(e) => setBankInstructions(e.target.value)}
                 />
               </div>
 
-              <div className="mt-4 flex justify-end">
+              <div className="mt-5 flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-[#2e1015]/40">
+                <span className="text-[11px] text-zinc-400">
+                  Status: {manualPaymentEnabled ? <span className="text-emerald-400 font-semibold">Visible to users</span> : <span className="text-rose-400 font-semibold">Hidden from users</span>}
+                </span>
                 <button
                   onClick={handleSaveConfig}
+                  disabled={configSaving}
                   className="bg-rose-600 hover:bg-rose-700 text-white font-bold py-2 px-5 rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5 h-[36px]"
+                  id="save-banking-info-button"
                 >
-                  <Check className="w-3.5 h-3.5" /> Save Banking Info
+                  {configSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                  <span>Save Banking Info & Status</span>
                 </button>
               </div>
             </div>
 
             {/* Paystack Payment Link / External Checkout Page Configuration */}
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-[3px] bg-emerald-500"></div>
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div>
@@ -2419,7 +2958,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     <ExternalLink className="w-4.5 h-4.5 text-emerald-400" />
                     <span>Paystack Payment Link / External Checkout Page</span>
                   </h3>
-                  <p className="text-slate-400 text-xs mt-1 leading-relaxed max-w-2xl">
+                  <p className="text-zinc-400 text-xs mt-1 leading-relaxed max-w-2xl">
                     Configure a standalone Paystack Payment Link or external payment page URL button. This is an independent payment gateway option from the Paystack InlineJS SDK popup.
                   </p>
                 </div>
@@ -2430,8 +2969,8 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     checked={customPaymentEnabled} 
                     onChange={(e) => setCustomPaymentEnabled(e.target.checked)} 
                   />
-                  <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
-                  <span className="ml-2.5 text-xs font-bold text-slate-300">
+                  <div className="w-11 h-6 bg-[#220a0e] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                  <span className="ml-2.5 text-xs font-bold text-zinc-300">
                     {customPaymentEnabled ? 'Link Active' : 'Disabled'}
                   </span>
                 </label>
@@ -2439,21 +2978,21 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
               <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Button Text / Label</label>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Button Text / Label</label>
                   <input 
                     type="text" 
                     placeholder="e.g. Pay via Paystack Payment Page" 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-emerald-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-emerald-500 transition"
                     value={customPaymentBtnName}
                     onChange={(e) => setCustomPaymentBtnName(e.target.value)}
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Payment Page / Checkout Link URL</label>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Payment Page / Checkout Link URL</label>
                   <input 
                     type="url" 
                     placeholder="e.g. https://paystack.com/pay/your-page" 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-emerald-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-emerald-500 transition"
                     value={customPaymentUrl}
                     onChange={(e) => setCustomPaymentUrl(e.target.value)}
                   />
@@ -2461,9 +3000,9 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               </div>
 
               <div className="mt-4 space-y-1">
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Link Click Behavior</label>
+                <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Link Click Behavior</label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-md">
-                  <label className={`flex items-center gap-2 p-3 rounded-xl border text-xs cursor-pointer transition ${customPaymentTarget === '_blank' ? 'bg-emerald-500/10 border-emerald-500/50 text-white font-bold' : 'bg-[#07080c] border-slate-800 text-slate-400'}`}>
+                  <label className={`flex items-center gap-2 p-3 rounded-xl border text-xs cursor-pointer transition ${customPaymentTarget === '_blank' ? 'bg-emerald-500/10 border-emerald-500/50 text-white font-bold' : 'bg-[#080203] border-[#2e1015] text-zinc-400'}`}>
                     <input 
                     type="radio" 
                     name="customPaymentTarget" 
@@ -2474,7 +3013,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   />
                   <span>Open in New Tab / Window</span>
                 </label>
-                <label className={`flex items-center gap-2 p-3 rounded-xl border text-xs cursor-pointer transition ${customPaymentTarget === '_self' ? 'bg-emerald-500/10 border-emerald-500/50 text-white font-bold' : 'bg-[#07080c] border-slate-800 text-slate-400'}`}>
+                <label className={`flex items-center gap-2 p-3 rounded-xl border text-xs cursor-pointer transition ${customPaymentTarget === '_self' ? 'bg-emerald-500/10 border-emerald-500/50 text-white font-bold' : 'bg-[#080203] border-[#2e1015] text-zinc-400'}`}>
                   <input 
                     type="radio" 
                     name="customPaymentTarget" 
@@ -2501,15 +3040,15 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
           </div>
 
           {/* Dedicated Paystack InlineJS Payment Integration & Settings */}
-          <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+          <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-[3px] bg-emerald-500"></div>
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-4 mb-5">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-[#2e1015]/60 pb-4 mb-5">
               <div>
                 <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
                   <CreditCard className="w-4.5 h-4.5 text-emerald-400" />
                   <span>Paystack InlineJS SDK Modal Integration</span>
                 </h3>
-                <p className="text-slate-400 text-xs mt-1 leading-relaxed max-w-2xl">
+                <p className="text-zinc-400 text-xs mt-1 leading-relaxed max-w-2xl">
                   Configure Paystack InlineJS modal popup checkout (embedded directly in the app) and server-side secret credentials for verification. Operates independently from the Payment Link.
                 </p>
               </div>
@@ -2521,12 +3060,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       onChange={(e) => setPaystackEnabled(e.target.checked)}
                       className="sr-only peer"
                     />
-                    <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
-                    <span className="ml-2.5 text-xs font-bold text-slate-200">
+                    <div className="w-11 h-6 bg-[#220a0e] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                    <span className="ml-2.5 text-xs font-bold text-zinc-200">
                       {paystackEnabled ? (
                         <span className="text-emerald-400">Paystack Active</span>
                       ) : (
-                        <span className="text-slate-500">Disabled</span>
+                        <span className="text-zinc-500">Disabled</span>
                       )}
                     </span>
                   </label>
@@ -2546,26 +3085,26 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     </span>
                   </div>
 
-                  <p className="text-xs text-slate-300">
+                  <p className="text-xs text-zinc-300">
                     Paste these URLs into your <strong className="text-white">Paystack Dashboard &rarr; Settings &rarr; Preferences / API Keys &amp; Webhooks</strong>:
                   </p>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
                     {/* Callback URL Box */}
-                    <div className="p-3 rounded-lg bg-[#030407] border border-slate-800 space-y-1.5">
+                    <div className="p-3 rounded-lg bg-[#050102] border border-[#2e1015] space-y-1.5">
                       <div className="flex items-center justify-between">
                         <label className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
                           <ExternalLink className="w-3.5 h-3.5 text-emerald-400" />
                           <span>Callback URL</span>
                         </label>
-                        <span className="text-[10px] text-slate-500">Redirect after payment</span>
+                        <span className="text-[10px] text-zinc-500">Redirect after payment</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <input
                           type="text"
                           readOnly
                           value={getPaystackCallbackUrl()}
-                          className="w-full bg-[#0d101d] border border-slate-800 text-emerald-300 text-xs font-mono py-2 px-2.5 rounded-lg focus:outline-none select-all"
+                          className="w-full bg-[#0f0406] border border-[#2e1015] text-emerald-300 text-xs font-mono py-2 px-2.5 rounded-lg focus:outline-none select-all"
                         />
                         <button
                           type="button"
@@ -2589,20 +3128,20 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     </div>
 
                     {/* Webhook URL Box */}
-                    <div className="p-3 rounded-lg bg-[#030407] border border-slate-800 space-y-1.5">
+                    <div className="p-3 rounded-lg bg-[#050102] border border-[#2e1015] space-y-1.5">
                       <div className="flex items-center justify-between">
                         <label className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
                           <Code className="w-3.5 h-3.5 text-emerald-400" />
                           <span>Webhook URL</span>
                         </label>
-                        <span className="text-[10px] text-slate-500">Instant server notification</span>
+                        <span className="text-[10px] text-zinc-500">Instant server notification</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <input
                           type="text"
                           readOnly
                           value={getPaystackWebhookUrl()}
-                          className="w-full bg-[#0d101d] border border-slate-800 text-emerald-300 text-xs font-mono py-2 px-2.5 rounded-lg focus:outline-none select-all"
+                          className="w-full bg-[#0f0406] border border-[#2e1015] text-emerald-300 text-xs font-mono py-2 px-2.5 rounded-lg focus:outline-none select-all"
                         />
                         <button
                           type="button"
@@ -2630,7 +3169,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 {/* Paystack Mode Selector */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-slate-300">Environment Mode</label>
+                    <label className="text-xs font-semibold text-zinc-300">Environment Mode</label>
                     <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
@@ -2638,7 +3177,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                         className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 border cursor-pointer ${
                           paystackMode === 'live'
                             ? 'bg-emerald-600/20 border-emerald-500 text-emerald-400'
-                            : 'bg-[#030407] border-slate-800 text-slate-400 hover:text-white'
+                            : 'bg-[#050102] border-[#2e1015] text-zinc-400 hover:text-white'
                         }`}
                       >
                         <span className={`w-2 h-2 rounded-full ${paystackMode === 'live' ? 'bg-emerald-400' : 'bg-slate-600'}`}></span>
@@ -2650,7 +3189,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                         className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 border cursor-pointer ${
                           paystackMode === 'test'
                             ? 'bg-amber-600/20 border-amber-500 text-amber-400'
-                            : 'bg-[#030407] border-slate-800 text-slate-400 hover:text-white'
+                            : 'bg-[#050102] border-[#2e1015] text-zinc-400 hover:text-white'
                         }`}
                       >
                         <span className={`w-2 h-2 rounded-full ${paystackMode === 'test' ? 'bg-amber-400' : 'bg-slate-600'}`}></span>
@@ -2660,7 +3199,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-slate-300">
+                    <label className="text-xs font-semibold text-zinc-300">
                       Paystack Public Key (Client-Side)
                     </label>
                     <input
@@ -2668,9 +3207,9 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       placeholder={paystackMode === 'test' ? 'pk_test_...' : 'pk_live_...'}
                       value={paystackPublicKey}
                       onChange={(e) => setPaystackPublicKey(e.target.value)}
-                      className="w-full bg-[#030407] border border-slate-800 text-slate-200 text-xs font-mono py-2.5 px-3 rounded-xl focus:border-emerald-500 focus:outline-none placeholder-slate-600"
+                      className="w-full bg-[#050102] border border-[#2e1015] text-zinc-200 text-xs font-mono py-2.5 px-3 rounded-xl focus:border-emerald-500 focus:outline-none placeholder-slate-600"
                     />
-                    <p className="text-[10px] text-slate-500">
+                    <p className="text-[10px] text-zinc-500">
                       Passed to Paystack InlineJS popup on user checkout.
                     </p>
                   </div>
@@ -2679,7 +3218,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 {/* Paystack Secret Key */}
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                    <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
                       <span>Paystack Secret Key (Server-Side Only)</span>
                       <span className="text-[10px] bg-rose-500/10 text-rose-400 border border-rose-500/20 px-2 py-0.5 rounded-md font-bold uppercase">
                         Encrypted / Server-Side Only
@@ -2688,7 +3227,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     <button
                       type="button"
                       onClick={() => setShowPaystackSecretKey(!showPaystackSecretKey)}
-                      className="text-[11px] text-slate-400 hover:text-emerald-400 transition cursor-pointer flex items-center gap-1"
+                      className="text-[11px] text-zinc-400 hover:text-emerald-400 transition cursor-pointer flex items-center gap-1"
                     >
                       {showPaystackSecretKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                       <span>{showPaystackSecretKey ? 'Hide Secret' : 'Show Secret'}</span>
@@ -2700,10 +3239,10 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       placeholder={paystackMode === 'test' ? 'sk_test_...' : 'sk_live_...'}
                       value={paystackSecretKey}
                       onChange={(e) => setPaystackSecretKey(e.target.value)}
-                      className="w-full bg-[#030407] border border-slate-800 text-slate-200 text-xs font-mono py-2.5 px-3 rounded-xl focus:border-emerald-500 focus:outline-none placeholder-slate-600"
+                      className="w-full bg-[#050102] border border-[#2e1015] text-zinc-200 text-xs font-mono py-2.5 px-3 rounded-xl focus:border-emerald-500 focus:outline-none placeholder-slate-600"
                     />
                   </div>
-                  <p className="text-[10px] text-slate-500">
+                  <p className="text-[10px] text-zinc-500">
                     Used exclusively on the server to verify transactions and process webhook callbacks. Never transmitted to the browser.
                   </p>
                 </div>
@@ -2720,9 +3259,9 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 </div>
 
                 {/* Diagnostic Status Header */}
-                <div className="p-4 rounded-xl bg-[#080a12] border border-slate-800 space-y-3 mt-4">
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
-                    <span className="text-xs font-extrabold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                <div className="p-4 rounded-xl bg-[#0c0305] border border-[#2e1015] space-y-3 mt-4">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-[#2e1015] pb-3">
+                    <span className="text-xs font-extrabold text-zinc-200 uppercase tracking-wider flex items-center gap-2">
                       <Activity className="w-4 h-4 text-emerald-400 animate-pulse" />
                       <span>Live Diagnostic Status</span>
                     </span>
@@ -2747,16 +3286,16 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#030407] border border-slate-800/80">
-                      <span className="text-xs font-semibold text-slate-300">Paystack Webhook:</span>
+                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#050102] border border-[#2e1015]">
+                      <span className="text-xs font-semibold text-zinc-300">Paystack Webhook:</span>
                       <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold border ${diagnosticResult ? (diagnosticResult.webhook ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border-rose-500/30') : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'}`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${diagnosticResult ? (diagnosticResult.webhook ? 'bg-emerald-400 animate-ping' : 'bg-rose-400') : 'bg-emerald-400 animate-ping'}`}></span>
                         {diagnosticResult ? (diagnosticResult.webhook ? 'Online' : 'Offline') : 'Online'}
                       </span>
                     </div>
 
-                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#030407] border border-slate-800/80">
-                      <span className="text-xs font-semibold text-slate-300">Paystack Callback:</span>
+                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#050102] border border-[#2e1015]">
+                      <span className="text-xs font-semibold text-zinc-300">Paystack Callback:</span>
                       <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold border ${diagnosticResult ? (diagnosticResult.callback ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border-rose-500/30') : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'}`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${diagnosticResult ? (diagnosticResult.callback ? 'bg-emerald-400 animate-ping' : 'bg-rose-400') : 'bg-emerald-400 animate-ping'}`}></span>
                         {diagnosticResult ? (diagnosticResult.callback ? 'Online' : 'Offline') : 'Online'}
@@ -2764,7 +3303,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     </div>
                   </div>
                   {diagnosticResult?.details && (
-                    <p className="text-[10px] font-mono text-slate-400 pt-1">
+                    <p className="text-[10px] font-mono text-zinc-400 pt-1">
                       {diagnosticResult.details}
                     </p>
                   )}
@@ -2773,15 +3312,15 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             </div>
 
             {/* Dedicated Squad Payment Integration & Settings */}
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-[3px] bg-purple-500"></div>
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-4 mb-5">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-[#2e1015]/60 pb-4 mb-5">
                 <div>
                   <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
                     <CreditCard className="w-4.5 h-4.5 text-purple-400" />
                     <span>Squad Payment Gateway (HabariPay)</span>
                   </h3>
-                  <p className="text-slate-400 text-xs mt-1 leading-relaxed max-w-2xl">
+                  <p className="text-zinc-400 text-xs mt-1 leading-relaxed max-w-2xl">
                     Configure your Squad API keys, environment mode, and system endpoints for automated payment collection and subscription activation.
                   </p>
                 </div>
@@ -2792,8 +3331,8 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     checked={squadEnabled} 
                     onChange={(e) => setSquadEnabled(e.target.checked)} 
                   />
-                  <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
-                  <span className="ml-2.5 text-xs font-bold text-slate-300">
+                  <div className="w-11 h-6 bg-[#220a0e] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                  <span className="ml-2.5 text-xs font-bold text-zinc-300">
                     {squadEnabled ? 'Active' : 'Disabled'}
                   </span>
                 </label>
@@ -2802,32 +3341,32 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               <div className="space-y-5">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="space-y-1 md:col-span-1">
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Environment Mode</label>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Environment Mode</label>
                     <select
                       value={squadMode}
                       onChange={(e) => setSquadMode(e.target.value as 'sandbox' | 'live')}
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition cursor-pointer"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition cursor-pointer"
                     >
                       <option value="sandbox">Sandbox / Test Mode (sandbox-api-d.squadco.com)</option>
                       <option value="live">Live / Production Mode (api-d.squadco.com)</option>
                     </select>
                   </div>
                   <div className="space-y-1 md:col-span-1">
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Squad Secret Key (Required)</label>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Squad Secret Key (Required)</label>
                     <input 
                       type="password" 
                       placeholder="e.g. sandbox_sk_... or secret_sk_..." 
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-purple-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-purple-500 transition"
                       value={squadSecretKey}
                       onChange={(e) => setSquadSecretKey(e.target.value)}
                     />
                   </div>
                   <div className="space-y-1 md:col-span-1">
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Squad Public Key / API Key</label>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Squad Public Key / API Key</label>
                     <input 
                       type="text" 
                       placeholder="e.g. sandbox_pk_... or pk_..." 
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-purple-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-purple-500 transition"
                       value={squadApiKey}
                       onChange={(e) => setSquadApiKey(e.target.value)}
                     />
@@ -2835,9 +3374,9 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 </div>
 
                 {/* Diagnostic Status Header for Squad */}
-                <div className="p-4 rounded-xl bg-[#080a12] border border-slate-800 space-y-3">
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
-                    <span className="text-xs font-extrabold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                <div className="p-4 rounded-xl bg-[#0c0305] border border-[#2e1015] space-y-3">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-[#2e1015] pb-3">
+                    <span className="text-xs font-extrabold text-zinc-200 uppercase tracking-wider flex items-center gap-2">
                       <Activity className="w-4 h-4 text-purple-400 animate-pulse" />
                       <span>Live Diagnostic Status</span>
                     </span>
@@ -2862,16 +3401,16 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#030407] border border-slate-800/80">
-                      <span className="text-xs font-semibold text-slate-300">Squad Webhook:</span>
+                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#050102] border border-[#2e1015]">
+                      <span className="text-xs font-semibold text-zinc-300">Squad Webhook:</span>
                       <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold border ${squadDiagnosticResult ? (squadDiagnosticResult.webhook ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border-rose-500/30') : 'bg-purple-500/10 text-purple-400 border-purple-500/30'}`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${squadDiagnosticResult ? (squadDiagnosticResult.webhook ? 'bg-emerald-400 animate-ping' : 'bg-rose-400') : 'bg-purple-400 animate-ping'}`}></span>
                         {squadDiagnosticResult ? (squadDiagnosticResult.webhook ? 'Online' : 'Offline') : 'Online'}
                       </span>
                     </div>
 
-                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#030407] border border-slate-800/80">
-                      <span className="text-xs font-semibold text-slate-300">Squad Redirect:</span>
+                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#050102] border border-[#2e1015]">
+                      <span className="text-xs font-semibold text-zinc-300">Squad Redirect:</span>
                       <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold border ${squadDiagnosticResult ? (squadDiagnosticResult.callback ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border-rose-500/30') : 'bg-purple-500/10 text-purple-400 border-purple-500/30'}`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${squadDiagnosticResult ? (squadDiagnosticResult.callback ? 'bg-emerald-400 animate-ping' : 'bg-rose-400') : 'bg-purple-400 animate-ping'}`}></span>
                         {squadDiagnosticResult ? (squadDiagnosticResult.callback ? 'Online' : 'Offline') : 'Online'}
@@ -2879,20 +3418,20 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     </div>
                   </div>
                   {squadDiagnosticResult?.details && (
-                    <p className="text-[10px] font-mono text-slate-400 pt-1">
+                    <p className="text-[10px] font-mono text-zinc-400 pt-1">
                       {squadDiagnosticResult.details}
                     </p>
                   )}
                 </div>
 
                 {/* Squad Webhook URL Field */}
-                <div className="p-4 rounded-xl bg-[#080a12] border border-slate-800 space-y-2">
+                <div className="p-4 rounded-xl bg-[#0c0305] border border-[#2e1015] space-y-2">
                   <div className="flex items-center justify-between">
                     <label className="text-[11px] font-bold text-purple-400 uppercase tracking-wider flex items-center gap-1.5">
                       <Code className="w-3.5 h-3.5 text-purple-400" />
                       <span>Squad Webhook URL</span>
                     </label>
-                    <span className="text-[10px] text-slate-500">Production Webhook Endpoint</span>
+                    <span className="text-[10px] text-zinc-500">Production Webhook Endpoint</span>
                   </div>
                   
                   <div className="flex items-center gap-2">
@@ -2900,12 +3439,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       type="text"
                       readOnly
                       value={getSquadWebhookUrl()}
-                      className="w-full bg-[#030407] border border-slate-800 text-slate-200 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all cursor-default"
+                      className="w-full bg-[#050102] border border-[#2e1015] text-zinc-200 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all cursor-default"
                     />
                     <button
                       type="button"
                       onClick={handleCopySquadWebhook}
-                      className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 px-4 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                      className="bg-[#220a0e] hover:bg-[#381018] text-white font-bold py-2.5 px-4 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
                     >
                       {copiedSquadWebhook ? (
                         <>
@@ -2914,25 +3453,25 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                         </>
                       ) : (
                         <>
-                          <Copy className="w-3.5 h-3.5 text-slate-300" />
+                          <Copy className="w-3.5 h-3.5 text-zinc-300" />
                           <span>Copy Webhook URL</span>
                         </>
                       )}
                     </button>
                   </div>
-                  <p className="text-[11px] text-slate-400 leading-normal">
-                    <strong className="text-slate-200">Webhook URL:</strong> Server-to-server notification endpoint. Squad sends real-time POST notifications (with <code className="text-purple-300">x-squad-encrypted-body</code>) here when successful transactions occur.
+                  <p className="text-[11px] text-zinc-400 leading-normal">
+                    <strong className="text-zinc-200">Webhook URL:</strong> Server-to-server notification endpoint. Squad sends real-time POST notifications (with <code className="text-purple-300">x-squad-encrypted-body</code>) here when successful transactions occur.
                   </p>
                 </div>
 
                 {/* Squad Redirect URL Field */}
-                <div className="p-4 rounded-xl bg-[#080a12] border border-slate-800 space-y-2">
+                <div className="p-4 rounded-xl bg-[#0c0305] border border-[#2e1015] space-y-2">
                   <div className="flex items-center justify-between">
                     <label className="text-[11px] font-bold text-purple-400 uppercase tracking-wider flex items-center gap-1.5">
                       <ExternalLink className="w-3.5 h-3.5 text-purple-400" />
                       <span>Squad Redirect URL</span>
                     </label>
-                    <span className="text-[10px] text-slate-500">Customer Return Destination</span>
+                    <span className="text-[10px] text-zinc-500">Customer Return Destination</span>
                   </div>
                   
                   <div className="flex items-center gap-2">
@@ -2940,12 +3479,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       type="text"
                       readOnly
                       value={getSquadRedirectUrl()}
-                      className="w-full bg-[#030407] border border-slate-800 text-slate-200 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all cursor-default"
+                      className="w-full bg-[#050102] border border-[#2e1015] text-zinc-200 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all cursor-default"
                     />
                     <button
                       type="button"
                       onClick={handleCopySquadCallback}
-                      className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 px-4 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                      className="bg-[#220a0e] hover:bg-[#381018] text-white font-bold py-2.5 px-4 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
                     >
                       {copiedSquadCallback ? (
                         <>
@@ -2954,14 +3493,14 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                         </>
                       ) : (
                         <>
-                          <Copy className="w-3.5 h-3.5 text-slate-300" />
+                          <Copy className="w-3.5 h-3.5 text-zinc-300" />
                           <span>Copy Redirect URL</span>
                         </>
                       )}
                     </button>
                   </div>
-                  <p className="text-[11px] text-slate-400 leading-normal">
-                    <strong className="text-slate-200">Redirect URL:</strong> Customer/browser destination after payment. Squad returns users here to verify payment state and redirect to the application.
+                  <p className="text-[11px] text-zinc-400 leading-normal">
+                    <strong className="text-zinc-200">Redirect URL:</strong> Customer/browser destination after payment. Squad returns users here to verify payment state and redirect to the application.
                   </p>
                 </div>
 
@@ -2979,15 +3518,15 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             </div>
 
             {/* Direct Debit Mandates Registry Card */}
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-[3px] bg-purple-500"></div>
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-4 mb-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-[#2e1015]/60 pb-4 mb-4">
                 <div>
                   <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
                     <Landmark className="w-4.5 h-4.5 text-purple-400" />
                     <span>Squad Direct Debit Mandates & Automated Renewals</span>
                   </h3>
-                  <p className="text-slate-400 text-xs mt-1">
+                  <p className="text-zinc-400 text-xs mt-1">
                     Manage active customer bank debit authorizations for automatic monthly subscription renewals (₦600/month).
                   </p>
                 </div>
@@ -2995,7 +3534,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   type="button"
                   onClick={fetchMandates}
                   disabled={loadingMandates}
-                  className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-1.5 px-3 rounded-lg text-xs transition flex items-center gap-1.5 cursor-pointer"
+                  className="bg-[#220a0e] hover:bg-[#381018] text-white font-bold py-1.5 px-3 rounded-lg text-xs transition flex items-center gap-1.5 cursor-pointer"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${loadingMandates ? 'animate-spin' : ''}`} />
                   <span>Refresh Mandates</span>
@@ -3007,17 +3546,17 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   <Loader2 className="w-6 h-6 animate-spin text-purple-400" />
                 </div>
               ) : mandates.length === 0 ? (
-                <div className="text-center py-10 bg-[#07080c] rounded-xl border border-slate-800/60">
-                  <Landmark className="w-10 h-10 text-slate-600 mx-auto mb-2" />
-                  <p className="text-slate-300 text-sm font-semibold">No Direct Debit Mandates registered yet.</p>
-                  <p className="text-slate-500 text-xs mt-1">
+                <div className="text-center py-10 bg-[#080203] rounded-xl border border-[#2e1015]/60">
+                  <Landmark className="w-10 h-10 text-zinc-600 mx-auto mb-2" />
+                  <p className="text-zinc-300 text-sm font-semibold">No Direct Debit Mandates registered yet.</p>
+                  <p className="text-zinc-500 text-xs mt-1">
                     When subscribers set up automatic renewals via Squad Direct Debit, their mandates and renewal schedules will appear here.
                   </p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs text-slate-300">
-                    <thead className="bg-[#080a12] text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800 font-bold">
+                  <table className="w-full text-left text-xs text-zinc-300">
+                    <thead className="bg-[#0c0305] text-zinc-400 uppercase text-[10px] tracking-wider border-b border-[#2e1015] font-bold">
                       <tr>
                         <th className="py-3 px-4">Subscriber</th>
                         <th className="py-3 px-4">Bank & Account</th>
@@ -3030,18 +3569,18 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     </thead>
                     <tbody className="divide-y divide-slate-800/60">
                       {mandates.map((m) => (
-                        <tr key={m.id} className="hover:bg-slate-900/40 transition">
+                        <tr key={m.id} className="hover:bg-[#180608]/40 transition">
                           <td className="py-3 px-4 font-medium text-white">
                             <div>@{m.username}</div>
-                            {m.email && <div className="text-[10px] text-slate-500">{m.email}</div>}
+                            {m.email && <div className="text-[10px] text-zinc-500">{m.email}</div>}
                           </td>
                           <td className="py-3 px-4">
-                            <div className="font-semibold text-slate-200">{m.bankName || 'Nigerian Bank'}</div>
+                            <div className="font-semibold text-zinc-200">{m.bankName || 'Nigerian Bank'}</div>
                             <div className="font-mono text-[10px] text-purple-400">
                               {m.accountNumber ? `******${m.accountNumber.slice(-4)}` : '••••••••'}
                             </div>
                           </td>
-                          <td className="py-3 px-4 font-mono text-[10px] text-slate-400">
+                          <td className="py-3 px-4 font-mono text-[10px] text-zinc-400">
                             {m.mandateId}
                           </td>
                           <td className="py-3 px-4 font-bold text-white">
@@ -3053,19 +3592,19 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                                 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/25'
                                 : m.status === 'pending_otp'
                                 ? 'bg-amber-500/10 text-amber-400 border border-amber-500/25'
-                                : 'bg-slate-800 text-slate-400'
+                                : 'bg-[#220a0e] text-zinc-400'
                             }`}>
                               {m.status.toUpperCase()}
                             </span>
                           </td>
-                          <td className="py-3 px-4 font-medium text-slate-300">
+                          <td className="py-3 px-4 font-medium text-zinc-300">
                             {m.nextDebitDate ? (
                               <span className="flex items-center gap-1">
                                 <Calendar className="w-3 h-3 text-purple-400" />
                                 {new Date(m.nextDebitDate).toLocaleDateString()}
                               </span>
                             ) : (
-                              <span className="text-slate-600">—</span>
+                              <span className="text-zinc-600">—</span>
                             )}
                           </td>
                           <td className="py-3 px-4 text-right">
@@ -3105,17 +3644,17 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             </div>
 
             {/* SQUAD SFTP FALLBACK GATEWAY & NOTIFICATION PROCESSOR CARD */}
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-[3px] bg-sky-500"></div>
               
               {/* Header */}
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-4 mb-5">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-[#2e1015]/60 pb-4 mb-5">
                 <div>
                   <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
                     <Server className="w-4.5 h-4.5 text-sky-400" />
                     <span>Squad SFTP Fallback Notification Gateway & GPG Decryption</span>
                   </h3>
-                  <p className="text-slate-400 text-xs mt-1 leading-relaxed max-w-3xl">
+                  <p className="text-zinc-400 text-xs mt-1 leading-relaxed max-w-3xl">
                     Automated secondary fallback confirmation mechanism for Squad payments. Squad delivers encrypted notification files (<code className="text-sky-300">.csv.gpg</code>) via SFTP to reconcile any missed webhooks without duplicate activations.
                   </p>
                 </div>
@@ -3126,43 +3665,43 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     checked={squadSftpEnabled} 
                     onChange={(e) => setSquadSftpEnabled(e.target.checked)} 
                   />
-                  <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-600"></div>
-                  <span className="ml-2.5 text-xs font-bold text-slate-300">
+                  <div className="w-11 h-6 bg-[#220a0e] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-600"></div>
+                  <span className="ml-2.5 text-xs font-bold text-zinc-300">
                     {squadSftpEnabled ? 'Fallback Poller Active' : 'Fallback Poller Disabled'}
                   </span>
                 </label>
               </div>
 
               {/* Architecture Protocol Summary Banner */}
-              <div className="p-3.5 rounded-xl bg-[#080a14] border border-sky-500/20 text-xs space-y-1.5 mb-6">
+              <div className="p-3.5 rounded-xl bg-[#0c0305] border border-sky-500/20 text-xs space-y-1.5 mb-6">
                 <div className="flex items-center gap-2 text-sky-400 font-bold uppercase text-[10px] tracking-wider">
                   <ShieldCheck className="w-4 h-4 text-sky-400 shrink-0" />
                   <span>Squad 4-Tier Payment Confirmation Protocol</span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 pt-1 text-[11px]">
-                  <div className="bg-[#0e1222] p-2 rounded-lg border border-slate-800">
+                  <div className="bg-[#180608] p-2 rounded-lg border border-[#2e1015]">
                     <span className="text-purple-400 font-bold block">1. Squad Webhook</span>
-                    <span className="text-slate-400 text-[10px]">Primary instant notification</span>
+                    <span className="text-zinc-400 text-[10px]">Primary instant notification</span>
                   </div>
-                  <div className="bg-[#0e1222] p-2 rounded-lg border border-slate-800">
+                  <div className="bg-[#180608] p-2 rounded-lg border border-[#2e1015]">
                     <span className="text-sky-400 font-bold block">2. Squad SFTP</span>
-                    <span className="text-slate-400 text-[10px]">Fallback reconciler for missed events</span>
+                    <span className="text-zinc-400 text-[10px]">Fallback reconciler for missed events</span>
                   </div>
-                  <div className="bg-[#0e1222] p-2 rounded-lg border border-slate-800">
+                  <div className="bg-[#180608] p-2 rounded-lg border border-[#2e1015]">
                     <span className="text-emerald-400 font-bold block">3. Transaction Verify API</span>
-                    <span className="text-slate-400 text-[10px]">Mandatory server-side status verification</span>
+                    <span className="text-zinc-400 text-[10px]">Mandatory server-side status verification</span>
                   </div>
-                  <div className="bg-[#0e1222] p-2 rounded-lg border border-slate-800">
+                  <div className="bg-[#180608] p-2 rounded-lg border border-[#2e1015]">
                     <span className="text-amber-400 font-bold block">4. Redirect URL</span>
-                    <span className="text-slate-400 text-[10px]">Customer navigation only</span>
+                    <span className="text-zinc-400 text-[10px]">Customer navigation only</span>
                   </div>
                 </div>
               </div>
 
               {/* SFTP Connection Diagnostics & Status Bar */}
-              <div className="p-4 rounded-xl bg-[#080a12] border border-slate-800 space-y-3 mb-6">
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
-                  <span className="text-xs font-extrabold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+              <div className="p-4 rounded-xl bg-[#0c0305] border border-[#2e1015] space-y-3 mb-6">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-[#2e1015] pb-3">
+                  <span className="text-xs font-extrabold text-zinc-200 uppercase tracking-wider flex items-center gap-2">
                     <Activity className="w-4 h-4 text-sky-400 animate-pulse" />
                     <span>SFTP Live Status & Poller Telemetry</span>
                   </span>
@@ -3180,7 +3719,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       type="button"
                       onClick={handleTestSftpConnection}
                       disabled={sftpTesting}
-                      className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold py-1.5 px-3 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                      className="bg-[#220a0e] hover:bg-[#381018] border border-[#3d1319] text-zinc-200 font-bold py-1.5 px-3 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
                     >
                       {sftpTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Terminal className="w-3.5 h-3.5 text-sky-400" />}
                       <span>Test Connection & Keys</span>
@@ -3189,30 +3728,30 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
-                  <div className="p-2.5 rounded-lg bg-[#030407] border border-slate-800/80">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Poller Status</span>
-                    <span className={`inline-flex items-center gap-1.5 text-xs font-bold mt-0.5 ${squadSftpEnabled ? 'text-emerald-400' : 'text-slate-400'}`}>
+                  <div className="p-2.5 rounded-lg bg-[#050102] border border-[#2e1015]">
+                    <span className="text-[10px] uppercase font-bold text-zinc-500 block">Poller Status</span>
+                    <span className={`inline-flex items-center gap-1.5 text-xs font-bold mt-0.5 ${squadSftpEnabled ? 'text-emerald-400' : 'text-zinc-400'}`}>
                       <span className={`w-2 h-2 rounded-full ${squadSftpEnabled ? 'bg-emerald-400 animate-ping' : 'bg-slate-600'}`}></span>
                       {squadSftpEnabled ? `Active (Every ${squadSftpPollInterval}m)` : 'Disabled'}
                     </span>
                   </div>
 
-                  <div className="p-2.5 rounded-lg bg-[#030407] border border-slate-800/80">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Last Sync Cycle</span>
-                    <span className="text-xs font-mono text-slate-300 block truncate mt-0.5">
+                  <div className="p-2.5 rounded-lg bg-[#050102] border border-[#2e1015]">
+                    <span className="text-[10px] uppercase font-bold text-zinc-500 block">Last Sync Cycle</span>
+                    <span className="text-xs font-mono text-zinc-300 block truncate mt-0.5">
                       {sftpStatus?.lastSync ? new Date(sftpStatus.lastSync).toLocaleString() : 'No sync recorded'}
                     </span>
                   </div>
 
-                  <div className="p-2.5 rounded-lg bg-[#030407] border border-slate-800/80">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Last Processed File</span>
+                  <div className="p-2.5 rounded-lg bg-[#050102] border border-[#2e1015]">
+                    <span className="text-[10px] uppercase font-bold text-zinc-500 block">Last Processed File</span>
                     <span className="text-xs font-mono text-sky-300 block truncate mt-0.5" title={sftpStatus?.lastFile || ''}>
                       {sftpStatus?.lastFile || 'None yet'}
                     </span>
                   </div>
 
-                  <div className="p-2.5 rounded-lg bg-[#030407] border border-slate-800/80">
-                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Last Verified Tx Ref</span>
+                  <div className="p-2.5 rounded-lg bg-[#050102] border border-[#2e1015]">
+                    <span className="text-[10px] uppercase font-bold text-zinc-500 block">Last Verified Tx Ref</span>
                     <span className="text-xs font-mono text-purple-300 block truncate mt-0.5" title={sftpStatus?.lastTxRef || ''}>
                       {sftpStatus?.lastTxRef || 'None yet'}
                     </span>
@@ -3226,7 +3765,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       <span>Diagnostic Output: {sftpTestResult.message}</span>
                     </div>
                     {sftpTestResult.details && (
-                      <div className="text-[11px] text-slate-300 space-y-0.5 pl-5">
+                      <div className="text-[11px] text-zinc-300 space-y-0.5 pl-5">
                         {sftpTestResult.details.sftpConnection && <div>• SFTP Connection: {sftpTestResult.details.sftpConnection}</div>}
                         {sftpTestResult.details.remoteDirectory && <div>• Remote Directory: {sftpTestResult.details.remoteDirectory}</div>}
                         {sftpTestResult.details.filesFound !== undefined && <div>• Files Found: {sftpTestResult.details.filesFound}</div>}
@@ -3240,28 +3779,28 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
               {/* SFTP Server Configuration Settings */}
               <div className="space-y-4">
-                <h4 className="text-xs font-extrabold text-slate-300 uppercase tracking-wider flex items-center gap-1.5 border-b border-slate-800 pb-2">
+                <h4 className="text-xs font-extrabold text-zinc-300 uppercase tracking-wider flex items-center gap-1.5 border-b border-[#2e1015] pb-2">
                   <Server className="w-3.5 h-3.5 text-sky-400" />
                   <span>SFTP Server & Authentication Details</span>
                 </h4>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="space-y-1 md:col-span-2">
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">SFTP Host / Server Address</label>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">SFTP Host / Server Address</label>
                     <input 
                       type="text" 
                       placeholder="e.g. sftp.squadco.com or sftp.zerolord.com" 
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
                       value={squadSftpHost}
                       onChange={(e) => setSquadSftpHost(e.target.value)}
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">SFTP Port</label>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">SFTP Port</label>
                     <input 
                       type="number" 
                       placeholder="22" 
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
                       value={squadSftpPort}
                       onChange={(e) => setSquadSftpPort(Number(e.target.value))}
                     />
@@ -3270,18 +3809,18 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">SFTP Username</label>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">SFTP Username</label>
                     <input 
                       type="text" 
                       placeholder="e.g. squad_cinjelly or sftp_user" 
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
                       value={squadSftpUsername}
                       onChange={(e) => setSquadSftpUsername(e.target.value)}
                     />
                   </div>
                   <div className="space-y-1">
                     <div className="flex items-center justify-between">
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">SFTP Password / Passphrase</label>
+                      <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">SFTP Password / Passphrase</label>
                       {sftpConfigFlags.hasPassword && (
                         <span className="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.2 rounded font-bold">
                           Configured
@@ -3291,7 +3830,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     <input 
                       type="password" 
                       placeholder={sftpConfigFlags.hasPassword ? '•••••••••••• (Leave blank to keep existing)' : 'Enter SFTP password'} 
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
                       value={squadSftpPassword}
                       onChange={(e) => setSquadSftpPassword(e.target.value)}
                     />
@@ -3300,33 +3839,33 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="space-y-1">
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Remote Polling Directory</label>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Remote Polling Directory</label>
                     <input 
                       type="text" 
                       placeholder="/squad_notifications" 
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
                       value={squadSftpRemoteDir}
                       onChange={(e) => setSquadSftpRemoteDir(e.target.value)}
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Processed / Archive Directory</label>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Processed / Archive Directory</label>
                     <input 
                       type="text" 
                       placeholder="/squad_notifications/processed" 
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
                       value={squadSftpProcessingDir}
                       onChange={(e) => setSquadSftpProcessingDir(e.target.value)}
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Poll Interval (Minutes)</label>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Poll Interval (Minutes)</label>
                     <input 
                       type="number" 
                       min={1}
                       max={1440}
                       placeholder="5" 
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-sky-500 transition"
                       value={squadSftpPollInterval}
                       onChange={(e) => setSquadSftpPollInterval(Number(e.target.value))}
                     />
@@ -3335,7 +3874,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
                 <div className="space-y-1">
                   <div className="flex items-center justify-between">
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">
                       SSH Private Key (Optional for Key-based SFTP auth)
                     </label>
                     {sftpConfigFlags.hasPrivateKey && (
@@ -3347,14 +3886,14 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   <textarea 
                     rows={3}
                     placeholder={sftpConfigFlags.hasPrivateKey ? '-----BEGIN OPENSSH PRIVATE KEY-----\n•••••••••••••••••••••••••••••••••••••••••••••\n(Leave blank to keep existing SSH key)' : '-----BEGIN OPENSSH PRIVATE KEY-----\n... paste OpenSSH / RSA private key here ...'} 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-sky-300 text-[11px] font-mono focus:outline-none focus:border-sky-500 transition resize-none"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-sky-300 text-[11px] font-mono focus:outline-none focus:border-sky-500 transition resize-none"
                     value={squadSftpPrivateKey}
                     onChange={(e) => setSquadSftpPrivateKey(e.target.value)}
                   />
                 </div>
 
                 {/* GPG / PGP Decryption Configuration */}
-                <h4 className="text-xs font-extrabold text-slate-300 uppercase tracking-wider flex items-center gap-1.5 border-b border-slate-800 pb-2 pt-2">
+                <h4 className="text-xs font-extrabold text-zinc-300 uppercase tracking-wider flex items-center gap-1.5 border-b border-[#2e1015] pb-2 pt-2">
                   <Lock className="w-3.5 h-3.5 text-purple-400" />
                   <span>OpenPGP / GPG Decryption Configuration (.csv.gpg files)</span>
                 </h4>
@@ -3362,7 +3901,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 <div className="space-y-3">
                   <div className="space-y-1">
                     <div className="flex items-center justify-between">
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                      <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">
                         GPG Private Key (ASCII Armored Block)
                       </label>
                       {sftpConfigFlags.hasGpgKey && (
@@ -3374,7 +3913,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     <textarea 
                       rows={4}
                       placeholder={sftpConfigFlags.hasGpgKey ? '-----BEGIN PGP PRIVATE KEY BLOCK-----\n•••••••••••••••••••••••••••••••••••••••••••••\n(Leave blank to keep existing GPG private key)' : '-----BEGIN PGP PRIVATE KEY BLOCK-----\nVersion: ...\n\n... paste ASCII armored private key ...\n-----END PGP PRIVATE KEY BLOCK-----'} 
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-purple-300 text-[11px] font-mono focus:outline-none focus:border-purple-500 transition resize-none"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-purple-300 text-[11px] font-mono focus:outline-none focus:border-purple-500 transition resize-none"
                       value={squadSftpGpgPrivateKey}
                       onChange={(e) => setSquadSftpGpgPrivateKey(e.target.value)}
                     />
@@ -3382,7 +3921,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
                   <div className="space-y-1 max-w-md">
                     <div className="flex items-center justify-between">
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">GPG Key Passphrase (If encrypted)</label>
+                      <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">GPG Key Passphrase (If encrypted)</label>
                       {sftpConfigFlags.hasGpgPassphrase && (
                         <span className="text-[9px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.2 rounded font-bold">
                           Passphrase Saved
@@ -3392,7 +3931,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     <input 
                       type="password" 
                       placeholder={sftpConfigFlags.hasGpgPassphrase ? '•••••••••••• (Leave blank to keep existing)' : 'Enter GPG passphrase'} 
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-purple-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs font-mono focus:outline-none focus:border-purple-500 transition"
                       value={squadSftpGpgPassphrase}
                       onChange={(e) => setSquadSftpGpgPassphrase(e.target.value)}
                     />
@@ -3412,15 +3951,15 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               </div>
 
               {/* MANUAL SFTP NOTIFICATION FILE UPLOADER & RECONCILER */}
-              <div className="mt-8 border-t border-slate-800/80 pt-6">
-                <div className="bg-[#07080c] border border-slate-800 rounded-xl p-4 space-y-4">
+              <div className="mt-8 border-t border-[#2e1015] pt-6">
+                <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4 space-y-4">
                   <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                     <div>
-                      <h4 className="text-xs font-extrabold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                      <h4 className="text-xs font-extrabold text-zinc-200 uppercase tracking-wider flex items-center gap-1.5">
                         <UploadCloud className="w-4 h-4 text-sky-400" />
                         <span>Manual Notification File Reconciler (.csv or .csv.gpg)</span>
                       </h4>
-                      <p className="text-slate-400 text-[11px] mt-0.5">
+                      <p className="text-zinc-400 text-[11px] mt-0.5">
                         Manually upload a Squad transaction notification file to test parsing, run GPG decryption, verify references via Squad API, and fulfill payments.
                       </p>
                     </div>
@@ -3432,7 +3971,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                         type="file" 
                         accept=".csv,.gpg,.pgp,.txt"
                         onChange={(e) => setSftpManualFile(e.target.files?.[0] || null)}
-                        className="w-full sm:flex-1 bg-[#11131e] border border-slate-800 rounded-xl py-2 px-3 text-slate-300 text-xs file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-sky-600/20 file:text-sky-300 hover:file:bg-sky-600/30 cursor-pointer"
+                        className="w-full sm:flex-1 bg-[#120507] border border-[#2e1015] rounded-xl py-2 px-3 text-zinc-300 text-xs file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-sky-600/20 file:text-sky-300 hover:file:bg-sky-600/30 cursor-pointer"
                       />
                       <button
                         type="submit"
@@ -3460,7 +3999,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                           <span>{sftpManualResult.message}</span>
                         </div>
                         {sftpManualResult.summary && (
-                          <div className="text-[11px] text-slate-300 space-y-0.5 pl-5">
+                          <div className="text-[11px] text-zinc-300 space-y-0.5 pl-5">
                             <div>• Total Records Parsed: {sftpManualResult.summary.totalRecords}</div>
                             <div>• Already Processed (Idempotent): {sftpManualResult.summary.alreadyProcessed}</div>
                             <div>• Verified & Activated: {sftpManualResult.summary.verifiedSuccessful}</div>
@@ -3476,15 +4015,15 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             </div>
 
             {/* SQUAD SFTP PROCESSING LOGS & AUDIT TRAIL TABLE */}
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-[3px] bg-sky-500"></div>
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-4 mb-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-[#2e1015]/60 pb-4 mb-4">
                 <div>
                   <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
                     <FileSpreadsheet className="w-4.5 h-4.5 text-sky-400" />
                     <span>Squad SFTP Audit Trail & Reconciliation Logs</span>
                   </h3>
-                  <p className="text-slate-400 text-xs mt-1">
+                  <p className="text-zinc-400 text-xs mt-1">
                     Complete immutable log of SFTP file downloads, decryption operations, transaction verifications, and subscription renewals.
                   </p>
                 </div>
@@ -3493,7 +4032,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     type="button"
                     onClick={fetchSftpLogs}
                     disabled={sftpLoadingLogs}
-                    className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-1.5 px-3 rounded-lg text-xs transition flex items-center gap-1.5 cursor-pointer"
+                    className="bg-[#220a0e] hover:bg-[#381018] text-white font-bold py-1.5 px-3 rounded-lg text-xs transition flex items-center gap-1.5 cursor-pointer"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${sftpLoadingLogs ? 'animate-spin' : ''}`} />
                     <span>Refresh Logs</span>
@@ -3516,17 +4055,17 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   <Loader2 className="w-6 h-6 animate-spin text-sky-400" />
                 </div>
               ) : sftpLogs.length === 0 ? (
-                <div className="text-center py-10 bg-[#07080c] rounded-xl border border-slate-800/60">
-                  <FileSpreadsheet className="w-10 h-10 text-slate-600 mx-auto mb-2" />
-                  <p className="text-slate-300 text-sm font-semibold">No SFTP reconciliation events logged yet.</p>
-                  <p className="text-slate-500 text-xs mt-1">
+                <div className="text-center py-10 bg-[#080203] rounded-xl border border-[#2e1015]/60">
+                  <FileSpreadsheet className="w-10 h-10 text-zinc-600 mx-auto mb-2" />
+                  <p className="text-zinc-300 text-sm font-semibold">No SFTP reconciliation events logged yet.</p>
+                  <p className="text-zinc-500 text-xs mt-1">
                     When the background poller scans remote SFTP directories or parses files, detailed logs will appear here.
                   </p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs text-slate-300">
-                    <thead className="bg-[#080a12] text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800 font-bold">
+                  <table className="w-full text-left text-xs text-zinc-300">
+                    <thead className="bg-[#0c0305] text-zinc-400 uppercase text-[10px] tracking-wider border-b border-[#2e1015] font-bold">
                       <tr>
                         <th className="py-3 px-4">Timestamp</th>
                         <th className="py-3 px-4">Action</th>
@@ -3537,11 +4076,11 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     </thead>
                     <tbody className="divide-y divide-slate-800/60">
                       {sftpLogs.map((log) => (
-                        <tr key={log.id} className="hover:bg-slate-900/40 transition">
-                          <td className="py-3 px-4 font-mono text-[10px] text-slate-400 whitespace-nowrap">
+                        <tr key={log.id} className="hover:bg-[#180608]/40 transition">
+                          <td className="py-3 px-4 font-mono text-[10px] text-zinc-400 whitespace-nowrap">
                             {new Date(log.createdAt).toLocaleString()}
                           </td>
-                          <td className="py-3 px-4 font-mono text-[11px] text-slate-200">
+                          <td className="py-3 px-4 font-mono text-[11px] text-zinc-200">
                             {log.action}
                           </td>
                           <td className="py-3 px-4">
@@ -3560,12 +4099,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                           <td className="py-3 px-4 font-mono text-[11px]">
                             {log.filename && <div className="text-sky-300 truncate max-w-[200px]" title={log.filename}>{log.filename}</div>}
                             {log.txRef && <div className="text-purple-300 text-[10px]">{log.txRef}</div>}
-                            {!log.filename && !log.txRef && <span className="text-slate-600">—</span>}
+                            {!log.filename && !log.txRef && <span className="text-zinc-600">—</span>}
                           </td>
-                          <td className="py-3 px-4 text-slate-300">
+                          <td className="py-3 px-4 text-zinc-300">
                             <div>{log.message}</div>
                             {log.metadata && (
-                              <pre className="text-[10px] font-mono text-slate-500 mt-1 max-w-md overflow-x-auto whitespace-pre-wrap">
+                              <pre className="text-[10px] font-mono text-zinc-500 mt-1 max-w-md overflow-x-auto whitespace-pre-wrap">
                                 {log.metadata}
                               </pre>
                             )}
@@ -3583,43 +4122,43 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
         {/* TAB: SUPPORT & CHATBOT CONFIGURATION */}
         {activeTab === 'support_config' && (
           <div className="space-y-6">
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-[3px] bg-indigo-500"></div>
               <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
                 <MessageSquare className="w-4.5 h-4.5 text-indigo-400" />
                 <span>Support Contact & Chatbot Configuration</span>
               </h3>
-              <p className="text-slate-400 text-xs mt-1 leading-relaxed max-w-2xl">
+              <p className="text-zinc-400 text-xs mt-1 leading-relaxed max-w-2xl">
                 Configure global contact methods and support chatbot links shown across all pages to guide users when they need assistance.
               </p>
               
               <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Support Email Address</label>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Support Email Address</label>
                   <input 
                     type="email" 
                     placeholder="e.g. support@example.com" 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-indigo-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-indigo-500 transition"
                     value={contactEmail}
                     onChange={(e) => setContactEmail(e.target.value)}
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Support Phone Number</label>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Support Phone Number</label>
                   <input 
                     type="text" 
                     placeholder="e.g. +1 (555) 000-0000" 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-indigo-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-indigo-500 transition"
                     value={contactPhone}
                     onChange={(e) => setContactPhone(e.target.value)}
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">WhatsApp Contact URL / Number</label>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">WhatsApp Contact URL / Number</label>
                   <input 
                     type="text" 
                     placeholder="e.g. https://wa.me/..." 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-indigo-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-indigo-500 transition"
                     value={contactWhatsApp}
                     onChange={(e) => setContactWhatsApp(e.target.value)}
                   />
@@ -3627,23 +4166,23 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               </div>
 
               <div className="mt-4 space-y-1">
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Other Contact / Support Notes</label>
+                <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Other Contact / Support Notes</label>
                 <textarea 
                   rows={2}
                   placeholder="e.g. Support hours: 9 AM - 6 PM UTC" 
-                  className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-indigo-500 transition resize-none"
+                  className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-indigo-500 transition resize-none"
                   value={contactOther}
                   onChange={(e) => setContactOther(e.target.value)}
                 />
               </div>
 
-              <div className="mt-5 border-t border-slate-800/60 pt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="mt-5 border-t border-[#2e1015]/60 pt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <label className="block text-[10px] font-bold text-indigo-300 uppercase tracking-wider">Telegram / Chatbot Username or URL</label>
                   <input 
                     type="text" 
                     placeholder="e.g. https://t.me/MyJellyfinSupportBot" 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-indigo-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-indigo-500 transition"
                     value={chatbotInfo}
                     onChange={(e) => setChatbotInfo(e.target.value)}
                   />
@@ -3653,7 +4192,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   <input 
                     type="text" 
                     placeholder="e.g. Start the bot and send /register or /help" 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-indigo-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-indigo-500 transition"
                     value={chatbotInstructions}
                     onChange={(e) => setChatbotInstructions(e.target.value)}
                   />
@@ -3675,13 +4214,13 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
         {/* TAB: MOBILE CLIENT DOWNLOAD LINKS */}
         {activeTab === 'mobile_app' && (
           <div className="space-y-6">
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-[3px] bg-rose-500"></div>
               <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
                 <Smartphone className="w-4.5 h-4.5 text-rose-400" />
                 <span>Mobile Client Download Configuration (iOS & Android)</span>
               </h3>
-              <p className="text-slate-400 text-xs mt-1 leading-relaxed max-w-2xl">
+              <p className="text-zinc-400 text-xs mt-1 leading-relaxed max-w-2xl">
                 Specify the custom download or install URLs for the iOS and Android mobile applications advertised on the landing page and portal.
               </p>
               
@@ -3691,7 +4230,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   <input 
                     type="text" 
                     placeholder="e.g. https://apps.apple.com/app/cinode..." 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={iosDownloadUrl}
                     onChange={(e) => setIosDownloadUrl(e.target.value)}
                   />
@@ -3701,7 +4240,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   <input 
                     type="text" 
                     placeholder="e.g. https://play.google.com/store/apps/details..." 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={androidDownloadUrl}
                     onChange={(e) => setAndroidDownloadUrl(e.target.value)}
                   />
@@ -3725,25 +4264,25 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
           <div className="space-y-6">
             
             {/* Configurable Default Commission Rate */}
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-[3px] bg-emerald-500"></div>
               <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
                 <Settings className="w-4.5 h-4.5 text-emerald-400" />
                 <span>Default Affiliate Commission Rate</span>
               </h3>
-              <p className="text-slate-400 text-xs mt-1 leading-relaxed max-w-2xl">
+              <p className="text-zinc-400 text-xs mt-1 leading-relaxed max-w-2xl">
                 Configure the reward amount automatically allocated to a referral partner immediately upon their referred user completing their first 30-day paid subscription.
               </p>
               
               <div className="mt-5 flex flex-col sm:flex-row items-end gap-3 max-w-sm">
                 <div className="space-y-1 w-full">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">Commission Reward (₦ NGN)</label>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Commission Reward (₦ NGN)</label>
                   <input 
                     type="number" 
                     step="0.01" 
                     required
                     placeholder="100.00" 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-emerald-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-emerald-500 transition"
                     value={defaultCommission}
                     onChange={(e) => setDefaultCommission(e.target.value)}
                   />
@@ -3758,28 +4297,28 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             </div>
 
             {/* Affiliates Directory */}
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
                 <div>
                   <h3 className="text-lg font-display font-extrabold text-white">Affiliate Partner Registry</h3>
-                  <p className="text-slate-400 text-xs mt-0.5">Toggle users as active referral affiliates, view and edit their customizable promotional codes.</p>
+                  <p className="text-zinc-400 text-xs mt-0.5">Toggle users as active referral affiliates, view and edit their customizable promotional codes.</p>
                 </div>
                 <div className="relative w-full sm:max-w-xs">
-                  <Search className="absolute inset-y-0 left-3.5 h-full w-3.5 text-slate-500 flex items-center" />
+                  <Search className="absolute inset-y-0 left-3.5 h-full w-3.5 text-zinc-500 flex items-center" />
                   <input 
                     type="text" 
                     placeholder="Search partners..." 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 pl-9 pr-4 text-white text-xs focus:outline-none focus:border-emerald-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 pl-9 pr-4 text-white text-xs focus:outline-none focus:border-emerald-500 transition"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                   />
                 </div>
               </div>
 
-              <div className="overflow-x-auto border border-slate-800/80 rounded-xl bg-[#07080c]">
+              <div className="overflow-x-auto border border-[#2e1015] rounded-xl bg-[#080203]">
                 <table className="min-w-full divide-y divide-slate-800/60">
-                  <thead className="bg-[#0e1018]">
-                    <tr className="text-left text-xs font-semibold text-slate-400 tracking-wider">
+                  <thead className="bg-[#180608]">
+                    <tr className="text-left text-xs font-semibold text-zinc-400 tracking-wider">
                       <th className="px-6 py-4">User</th>
                       <th className="px-6 py-4">Affiliate Program Status</th>
                       <th className="px-6 py-4">Unique Promotional Code</th>
@@ -3790,20 +4329,20 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   <tbody className="divide-y divide-slate-800/40 text-sm">
                     {loading ? (
                       <tr>
-                        <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
+                        <td colSpan={5} className="px-6 py-12 text-center text-zinc-500">
                           <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-emerald-400" />
                           <span className="text-xs">Fetching records...</span>
                         </td>
                       </tr>
                     ) : users.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="px-6 py-12 text-center text-slate-400 text-xs font-medium">
+                        <td colSpan={5} className="px-6 py-12 text-center text-zinc-400 text-xs font-medium">
                           No users registered.
                         </td>
                       </tr>
                     ) : (
                       users.map((user) => (
-                        <tr key={user.id} className="hover:bg-[#11131e]/50 transition text-xs">
+                        <tr key={user.id} className="hover:bg-[#120507]/50 transition text-xs">
                           <td className="px-6 py-4">
                             <span className="font-bold text-white text-sm flex items-center gap-1.5 flex-wrap">
                               {user.fullName}
@@ -3813,7 +4352,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                                 </span>
                               )}
                             </span>
-                            <span className="block text-[10px] text-slate-500">@{user.username} • {user.email}</span>
+                            <span className="block text-[10px] text-zinc-500">@{user.username} • {user.email}</span>
                             <span className="block text-[10px] text-emerald-400 mt-1 font-medium flex items-center gap-1">
                               <CalendarDays className="w-3 h-3 text-emerald-400 shrink-0" />
                               Signed up: {formatSignupDateAndDay(user.registrationDate)}
@@ -3825,7 +4364,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                                 Active Partner
                               </span>
                             ) : (
-                              <span className="bg-slate-800 text-slate-400 text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-wider">
+                              <span className="bg-[#220a0e] text-zinc-400 text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-wider">
                                 Standard Member
                               </span>
                             )}
@@ -3833,7 +4372,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                           <td className="px-6 py-4 font-mono font-bold text-white text-xs">
                             {user.isAffiliate ? (user.affiliateCode || 'NOT_ASSIGNED') : '—'}
                           </td>
-                          <td className="px-6 py-4 font-mono text-slate-400 text-xs">
+                          <td className="px-6 py-4 font-mono text-zinc-400 text-xs">
                             {user.referredBy || '—'}
                           </td>
                           <td className="px-6 py-4 text-right">
@@ -3843,7 +4382,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                                 setEditIsAffiliate(!!user.isAffiliate);
                                 setEditAffiliateCode(user.affiliateCode || '');
                               }}
-                              className="bg-[#11131e] hover:bg-[#151726] border border-slate-800 hover:border-slate-700 text-slate-300 font-bold py-1.5 px-3 rounded-lg text-[11px] transition cursor-pointer flex items-center gap-1.5 ml-auto"
+                              className="bg-[#120507] hover:bg-[#1c080b] border border-[#2e1015] hover:border-[#3d1319] text-zinc-300 font-bold py-1.5 px-3 rounded-lg text-[11px] transition cursor-pointer flex items-center gap-1.5 ml-auto"
                             >
                               <Edit className="w-3 h-3 text-emerald-400" /> Configure Affiliate
                             </button>
@@ -3859,27 +4398,325 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
           </div>
         )}
 
+        {/* TAB: AFFILIATE MANUAL WITHDRAWALS */}
+        {activeTab === 'affiliate_withdrawals' && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            {/* Header & Metrics */}
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 shadow-xl relative">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#2e1015]/60 pb-6 mb-6">
+                <div>
+                  <h3 className="text-xl font-display font-extrabold text-white flex items-center gap-2">
+                    <Wallet className="w-6 h-6 text-emerald-400" />
+                    <span>Affiliate Withdrawal Requests (Manual Transfers)</span>
+                  </h3>
+                  <p className="text-zinc-400 text-xs mt-1">
+                    Review pending affiliate withdrawal requests. Manually transfer the funds to the affiliate's bank account, then mark as Paid with reference or Decline with reason.
+                  </p>
+                </div>
+                <button
+                  onClick={fetchAdminWithdrawals}
+                  disabled={loadingWithdrawals}
+                  className="bg-[#080203] hover:bg-[#150608] border border-[#2e1015] text-xs text-zinc-300 font-bold py-2 px-4 rounded-xl flex items-center gap-2 transition cursor-pointer self-start sm:self-auto shrink-0"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${loadingWithdrawals ? 'animate-spin' : ''}`} /> Sync Withdrawals
+                </button>
+              </div>
+
+              {/* Metrics Bento Row */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                {/* Pending */}
+                <div className="bg-[#080203] border border-amber-500/30 rounded-xl p-4.5 bg-gradient-to-b from-amber-950/20 to-transparent">
+                  <div className="flex justify-between items-start mb-2">
+                    <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">Awaiting Manual Pay</span>
+                    <Clock className="w-4 h-4 text-amber-400" />
+                  </div>
+                  <span className="text-2xl font-black text-amber-400">
+                    ₦{adminWithdrawals.filter(w => w.status === 'pending').reduce((acc, w) => acc + parseFloat(w.amount || '0'), 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </span>
+                  <span className="block text-[10px] text-amber-500/80 mt-1 font-semibold">
+                    {adminWithdrawals.filter(w => w.status === 'pending').length} requests pending
+                  </span>
+                </div>
+
+                {/* Paid */}
+                <div className="bg-[#080203] border border-emerald-500/30 rounded-xl p-4.5 bg-gradient-to-b from-emerald-950/20 to-transparent">
+                  <div className="flex justify-between items-start mb-2">
+                    <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">Settled & Paid</span>
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <span className="text-2xl font-black text-emerald-400">
+                    ₦{adminWithdrawals.filter(w => w.status === 'paid').reduce((acc, w) => acc + parseFloat(w.amount || '0'), 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </span>
+                  <span className="block text-[10px] text-emerald-500/80 mt-1 font-semibold">
+                    {adminWithdrawals.filter(w => w.status === 'paid').length} payouts completed
+                  </span>
+                </div>
+
+                {/* Declined */}
+                <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4.5">
+                  <div className="flex justify-between items-start mb-2">
+                    <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider">Declined Requests</span>
+                    <Ban className="w-4 h-4 text-rose-400" />
+                  </div>
+                  <span className="text-2xl font-black text-white">
+                    ₦{adminWithdrawals.filter(w => w.status === 'declined').reduce((acc, w) => acc + parseFloat(w.amount || '0'), 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </span>
+                  <span className="block text-[10px] text-zinc-500 mt-1">
+                    {adminWithdrawals.filter(w => w.status === 'declined').length} requests declined
+                  </span>
+                </div>
+
+                {/* Total Volume */}
+                <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4.5">
+                  <div className="flex justify-between items-start mb-2">
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Total Requested</span>
+                    <DollarSign className="w-4 h-4 text-zinc-400" />
+                  </div>
+                  <span className="text-2xl font-black text-white">
+                    ₦{adminWithdrawals.reduce((acc, w) => acc + parseFloat(w.amount || '0'), 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </span>
+                  <span className="block text-[10px] text-zinc-500 mt-1">
+                    {adminWithdrawals.length} total request records
+                  </span>
+                </div>
+              </div>
+
+              {/* Status Filter Tabs */}
+              <div className="flex flex-wrap items-center gap-2 border-b border-[#2e1015] pb-4 mb-5">
+                {[
+                  { key: 'all', label: 'All Requests', count: adminWithdrawals.length },
+                  { key: 'pending', label: 'Pending Transfer', count: adminWithdrawals.filter(w => w.status === 'pending').length },
+                  { key: 'paid', label: 'Paid & Settled', count: adminWithdrawals.filter(w => w.status === 'paid').length },
+                  { key: 'declined', label: 'Declined', count: adminWithdrawals.filter(w => w.status === 'declined').length },
+                ].map(tab => (
+                  <button
+                    key={tab.key}
+                    onClick={() => setWithdrawalFilter(tab.key as any)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                      withdrawalFilter === tab.key
+                        ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-950/50'
+                        : 'bg-[#080203] border border-[#2e1015] text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    <span>{tab.label}</span>
+                    <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${withdrawalFilter === tab.key ? 'bg-white/20 text-white' : 'bg-[#180608] text-zinc-500 border border-[#2e1015]'}`}>
+                      {tab.count}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              {/* Requests Table / Listing */}
+              <div className="overflow-x-auto border border-[#2e1015] rounded-xl bg-[#080203]">
+                <table className="min-w-full divide-y divide-[#2e1015]">
+                  <thead className="bg-[#180608]">
+                    <tr className="text-left text-[11px] font-bold text-zinc-400 tracking-wider uppercase">
+                      <th className="px-5 py-3.5">Affiliate Partner</th>
+                      <th className="px-5 py-3.5">Amount</th>
+                      <th className="px-5 py-3.5">Destination Bank Account</th>
+                      <th className="px-5 py-3.5">Requested Date</th>
+                      <th className="px-5 py-3.5">Status</th>
+                      <th className="px-5 py-3.5 text-right">Admin Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#2e1015]/60 text-xs">
+                    {loadingWithdrawals ? (
+                      <tr>
+                        <td colSpan={6} className="px-6 py-12 text-center text-zinc-500">
+                          <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-emerald-400" />
+                          <span className="text-xs">Loading withdrawal requests...</span>
+                        </td>
+                      </tr>
+                    ) : adminWithdrawals.filter(w => withdrawalFilter === 'all' || w.status === withdrawalFilter).length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="px-6 py-12 text-center text-zinc-500 text-xs">
+                          <Banknote className="w-8 h-8 text-zinc-700 mx-auto mb-2" />
+                          <p className="font-semibold text-zinc-400">No withdrawal requests found.</p>
+                          <p className="text-[11px] text-zinc-600 mt-0.5">When affiliates request available balance payouts, they will show up here for manual transfer.</p>
+                        </td>
+                      </tr>
+                    ) : (
+                      adminWithdrawals
+                        .filter(w => withdrawalFilter === 'all' || w.status === withdrawalFilter)
+                        .map((req) => {
+                          const isPending = req.status === 'pending';
+                          const isPaid = req.status === 'paid';
+                          const isDeclined = req.status === 'declined';
+                          const isCopied = copiedAccId === req.id;
+
+                          return (
+                            <tr key={req.id} className="hover:bg-[#120507] transition">
+                              {/* Partner Details */}
+                              <td className="px-5 py-4">
+                                <div className="space-y-0.5">
+                                  <span className="font-extrabold text-white block">
+                                    {req.full_name || req.fullName || req.affiliateName || 'Affiliate Partner'}
+                                  </span>
+                                  <span className="text-zinc-400 text-[11px] block">
+                                    @{req.username || req.affiliateUsername || 'affiliate'}
+                                  </span>
+                                  {(req.email || req.affiliateEmail) && (
+                                    <span className="text-zinc-500 text-[10px] block">
+                                      {req.email || req.affiliateEmail}
+                                    </span>
+                                  )}
+                                  {req.phone && (
+                                    <span className="text-zinc-500 text-[10px] block">
+                                      {req.phone}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+
+                              {/* Amount */}
+                              <td className="px-5 py-4 whitespace-nowrap">
+                                <span className="font-mono font-black text-sm text-emerald-400 block">
+                                  ₦{parseFloat(req.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                </span>
+                                <span className="text-[10px] text-zinc-500 block">Full balance</span>
+                              </td>
+
+                              {/* Bank Details & Copy */}
+                              <td className="px-5 py-4">
+                                <div className="space-y-1 min-w-[200px]">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-bold text-zinc-200 text-xs">{req.bank_name}</span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-mono text-zinc-300 bg-[#120507] px-2 py-0.5 rounded border border-[#2e1015] font-bold">
+                                      {req.account_number}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCopyAccount(req.account_number, req.id)}
+                                      className={`px-2 py-0.5 rounded text-[10px] font-bold transition flex items-center gap-1 cursor-pointer ${
+                                        isCopied
+                                          ? 'bg-emerald-500 text-black'
+                                          : 'bg-[#180608] hover:bg-[#220a0e] text-zinc-400 hover:text-white border border-[#2e1015]'
+                                      }`}
+                                      title="Copy Account Number"
+                                    >
+                                      {isCopied ? (
+                                        <>
+                                          <Check className="w-3 h-3 text-black" /> Copied
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Copy className="w-3 h-3" /> Copy
+                                        </>
+                                      )}
+                                    </button>
+                                  </div>
+                                  <span className="text-zinc-400 text-[11px] block truncate max-w-xs">{req.account_name}</span>
+                                </div>
+                              </td>
+
+                              {/* Requested Date */}
+                              <td className="px-5 py-4 whitespace-nowrap text-[11px] text-zinc-400">
+                                <span className="block text-zinc-300 font-semibold">
+                                  {new Date(req.requested_at || req.created_at).toLocaleDateString()}
+                                </span>
+                                <span className="block text-zinc-500 text-[10px]">
+                                  {new Date(req.requested_at || req.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                              </td>
+
+                              {/* Status */}
+                              <td className="px-5 py-4">
+                                <div className="space-y-1">
+                                  <span className={`inline-block px-2.5 py-1 rounded text-[10px] font-extrabold uppercase tracking-wider ${
+                                    isPaid ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' :
+                                    isDeclined ? 'bg-rose-500/15 text-rose-400 border border-rose-500/30' :
+                                    'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+                                  }`}>
+                                    {isPending ? 'Pending Transfer' : isPaid ? 'Paid' : 'Declined'}
+                                  </span>
+
+                                  {isPaid && req.payment_reference && (
+                                    <span className="block text-[10px] text-zinc-400 font-mono">
+                                      Ref: {req.payment_reference}
+                                    </span>
+                                  )}
+
+                                  {isDeclined && req.decline_reason && (
+                                    <span className="block text-[10px] text-rose-400/90 leading-tight max-w-xs">
+                                      Reason: {req.decline_reason}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+
+                              {/* Actions */}
+                              <td className="px-5 py-4 text-right whitespace-nowrap">
+                                {isPending ? (
+                                  <div className="flex items-center justify-end gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedWithdrawalForPay(req);
+                                        setPaymentReferenceInput('');
+                                      }}
+                                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1 shadow-sm"
+                                    >
+                                      <Check className="w-3.5 h-3.5" /> Mark as Paid
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedWithdrawalForDecline(req);
+                                        setDeclineReasonInput('');
+                                      }}
+                                      className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-bold px-2.5 py-1.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1"
+                                    >
+                                      <Ban className="w-3 h-3" /> Decline
+                                    </button>
+                                  </div>
+                                ) : isPaid ? (
+                                  <div className="text-[11px] text-zinc-500 space-y-0.5">
+                                    <span className="block text-emerald-400 font-semibold">Settled</span>
+                                    {req.processed_at && (
+                                      <span className="block text-[10px]">{new Date(req.processed_at).toLocaleDateString()}</span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="text-[11px] text-zinc-500 space-y-0.5">
+                                    <span className="block text-rose-400 font-semibold">Declined</span>
+                                    <span className="block text-[10px] text-zinc-600">Balance refunded</span>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* TAB 3: COMMISSIONS LEDGER */}
         {activeTab === 'commissions' && (
           <div className="space-y-6">
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl">
               <div className="flex justify-between items-center mb-6">
                 <div>
                   <h3 className="text-lg font-display font-extrabold text-white">Referral Commissions Ledger</h3>
-                  <p className="text-slate-400 text-xs mt-0.5">Track, audit, approve and execute referral commission payouts securely.</p>
+                  <p className="text-zinc-400 text-xs mt-0.5">Track, audit, approve and execute referral commission payouts securely.</p>
                 </div>
                 <button
                   onClick={fetchCommissions}
-                  className="bg-[#07080c] hover:bg-[#121422] border border-slate-800 text-xs text-slate-300 font-bold py-1.5 px-3.5 rounded-xl flex items-center gap-2 transition cursor-pointer"
+                  className="bg-[#080203] hover:bg-[#150608] border border-[#2e1015] text-xs text-zinc-300 font-bold py-1.5 px-3.5 rounded-xl flex items-center gap-2 transition cursor-pointer"
                 >
                   <RefreshCw className="w-3.5 h-3.5 text-emerald-400" /> Sync Ledger
                 </button>
               </div>
 
-              <div className="overflow-x-auto border border-slate-800/80 rounded-xl bg-[#07080c]">
+              <div className="overflow-x-auto border border-[#2e1015] rounded-xl bg-[#080203]">
                 <table className="min-w-full divide-y divide-slate-800/60">
-                  <thead className="bg-[#0e1018]">
-                    <tr className="text-left text-xs font-semibold text-slate-400 tracking-wider">
+                  <thead className="bg-[#180608]">
+                    <tr className="text-left text-xs font-semibold text-zinc-400 tracking-wider">
                       <th className="px-6 py-4">Affiliate Partner</th>
                       <th className="px-6 py-4">Referred Member</th>
                       <th className="px-6 py-4">Commission Amount</th>
@@ -3891,31 +4728,31 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   <tbody className="divide-y divide-slate-800/40 text-sm">
                     {commissionsLoading ? (
                       <tr>
-                        <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
+                        <td colSpan={6} className="px-6 py-12 text-center text-zinc-500">
                           <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-amber-500" />
                           <span className="text-xs">Loading ledger...</span>
                         </td>
                       </tr>
                     ) : commissions.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="px-6 py-12 text-center text-slate-400 text-xs font-medium">
+                        <td colSpan={6} className="px-6 py-12 text-center text-zinc-400 text-xs font-medium">
                           No commission ledger items recorded in DB.
                         </td>
                       </tr>
                     ) : (
                       commissions.map((c) => (
-                        <tr key={c.id} className="hover:bg-[#11131e]/50 transition text-xs">
+                        <tr key={c.id} className="hover:bg-[#120507]/50 transition text-xs">
                           <td className="px-6 py-4">
                             <span className="block font-bold text-white text-sm">{c.affiliateName || 'Unknown User'}</span>
                             <span className="block text-[10px] text-emerald-400 font-mono">CODE: {c.affiliateCode || '—'}</span>
                           </td>
-                          <td className="px-6 py-4 font-bold text-slate-300 text-xs">
+                          <td className="px-6 py-4 font-bold text-zinc-300 text-xs">
                             {c.referredName || 'Referred Subscriber'}
                           </td>
                           <td className="px-6 py-4 font-extrabold text-white text-xs">
                             ₦{parseFloat(c.amount).toFixed(2)}
                           </td>
-                          <td className="px-6 py-4 text-slate-500 text-[11px]">
+                          <td className="px-6 py-4 text-zinc-500 text-[11px]">
                             {new Date(c.createdAt).toLocaleDateString()}
                           </td>
                           <td className="px-6 py-4">
@@ -3932,15 +4769,15 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                               <select
                                 value={c.status}
                                 onChange={(e) => handleCommissionStatus(c.id, e.target.value as any)}
-                                className={`bg-[#07080c] border rounded-lg py-1 px-2 text-[10px] font-extrabold uppercase tracking-widest focus:outline-none focus:border-emerald-500 transition cursor-pointer ${
+                                className={`bg-[#080203] border rounded-lg py-1 px-2 text-[10px] font-extrabold uppercase tracking-widest focus:outline-none focus:border-emerald-500 transition cursor-pointer ${
                                   c.status === 'Paid' ? 'border-emerald-500/40 text-emerald-400' :
                                   c.status === 'Approved' ? 'border-blue-500/40 text-blue-400' :
                                   'border-amber-500/40 text-amber-400'
                                 }`}
                               >
-                                <option value="Pending" className="bg-[#0e1018] text-amber-400">Pending</option>
-                                <option value="Approved" className="bg-[#0e1018] text-blue-400">Approved</option>
-                                <option value="Paid" className="bg-[#0e1018] text-emerald-400">Paid</option>
+                                <option value="Pending" className="bg-[#180608] text-amber-400">Pending</option>
+                                <option value="Approved" className="bg-[#180608] text-blue-400">Approved</option>
+                                <option value="Paid" className="bg-[#180608] text-emerald-400">Paid</option>
                               </select>
                             </div>
                           </td>
@@ -3961,46 +4798,46 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             {/* Earnings bento stats */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
               
-              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+              <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-full h-[3px] bg-rose-500"></div>
                 <div className="flex justify-between items-start mb-4">
                   <div>
-                    <span className="block text-[10px] text-slate-400 font-bold uppercase tracking-wider">Estimated Revenue Volume</span>
+                    <span className="block text-[10px] text-zinc-400 font-bold uppercase tracking-wider">Estimated Revenue Volume</span>
                     <h4 className="text-3xl font-black text-white mt-1">₦{totalRevenueSimulated}</h4>
                   </div>
                   <TrendingUp className="w-6 h-6 text-rose-500" />
                 </div>
-                <p className="text-[11px] text-slate-500 leading-normal">
+                <p className="text-[11px] text-zinc-500 leading-normal">
                   Calculated based on {activePayingMembers} active, non-administrator streaming subscribers at standard ₦500 monthly fees.
                 </p>
               </div>
 
-              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+              <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-full h-[3px] bg-amber-500"></div>
                 <div className="flex justify-between items-start mb-4">
                   <div>
-                    <span className="block text-[10px] text-slate-400 font-bold uppercase tracking-wider">Referral Partner Expense</span>
+                    <span className="block text-[10px] text-zinc-400 font-bold uppercase tracking-wider">Referral Partner Expense</span>
                     <h4 className="text-3xl font-black text-white mt-1">₦{totalCommExpense}</h4>
                   </div>
                   <Percent className="w-6 h-6 text-amber-500" />
                 </div>
-                <div className="space-y-1 text-[10px] text-slate-400 mt-1">
+                <div className="space-y-1 text-[10px] text-zinc-400 mt-1">
                   <div className="flex justify-between"><span>Paid out:</span> <span className="font-bold text-emerald-400">₦{paidCommVolume}</span></div>
                   <div className="flex justify-between"><span>Approved (Unpaid):</span> <span className="font-bold text-blue-400">₦{approvedCommVolume}</span></div>
                   <div className="flex justify-between"><span>Pending verification:</span> <span className="font-bold text-amber-400">₦{pendingCommVolume}</span></div>
                 </div>
               </div>
 
-              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+              <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-full h-[3px] bg-violet-500"></div>
                 <div className="flex justify-between items-start mb-4">
                   <div>
-                    <span className="block text-[10px] text-slate-400 font-bold uppercase tracking-wider">Referral Conversion Rate</span>
+                    <span className="block text-[10px] text-zinc-400 font-bold uppercase tracking-wider">Referral Conversion Rate</span>
                     <h4 className="text-3xl font-black text-white mt-1">{referralConversionRate}%</h4>
                   </div>
                   <Award className="w-6 h-6 text-violet-500" />
                 </div>
-                <p className="text-[11px] text-slate-500 leading-normal">
+                <p className="text-[11px] text-zinc-500 leading-normal">
                   Out of {totalReferredRegistrations} referral code user registrations, {paidReferredCount} completed paid server activations.
                 </p>
               </div>
@@ -4011,28 +4848,28 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               
               {/* Leaderboard */}
-              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl lg:col-span-2">
-                <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center gap-1.5 border-b border-slate-800 pb-3">
+              <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl lg:col-span-2">
+                <h3 className="text-sm font-bold text-zinc-300 uppercase tracking-wider mb-4 flex items-center gap-1.5 border-b border-[#2e1015] pb-3">
                   <Award className="w-4.5 h-4.5 text-rose-500" /> Referral Partner Leaderboard
                 </h3>
                 {sortedTopAffiliates.length === 0 ? (
-                  <p className="text-xs text-slate-500 py-10 text-center">No referral partner rewards recorded yet.</p>
+                  <p className="text-xs text-zinc-500 py-10 text-center">No referral partner rewards recorded yet.</p>
                 ) : (
                   <div className="space-y-3">
                     {sortedTopAffiliates.map((aff, index) => (
-                      <div key={aff.code} className="flex justify-between items-center text-xs p-3 bg-[#07080c] border border-slate-800/60 rounded-xl">
+                      <div key={aff.code} className="flex justify-between items-center text-xs p-3 bg-[#080203] border border-[#2e1015]/60 rounded-xl">
                         <div className="flex items-center gap-3">
                           <span className="w-6 h-6 bg-rose-500/10 text-rose-400 border border-rose-500/20 rounded-full flex items-center justify-center font-bold text-[11px]">
                             #{index + 1}
                           </span>
                           <div>
                             <span className="block font-bold text-white text-sm">{aff.name}</span>
-                            <span className="block text-[10px] text-slate-400">Code: {aff.code} • @{aff.username}</span>
+                            <span className="block text-[10px] text-zinc-400">Code: {aff.code} • @{aff.username}</span>
                           </div>
                         </div>
                         <div className="text-right">
                           <span className="block font-black text-emerald-400 text-sm">₦{aff.total.toFixed(2)}</span>
-                          <span className="block text-[10px] text-slate-500">{aff.count} paid referrals</span>
+                          <span className="block text-[10px] text-zinc-500">{aff.count} paid referrals</span>
                         </div>
                       </div>
                     ))}
@@ -4041,22 +4878,22 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               </div>
 
               {/* Server configuration quick info */}
-              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl flex flex-col justify-between">
+              <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl flex flex-col justify-between">
                 <div>
-                  <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center gap-1.5 border-b border-slate-800 pb-3">
+                  <h3 className="text-sm font-bold text-zinc-300 uppercase tracking-wider mb-4 flex items-center gap-1.5 border-b border-[#2e1015] pb-3">
                     <ShieldAlert className="w-4.5 h-4.5 text-rose-500" /> Admin Business Insights
                   </h3>
                   <div className="space-y-4 text-xs">
                     <div>
-                      <span className="text-slate-500 block mb-0.5">Active Jellyfin Endpoint</span>
-                      <span className="font-mono text-slate-300 break-all block">{serverUrl || 'Not configured'}</span>
+                      <span className="text-zinc-500 block mb-0.5">Active Jellyfin Endpoint</span>
+                      <span className="font-mono text-zinc-300 break-all block">{serverUrl || 'Not configured'}</span>
                     </div>
                     <div>
-                      <span className="text-slate-500 block mb-0.5">Payment Plan Cost</span>
+                      <span className="text-zinc-500 block mb-0.5">Payment Plan Cost</span>
                       <span className="text-rose-400 font-bold">₦600.00 NGN per 30 days</span>
                     </div>
                     <div>
-                      <span className="text-slate-500 block mb-0.5">Database System Status</span>
+                      <span className="text-zinc-500 block mb-0.5">Database System Status</span>
                       <span className="text-emerald-400 font-semibold flex items-center gap-1">
                         <CheckCircle className="w-3.5 h-3.5" /> Healthy Connection
                       </span>
@@ -4064,7 +4901,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   </div>
                 </div>
 
-                <div className="text-[10px] text-slate-500 pt-4 border-t border-slate-800/40">
+                <div className="text-[10px] text-zinc-500 pt-4 border-t border-[#2e1015]/40">
                   Data updated dynamically from private MySQL tables.
                 </div>
               </div>
@@ -4077,19 +4914,19 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
         {/* TAB 5: VERIFY PAYMENTS */}
         {activeTab === 'payments' && (
           <div className="space-y-6">
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 shadow-xl">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-6 mb-6">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 shadow-xl">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#2e1015]/60 pb-6 mb-6">
                 <div>
                   <h3 className="text-xl font-display font-extrabold text-white flex items-center gap-2">
                     <CreditCard className="w-6 h-6 text-emerald-500" />
                     <span>Payment Verification Queue</span>
                   </h3>
-                  <p className="text-slate-400 text-xs mt-1">
+                  <p className="text-zinc-400 text-xs mt-1">
                     Carefully review manual bank transfers and receipt images uploaded by users. Accepting a payment activates their subscription for 30 days and logs commissions for affiliates.
                   </p>
                 </div>
-                <div className="bg-[#07080c] px-4 py-2 border border-slate-800 rounded-xl shrink-0">
-                  <span className="text-[10px] font-bold text-slate-500 block uppercase tracking-wider">Pending Tasks</span>
+                <div className="bg-[#080203] px-4 py-2 border border-[#2e1015] rounded-xl shrink-0">
+                  <span className="text-[10px] font-bold text-zinc-500 block uppercase tracking-wider">Pending Tasks</span>
                   <span className="text-xl font-extrabold text-emerald-400">
                     {users.filter(u => u.paymentStatus === 'Pending Verification').length} Requests
                   </span>
@@ -4097,10 +4934,10 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               </div>
 
               {users.filter(u => u.paymentStatus === 'Pending Verification').length === 0 ? (
-                <div className="text-center py-12 bg-[#07080c] rounded-2xl border border-slate-800/40">
+                <div className="text-center py-12 bg-[#080203] rounded-2xl border border-[#2e1015]/40">
                   <CheckCircle className="w-12 h-12 text-emerald-500/30 mx-auto mb-3" />
                   <h4 className="text-white font-bold text-sm">All caught up!</h4>
-                  <p className="text-slate-500 text-xs mt-1">There are no pending subscription payment verifications right now.</p>
+                  <p className="text-zinc-500 text-xs mt-1">There are no pending subscription payment verifications right now.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -4109,7 +4946,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     .map((user) => (
                       <div
                         key={user.id}
-                        className="bg-[#07080c] border border-slate-800/60 hover:border-slate-800 rounded-xl p-5 flex flex-col md:flex-row gap-6 items-stretch justify-between transition"
+                        className="bg-[#080203] border border-[#2e1015]/60 hover:border-[#2e1015] rounded-xl p-5 flex flex-col md:flex-row gap-6 items-stretch justify-between transition"
                       >
                         {/* Left side: User details */}
                         <div className="flex-1 space-y-4">
@@ -4119,23 +4956,23 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                             </div>
                             <div>
                               <h4 className="text-white font-bold text-sm">{user.fullName}</h4>
-                              <span className="text-slate-500 text-xs">@{user.username} • {user.email}</span>
+                              <span className="text-zinc-500 text-xs">@{user.username} • {user.email}</span>
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 border-t border-slate-800/40 pt-4 text-xs">
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 border-t border-[#2e1015]/40 pt-4 text-xs">
                             <div>
-                              <span className="text-slate-500 block text-[10px] uppercase font-bold tracking-wider mb-0.5">Reported Phone</span>
+                              <span className="text-zinc-500 block text-[10px] uppercase font-bold tracking-wider mb-0.5">Reported Phone</span>
                               <span className="text-white font-semibold font-mono">{user.phone || 'N/A'}</span>
                             </div>
                             <div>
-                              <span className="text-slate-500 block text-[10px] uppercase font-bold tracking-wider mb-0.5">Reference ID</span>
+                              <span className="text-zinc-500 block text-[10px] uppercase font-bold tracking-wider mb-0.5">Reference ID</span>
                               <span className="text-amber-400 font-bold font-mono truncate block max-w-[120px]" title={user.transactionRef || 'N/A'}>
                                 {user.transactionRef || 'None Provided'}
                               </span>
                             </div>
                             <div>
-                              <span className="text-slate-500 block text-[10px] uppercase font-bold tracking-wider mb-0.5">Submitted On</span>
+                              <span className="text-zinc-500 block text-[10px] uppercase font-bold tracking-wider mb-0.5">Submitted On</span>
                               <span className="text-white">
                                 {user.lastPaymentTime ? new Date(user.lastPaymentTime).toLocaleString() : 'Recently'}
                               </span>
@@ -4143,7 +4980,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                           </div>
 
                           {user.referredBy && (
-                            <div className="bg-slate-900/40 border border-slate-800/60 p-2.5 rounded-lg inline-flex items-center gap-2 text-[11px] text-slate-300">
+                            <div className="bg-[#180608]/40 border border-[#2e1015]/60 p-2.5 rounded-lg inline-flex items-center gap-2 text-[11px] text-zinc-300">
                               <span className="bg-emerald-600/10 text-emerald-400 py-0.5 px-2 rounded border border-emerald-500/20 font-bold uppercase tracking-wider text-[9px]">Referred</span>
                               <span>Affiliate Code: <strong className="text-emerald-400 font-bold">{user.referredBy}</strong></span>
                             </div>
@@ -4151,10 +4988,10 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                         </div>
 
                         {/* Middle: Receipt Screenshot */}
-                        <div className="w-full md:w-48 shrink-0 flex flex-col justify-center items-center bg-slate-950 rounded-xl p-3 border border-slate-800/80 relative group">
+                        <div className="w-full md:w-48 shrink-0 flex flex-col justify-center items-center bg-slate-950 rounded-xl p-3 border border-[#2e1015] relative group">
                           {user.receiptUrl ? (
                             <>
-                              <div className="w-full h-24 overflow-hidden rounded bg-slate-900 border border-slate-800/40 relative">
+                              <div className="w-full h-24 overflow-hidden rounded bg-[#180608] border border-[#2e1015]/40 relative">
                                 <img
                                   src={user.receiptUrl}
                                   alt="Receipt Screenshot"
@@ -4162,13 +4999,13 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                                   onClick={() => setFullScreenReceiptUrl(user.receiptUrl || null)}
                                 />
                                 <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition cursor-pointer" onClick={() => setFullScreenReceiptUrl(user.receiptUrl || null)}>
-                                  <span className="text-[10px] text-white font-bold tracking-wider bg-slate-900/80 py-1 px-2.5 rounded border border-slate-700">View Fullscreen</span>
+                                  <span className="text-[10px] text-white font-bold tracking-wider bg-[#180608]/80 py-1 px-2.5 rounded border border-[#3d1319]">View Fullscreen</span>
                                 </div>
                               </div>
-                              <span className="text-[10px] text-slate-500 mt-2 truncate max-w-[160px]">receipt_screenshot.png</span>
+                              <span className="text-[10px] text-zinc-500 mt-2 truncate max-w-[160px]">receipt_screenshot.png</span>
                             </>
                           ) : (
-                            <div className="text-center py-4 text-slate-600">
+                            <div className="text-center py-4 text-zinc-600">
                               <ShieldAlert className="w-8 h-8 mx-auto mb-1 opacity-50" />
                               <span className="text-[10px] block">No screenshot uploaded</span>
                             </div>
@@ -4176,7 +5013,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                         </div>
 
                         {/* Right side: Action Buttons */}
-                        <div className="w-full md:w-52 shrink-0 flex md:flex-col justify-end gap-3 items-stretch border-t md:border-t-0 md:border-l border-slate-800/40 pt-4 md:pt-0 md:pl-6">
+                        <div className="w-full md:w-52 shrink-0 flex md:flex-col justify-end gap-3 items-stretch border-t md:border-t-0 md:border-l border-[#2e1015]/40 pt-4 md:pt-0 md:pl-6">
                           <button
                             onClick={() => handleVerifyPayment(user.id, 'accept')}
                             disabled={verificationLoadingUserId !== null}
@@ -4194,7 +5031,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                           <button
                             onClick={() => setDeclineTargetUser(user)}
                             disabled={verificationLoadingUserId !== null}
-                            className="flex-1 bg-slate-900 hover:bg-rose-950/20 hover:text-rose-400 border border-slate-800 hover:border-rose-900/40 text-slate-400 font-bold py-3.5 px-4 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+                            className="flex-1 bg-[#180608] hover:bg-rose-950/20 hover:text-rose-400 border border-[#2e1015] hover:border-rose-900/40 text-zinc-400 font-bold py-3.5 px-4 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
                           >
                             <X className="w-3.5 h-3.5" /> Decline Request
                           </button>
@@ -4210,61 +5047,61 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
         {/* TAB: AFFILIATE PARTNERS MANAGEMENT */}
         {activeTab === 'affiliates_dashboard' && (
           <div className="space-y-6">
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 shadow-xl">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-6 mb-6">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 shadow-xl">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#2e1015]/60 pb-6 mb-6">
                 <div>
                   <h3 className="text-xl font-display font-extrabold text-white flex items-center gap-2">
                     <Award className="w-6 h-6 text-indigo-400" />
                     <span>Affiliate Partner Directory</span>
                   </h3>
-                  <p className="text-slate-400 text-xs mt-1">
+                  <p className="text-zinc-400 text-xs mt-1">
                     See real-time performance tracking for all registered affiliates. Track referred registrations, active subscriptions, and pending commission settlements.
                   </p>
                 </div>
-                <div className="bg-[#07080c] px-4 py-2 border border-slate-800 rounded-xl shrink-0">
-                  <span className="text-[10px] font-bold text-slate-500 block uppercase tracking-wider">Active Affiliates</span>
+                <div className="bg-[#080203] px-4 py-2 border border-[#2e1015] rounded-xl shrink-0">
+                  <span className="text-[10px] font-bold text-zinc-500 block uppercase tracking-wider">Active Affiliates</span>
                   <span className="text-xl font-extrabold text-indigo-400">{affiliates.length} Partners</span>
                 </div>
               </div>
 
               {affiliatesLoading ? (
-                <div className="py-12 text-center text-slate-500">
+                <div className="py-12 text-center text-zinc-500">
                   <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-indigo-400" />
                   <span className="text-xs">Loading partner data...</span>
                 </div>
               ) : affiliates.length === 0 ? (
-                <div className="text-center py-12 bg-[#07080c] rounded-2xl border border-slate-800/40">
+                <div className="text-center py-12 bg-[#080203] rounded-2xl border border-[#2e1015]/40">
                   <Award className="w-12 h-12 text-indigo-500/20 mx-auto mb-3" />
                   <h4 className="text-white font-bold text-sm">No affiliate accounts yet</h4>
-                  <p className="text-slate-500 text-xs mt-1">Mark a user as an affiliate to allow them to refer new members and earn rewards.</p>
+                  <p className="text-zinc-500 text-xs mt-1">Mark a user as an affiliate to allow them to refer new members and earn rewards.</p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   {/* Left Column: List of Affiliates */}
                   <div className="lg:col-span-1 space-y-3 max-h-[600px] overflow-y-auto pr-1">
-                    <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Select a Partner</h4>
+                    <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Select a Partner</h4>
                     {affiliates.map((partner) => (
                       <div
                         key={partner.id}
                         onClick={() => setSelectedAffiliate(partner)}
-                        className={`p-4 rounded-xl border transition cursor-pointer text-left ${selectedAffiliate?.id === partner.id ? 'bg-indigo-500/10 border-indigo-500' : 'bg-[#07080c] border-slate-800/80 hover:border-slate-700'}`}
+                        className={`p-4 rounded-xl border transition cursor-pointer text-left ${selectedAffiliate?.id === partner.id ? 'bg-indigo-500/10 border-indigo-500' : 'bg-[#080203] border-[#2e1015] hover:border-[#3d1319]'}`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div>
                             <span className="font-extrabold text-xs text-white block">{partner.fullName}</span>
-                            <span className="text-slate-400 text-[10px] block">@{partner.username}</span>
+                            <span className="text-zinc-400 text-[10px] block">@{partner.username}</span>
                           </div>
                           <span className="bg-indigo-500/20 text-indigo-300 font-mono text-[10px] px-2 py-0.5 rounded-md font-bold uppercase">
                             {partner.affiliateCode || 'NONE'}
                           </span>
                         </div>
-                        <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-slate-800/60 text-[10px]">
+                        <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-[#2e1015]/60 text-[10px]">
                           <div>
-                            <span className="text-slate-500 block">Referred</span>
-                            <span className="text-slate-200 font-bold">{partner.registeredCount} members</span>
+                            <span className="text-zinc-500 block">Referred</span>
+                            <span className="text-zinc-200 font-bold">{partner.registeredCount} members</span>
                           </div>
                           <div>
-                            <span className="text-slate-500 block">Total Earnings</span>
+                            <span className="text-zinc-500 block">Total Earnings</span>
                             <span className="text-emerald-400 font-bold">₦{Number(partner.totalCommission).toLocaleString()}</span>
                           </div>
                         </div>
@@ -4275,15 +5112,15 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   {/* Right Column: Detailed Partner Dashboard View */}
                   <div className="lg:col-span-2">
                     {selectedAffiliate ? (
-                      <div className="bg-[#07080c] border border-slate-800 rounded-2xl p-6 space-y-6">
+                      <div className="bg-[#080203] border border-[#2e1015] rounded-2xl p-6 space-y-6">
                         {/* Header info */}
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-5">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#2e1015]/60 pb-5">
                           <div>
                             <h4 className="text-lg font-extrabold text-white">{selectedAffiliate.fullName}</h4>
-                            <p className="text-slate-400 text-xs mt-0.5">Partner Email: {selectedAffiliate.email} | ID: {selectedAffiliate.id}</p>
+                            <p className="text-zinc-400 text-xs mt-0.5">Partner Email: {selectedAffiliate.email} | ID: {selectedAffiliate.id}</p>
                           </div>
                           <div className="flex items-center gap-2">
-                            <span className="text-slate-500 text-xs">Affiliate Code:</span>
+                            <span className="text-zinc-500 text-xs">Affiliate Code:</span>
                             <span className="bg-indigo-500 text-white font-mono font-extrabold text-xs px-3 py-1 rounded-lg uppercase">
                               {selectedAffiliate.affiliateCode}
                             </span>
@@ -4292,19 +5129,19 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
                         {/* Earnings breakdown bento widgets */}
                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                          <div className="bg-[#11131e] border border-slate-800/80 p-4 rounded-xl">
-                            <span className="text-[9px] font-bold text-slate-500 uppercase block tracking-wider">Total Commission</span>
+                          <div className="bg-[#120507] border border-[#2e1015] p-4 rounded-xl">
+                            <span className="text-[9px] font-bold text-zinc-500 uppercase block tracking-wider">Total Commission</span>
                             <span className="text-lg font-black text-slate-100">₦{Number(selectedAffiliate.totalCommission).toLocaleString()}</span>
                           </div>
-                          <div className="bg-[#11131e] border border-slate-800/80 p-4 rounded-xl">
+                          <div className="bg-[#120507] border border-[#2e1015] p-4 rounded-xl">
                             <span className="text-[9px] font-bold text-amber-500 uppercase block tracking-wider">Pending (Verify)</span>
                             <span className="text-lg font-black text-amber-400">₦{Number(selectedAffiliate.pendingCommission).toLocaleString()}</span>
                           </div>
-                          <div className="bg-[#11131e] border border-slate-800/80 p-4 rounded-xl">
+                          <div className="bg-[#120507] border border-[#2e1015] p-4 rounded-xl">
                             <span className="text-[9px] font-bold text-emerald-500 uppercase block tracking-wider">Approved (Unpaid)</span>
                             <span className="text-lg font-black text-emerald-400">₦{Number(selectedAffiliate.approvedCommission).toLocaleString()}</span>
                           </div>
-                          <div className="bg-[#11131e] border border-slate-800/80 p-4 rounded-xl">
+                          <div className="bg-[#120507] border border-[#2e1015] p-4 rounded-xl">
                             <span className="text-[9px] font-bold text-indigo-500 uppercase block tracking-wider">Total Paid Out</span>
                             <span className="text-lg font-black text-indigo-400">₦{Number(selectedAffiliate.paidCommission).toLocaleString()}</span>
                           </div>
@@ -4312,14 +5149,14 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
                         {/* Referred Users lists */}
                         <div className="space-y-3">
-                          <h5 className="text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-1">Referred Members ({selectedAffiliate.referredUsers.length})</h5>
+                          <h5 className="text-xs font-bold text-zinc-400 uppercase tracking-wider border-b border-[#2e1015] pb-1">Referred Members ({selectedAffiliate.referredUsers.length})</h5>
                           {selectedAffiliate.referredUsers.length === 0 ? (
-                            <p className="text-slate-500 text-xs">No users referred by this partner yet.</p>
+                            <p className="text-zinc-500 text-xs">No users referred by this partner yet.</p>
                           ) : (
                             <div className="overflow-x-auto">
                               <table className="w-full text-left text-xs">
                                 <thead>
-                                  <tr className="border-b border-slate-800 text-slate-500 font-bold">
+                                  <tr className="border-b border-[#2e1015] text-zinc-500 font-bold">
                                     <th className="pb-2">Name</th>
                                     <th className="pb-2">Username</th>
                                     <th className="pb-2">Subscription</th>
@@ -4328,16 +5165,16 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                                 </thead>
                                 <tbody className="divide-y divide-slate-800/50">
                                   {selectedAffiliate.referredUsers.map((u: any) => (
-                                    <tr key={u.id} className="hover:bg-slate-900/10">
+                                    <tr key={u.id} className="hover:bg-[#180608]/10">
                                       <td className="py-2 text-white font-semibold">{u.fullName}</td>
-                                      <td className="py-2 text-slate-400 font-mono">@{u.username}</td>
+                                      <td className="py-2 text-zinc-400 font-mono">@{u.username}</td>
                                       <td className="py-2">
-                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${u.subscriptionStatus === 'Active' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-400'}`}>
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${u.subscriptionStatus === 'Active' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-[#220a0e] text-zinc-400'}`}>
                                           {u.subscriptionStatus}
                                         </span>
                                       </td>
                                       <td className="py-2">
-                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${u.paymentStatus === 'Paid' ? 'bg-emerald-500/10 text-emerald-400' : u.paymentStatus === 'Pending Verification' ? 'bg-amber-500/10 text-amber-400' : 'bg-slate-800 text-slate-400'}`}>
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${u.paymentStatus === 'Paid' ? 'bg-emerald-500/10 text-emerald-400' : u.paymentStatus === 'Pending Verification' ? 'bg-amber-500/10 text-amber-400' : 'bg-[#220a0e] text-zinc-400'}`}>
                                           {u.paymentStatus}
                                         </span>
                                       </td>
@@ -4350,16 +5187,16 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                         </div>
 
                         {/* Commissions ledger for this affiliate */}
-                        <div className="space-y-3 pt-4 border-t border-slate-800">
-                          <h5 className="text-xs font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800 pb-1">Commissions History</h5>
+                        <div className="space-y-3 pt-4 border-t border-[#2e1015]">
+                          <h5 className="text-xs font-bold text-zinc-400 uppercase tracking-wider border-b border-[#2e1015] pb-1">Commissions History</h5>
                           {selectedAffiliate.commissions.length === 0 ? (
-                            <p className="text-slate-500 text-xs">No recorded commissions ledger entries.</p>
+                            <p className="text-zinc-500 text-xs">No recorded commissions ledger entries.</p>
                           ) : (
                             <div className="space-y-2 max-h-[250px] overflow-y-auto">
                               {selectedAffiliate.commissions.map((comm: any) => (
-                                <div key={comm.id} className="flex justify-between items-center p-2.5 bg-[#11131e] border border-slate-800/80 rounded-lg text-xs">
+                                <div key={comm.id} className="flex justify-between items-center p-2.5 bg-[#120507] border border-[#2e1015] rounded-lg text-xs">
                                   <div>
-                                    <span className="text-slate-400 block text-[10px]">{new Date(comm.createdAt).toLocaleString()}</span>
+                                    <span className="text-zinc-400 block text-[10px]">{new Date(comm.createdAt).toLocaleString()}</span>
                                     <span className="text-white font-semibold">₦{Number(comm.amount).toLocaleString()}</span>
                                   </div>
                                   <div className="flex items-center gap-3">
@@ -4375,7 +5212,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
                       </div>
                     ) : (
-                      <div className="bg-[#07080c] border border-slate-800 rounded-2xl p-12 text-center text-slate-500">
+                      <div className="bg-[#080203] border border-[#2e1015] rounded-2xl p-12 text-center text-zinc-500">
                         <Info className="w-10 h-10 text-slate-700 mx-auto mb-2" />
                         <p className="text-xs">Click any partner on the left directory to view their complete earnings dashboard, payouts, and referred members.</p>
                       </div>
@@ -4390,19 +5227,19 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
         {/* TAB: CONTENT REQUESTS (MOVIES & SHOWS) */}
         {activeTab === 'media_requests' && (
           <div className="space-y-6">
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 shadow-xl">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-6 mb-6">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 shadow-xl">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#2e1015]/60 pb-6 mb-6">
                 <div>
                   <h3 className="text-xl font-display font-extrabold text-white flex items-center gap-2">
                     <PlusCircle className="w-6 h-6 text-cyan-400" />
                     <span>User Content Requests</span>
                   </h3>
-                  <p className="text-slate-400 text-xs mt-1">
+                  <p className="text-zinc-400 text-xs mt-1">
                     Manage requests submitted by members for movies or TV shows they wish to see on your streaming server.
                   </p>
                 </div>
-                <div className="bg-[#07080c] px-4 py-2 border border-slate-800 rounded-xl shrink-0">
-                  <span className="text-[10px] font-bold text-slate-500 block uppercase tracking-wider">Pending Requests</span>
+                <div className="bg-[#080203] px-4 py-2 border border-[#2e1015] rounded-xl shrink-0">
+                  <span className="text-[10px] font-bold text-zinc-500 block uppercase tracking-wider">Pending Requests</span>
                   <span className="text-xl font-extrabold text-cyan-400">
                     {mediaRequests.filter(r => r.status === 'Pending').length} Pending
                   </span>
@@ -4410,21 +5247,21 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               </div>
 
               {requestsLoading ? (
-                <div className="py-12 text-center text-slate-500">
+                <div className="py-12 text-center text-zinc-500">
                   <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 text-cyan-400" />
                   <span className="text-xs">Loading movie/show requests...</span>
                 </div>
               ) : mediaRequests.length === 0 ? (
-                <div className="text-center py-12 bg-[#07080c] rounded-2xl border border-slate-800/40">
+                <div className="text-center py-12 bg-[#080203] rounded-2xl border border-[#2e1015]/40">
                   <Tv className="w-12 h-12 text-cyan-500/20 mx-auto mb-3" />
                   <h4 className="text-white font-bold text-sm">No media requests yet</h4>
-                  <p className="text-slate-500 text-xs mt-1">Requests sent by users from their portals will appear here instantly.</p>
+                  <p className="text-zinc-500 text-xs mt-1">Requests sent by users from their portals will appear here instantly.</p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs border-collapse">
                     <thead>
-                      <tr className="border-b border-slate-800 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                      <tr className="border-b border-[#2e1015] text-zinc-500 font-bold uppercase tracking-wider text-[10px]">
                         <th className="pb-3 pl-2">User</th>
                         <th className="pb-3">Type</th>
                         <th className="pb-3">Title</th>
@@ -4436,7 +5273,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     </thead>
                     <tbody className="divide-y divide-slate-800/50">
                       {mediaRequests.map((req) => (
-                        <tr key={req.id} className="hover:bg-slate-900/10">
+                        <tr key={req.id} className="hover:bg-[#180608]/10">
                           <td className="py-4 pl-2 font-semibold text-white">
                             <span>{req.username}</span>
                           </td>
@@ -4446,7 +5283,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                             </span>
                           </td>
                           <td className="py-4 font-bold text-slate-100">{req.title}</td>
-                          <td className="py-4 text-slate-400">
+                          <td className="py-4 text-zinc-400">
                             {req.type === 'movie' ? (
                               <span>Released: {req.releaseYear || 'Unknown'}</span>
                             ) : (
@@ -4456,7 +5293,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                               </span>
                             )}
                           </td>
-                          <td className="py-4 text-slate-500 font-mono">
+                          <td className="py-4 text-zinc-500 font-mono">
                             {new Date(req.createdAt).toLocaleString()}
                           </td>
                           <td className="py-4">
@@ -4481,7 +5318,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                                 </button>
                               </div>
                             ) : (
-                              <span className="text-slate-500 text-[10px]">Settled</span>
+                              <span className="text-zinc-500 text-[10px]">Settled</span>
                             )}
                           </td>
                         </tr>
@@ -4497,13 +5334,13 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
         {/* TAB: SEND BROADCASTS */}
         {activeTab === 'notifications' && (
           <div className="space-y-6">
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 shadow-xl">
-              <div className="border-b border-slate-800/60 pb-6 mb-6">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 shadow-xl">
+              <div className="border-b border-[#2e1015]/60 pb-6 mb-6">
                 <h3 className="text-xl font-display font-extrabold text-white flex items-center gap-2">
                   <MessageSquare className="w-6 h-6 text-sky-400" />
                   <span>Send Broadcast & Target Notifications</span>
                 </h3>
-                <p className="text-slate-400 text-xs mt-1">
+                <p className="text-zinc-400 text-xs mt-1">
                   Draft rich announcements featuring customizable body text and images. Push to specific target categories or a single selected member.
                 </p>
               </div>
@@ -4511,20 +5348,20 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               <form onSubmit={handleSendBroadcast} className="space-y-5 max-w-2xl">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label className="block text-xs font-bold text-slate-300">Notification Title</label>
+                    <label className="block text-xs font-bold text-zinc-300">Notification Title</label>
                     <input
                       type="text"
                       required
                       placeholder="e.g. New Movies Added this Weekend!"
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition"
                       value={notifTitle}
                       onChange={(e) => setNotifTitle(e.target.value)}
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="block text-xs font-bold text-slate-300">Target Audience</label>
+                    <label className="block text-xs font-bold text-zinc-300">Target Audience</label>
                     <select
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition"
                       value={notifTargetType}
                       onChange={(e: any) => {
                         setNotifTargetType(e.target.value);
@@ -4542,14 +5379,14 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 </div>
 
                 {notifTargetType === 'user' && (
-                  <div className="bg-[#07080c] p-4 border border-slate-800 rounded-xl space-y-3">
-                    <label className="block text-xs font-bold text-slate-300">Search & Select Target User</label>
+                  <div className="bg-[#080203] p-4 border border-[#2e1015] rounded-xl space-y-3">
+                    <label className="block text-xs font-bold text-zinc-300">Search & Select Target User</label>
                     <div className="relative">
-                      <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                      <Search className="w-4 h-4 text-zinc-500 absolute left-3 top-2.5" />
                       <input
                         type="text"
                         placeholder="Type name, email or username to search..."
-                        className="w-full bg-[#11131e] border border-slate-800 rounded-xl py-2 pl-9 pr-3 text-white text-xs focus:outline-none focus:border-sky-500 transition"
+                        className="w-full bg-[#120507] border border-[#2e1015] rounded-xl py-2 pl-9 pr-3 text-white text-xs focus:outline-none focus:border-sky-500 transition"
                         value={notifUserSearchQuery}
                         onChange={(e) => setNotifUserSearchQuery(e.target.value)}
                       />
@@ -4571,11 +5408,11 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                               setNotifTargetUserId(u.id);
                               setNotifUserSearchQuery(u.fullName + ` (@${u.username})`);
                             }}
-                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition text-xs ${notifTargetUserId === u.id ? 'bg-sky-500/10 border border-sky-500/50 text-sky-300' : 'bg-[#11131e]/50 hover:bg-[#11131e] border border-slate-800/80 text-slate-300'}`}
+                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition text-xs ${notifTargetUserId === u.id ? 'bg-sky-500/10 border border-sky-500/50 text-sky-300' : 'bg-[#120507]/50 hover:bg-[#120507] border border-[#2e1015] text-zinc-300'}`}
                           >
                             <div>
                               <span className="font-bold block">{u.fullName}</span>
-                              <span className="text-[10px] text-slate-500">@{u.username} | {u.email}</span>
+                              <span className="text-[10px] text-zinc-500">@{u.username} | {u.email}</span>
                             </div>
                             {notifTargetUserId === u.id && (
                               <span className="bg-sky-500/20 text-sky-400 text-[10px] px-2 py-0.5 rounded font-bold uppercase">Selected</span>
@@ -4588,34 +5425,34 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                         u.username.toLowerCase().includes(notifUserSearchQuery.toLowerCase()) ||
                         u.email.toLowerCase().includes(notifUserSearchQuery.toLowerCase())
                       ).length === 0 && (
-                        <span className="text-xs text-slate-500 block text-center py-2">No users found.</span>
+                        <span className="text-xs text-zinc-500 block text-center py-2">No users found.</span>
                       )}
                     </div>
                   </div>
                 )}
 
                 <div className="space-y-1">
-                  <label className="block text-xs font-bold text-slate-300">Notification Content</label>
+                  <label className="block text-xs font-bold text-zinc-300">Notification Content</label>
                   <textarea
                     rows={4}
                     required
                     placeholder="Write the notification details here. Users will see this instantly in their dashboard notifications feed."
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition resize-none"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition resize-none"
                     value={notifMessage}
                     onChange={(e) => setNotifMessage(e.target.value)}
                   />
                 </div>
 
-                <div className="bg-[#07080c] border border-slate-800/80 p-4 rounded-xl space-y-4">
-                  <span className="text-xs font-bold text-slate-400 block">Rich Media Attachment (Image)</span>
+                <div className="bg-[#080203] border border-[#2e1015] p-4 rounded-xl space-y-4">
+                  <span className="text-xs font-bold text-zinc-400 block">Rich Media Attachment (Image)</span>
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-1">
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Image Web URL</label>
+                      <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Image Web URL</label>
                       <input
                         type="url"
                         placeholder="e.g. https://example.com/banner.jpg"
-                        className="w-full bg-[#11131e] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition"
+                        className="w-full bg-[#120507] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition"
                         value={notifImageUrl}
                         onChange={(e) => {
                           setNotifImageUrl(e.target.value);
@@ -4625,11 +5462,11 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     </div>
 
                     <div className="space-y-1">
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider">Or Upload from computer</label>
+                      <label className="block text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Or Upload from computer</label>
                       <input
                         type="file"
                         accept="image/*"
-                        className="w-full text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-slate-800 file:text-slate-200 hover:file:bg-slate-700 text-xs"
+                        className="w-full text-zinc-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-[#220a0e] file:text-zinc-200 hover:file:bg-slate-700 text-xs"
                         onChange={(e) => {
                           if (e.target.files && e.target.files[0]) {
                             setNotifImageFile(e.target.files[0]);
@@ -4664,36 +5501,50 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             </div>
 
             {/* Notification History Panel */}
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 shadow-xl">
-              <div className="border-b border-slate-800/60 pb-4 mb-4">
-                <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
-                  <MessageSquare className="w-5 h-5 text-indigo-400" />
-                  <span>Notification History ({sentNotifications.length})</span>
-                </h3>
-                <p className="text-slate-400 text-xs mt-0.5">
-                  View and verify all announcements and targeted direct alerts sent to date.
-                </p>
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 shadow-xl">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#2e1015]/60 pb-4 mb-4">
+                <div>
+                  <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
+                    <MessageSquare className="w-5 h-5 text-indigo-400" />
+                    <span>Notification History ({sentNotifications.length})</span>
+                  </h3>
+                  <p className="text-zinc-400 text-xs mt-0.5">
+                    View and manage all announcements and targeted direct alerts sent to date.
+                  </p>
+                </div>
+                {sentNotifications.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleClearAllNotifications}
+                    className="self-start sm:self-auto flex items-center gap-1.5 px-3 py-1.5 bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-800/40 rounded-xl text-xs font-bold transition cursor-pointer"
+                    title="Clear all notifications from the queue"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Clear All Notifications</span>
+                  </button>
+                )}
               </div>
 
               {loadingSentNotifications ? (
-                <div className="py-12 text-center text-slate-500">
+                <div className="py-12 text-center text-zinc-500">
                   <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-400" />
                   <span className="text-xs">Loading history logs...</span>
                 </div>
               ) : sentNotifications.length === 0 ? (
-                <div className="text-center py-12 bg-[#07080c] rounded-2xl border border-slate-800/40 text-slate-500 text-xs">
-                  No notifications found in the database.
+                <div className="text-center py-12 bg-[#080203] rounded-2xl border border-[#2e1015]/40 text-zinc-500 text-xs">
+                  No notifications in queue. The notification feed is currently empty.
                 </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs border-collapse">
                     <thead>
-                      <tr className="border-b border-slate-800 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                      <tr className="border-b border-[#2e1015] text-zinc-500 font-bold uppercase tracking-wider text-[10px]">
                         <th className="pb-3 pl-2">Sent Date</th>
                         <th className="pb-3">Title</th>
                         <th className="pb-3">Target Audience</th>
                         <th className="pb-3">Message Snippet</th>
-                        <th className="pb-3 pr-2">Attachment</th>
+                        <th className="pb-3">Attachment</th>
+                        <th className="pb-3 pr-2 text-right">Action</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/50">
@@ -4708,20 +5559,20 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                         }
 
                         return (
-                          <tr key={notif.id} className="hover:bg-slate-900/10">
-                            <td className="py-3 pl-2 text-slate-500 font-mono">
+                          <tr key={notif.id} className="hover:bg-[#180608]/10">
+                            <td className="py-3 pl-2 text-zinc-500 font-mono">
                               {new Date(notif.createdAt).toLocaleString()}
                             </td>
                             <td className="py-3 font-bold text-white">{notif.title}</td>
                             <td className="py-3">
-                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${notif.targetType === 'user' ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20' : 'bg-slate-800 text-slate-400'}`}>
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${notif.targetType === 'user' ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20' : 'bg-[#220a0e] text-zinc-400'}`}>
                                 {audienceLabel}
                               </span>
                             </td>
-                            <td className="py-3 text-slate-400 max-w-xs truncate" title={notif.message}>
+                            <td className="py-3 text-zinc-400 max-w-xs truncate" title={notif.message}>
                               {notif.message}
                             </td>
-                            <td className="py-3 pr-2">
+                            <td className="py-3">
                               {notif.imageUrl ? (
                                 <a 
                                   href={notif.imageUrl} 
@@ -4732,8 +5583,19 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                                   View Media
                                 </a>
                               ) : (
-                                <span className="text-slate-600">None</span>
+                                <span className="text-zinc-600">None</span>
                               )}
+                            </td>
+                            <td className="py-3 pr-2 text-right">
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteNotification(notif.id)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 bg-red-950/30 hover:bg-red-900/50 text-red-400 border border-red-900/30 hover:border-red-700/50 rounded-lg text-[11px] font-semibold transition cursor-pointer"
+                                title="Delete this notification"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                <span>Delete</span>
+                              </button>
                             </td>
                           </tr>
                         );
@@ -4752,19 +5614,19 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             <form onSubmit={handleSaveConfig} className="space-y-6">
               
               {/* Card 1: SMTP Server Configuration */}
-              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-5">
+              <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#2e1015]/60 pb-5">
                   <div>
                     <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
                       <Mail className="w-5 h-5 text-purple-400" />
                       <span>SMTP Mail Server Credentials</span>
                     </h3>
-                    <p className="text-slate-400 text-xs mt-0.5">
+                    <p className="text-zinc-400 text-xs mt-0.5">
                       Configure your custom SMTP host to deliver automated email verifications, welcome messages, and subscriber alerts.
                     </p>
                   </div>
 
-                  <label className="inline-flex items-center gap-3 cursor-pointer bg-[#07080c] border border-slate-800 py-2 px-4 rounded-xl">
+                  <label className="inline-flex items-center gap-3 cursor-pointer bg-[#080203] border border-[#2e1015] py-2 px-4 rounded-xl">
                     <input 
                       type="checkbox" 
                       className="w-4 h-4 accent-purple-600 cursor-pointer"
@@ -4781,22 +5643,22 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   <div className="space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div className="space-y-1 md:col-span-2">
-                        <label className="block text-xs font-bold text-slate-300">SMTP Server Host</label>
+                        <label className="block text-xs font-bold text-zinc-300">SMTP Server Host</label>
                         <input
                           type="text"
                           placeholder="e.g. mail.zerolord.com or smtp.gmail.com"
-                          className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                          className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
                           value={smtpHost}
                           onChange={(e) => setSmtpHost(e.target.value)}
                         />
                       </div>
 
                       <div className="space-y-1">
-                        <label className="block text-xs font-bold text-slate-300">SMTP Port</label>
+                        <label className="block text-xs font-bold text-zinc-300">SMTP Port</label>
                         <input
                           type="number"
                           placeholder="587"
-                          className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                          className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
                           value={smtpPort}
                           onChange={(e) => setSmtpPort(Number(e.target.value))}
                         />
@@ -4805,22 +5667,22 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="space-y-1">
-                        <label className="block text-xs font-bold text-slate-300">SMTP Username / Email</label>
+                        <label className="block text-xs font-bold text-zinc-300">SMTP Username / Email</label>
                         <input
                           type="text"
                           placeholder="e.g. noreply@zerolord.com"
-                          className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                          className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
                           value={smtpUser}
                           onChange={(e) => setSmtpUser(e.target.value)}
                         />
                       </div>
 
                       <div className="space-y-1">
-                        <label className="block text-xs font-bold text-slate-300">SMTP Password</label>
+                        <label className="block text-xs font-bold text-zinc-300">SMTP Password</label>
                         <input
                           type="password"
                           placeholder="••••••••••••"
-                          className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                          className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
                           value={smtpPass}
                           onChange={(e) => setSmtpPass(e.target.value)}
                         />
@@ -4829,36 +5691,36 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div className="space-y-1">
-                        <label className="block text-xs font-bold text-slate-300">Sender Display Name</label>
+                        <label className="block text-xs font-bold text-zinc-300">Sender Display Name</label>
                         <input
                           type="text"
                           placeholder="e.g. CINJELLY Stream Support"
-                          className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                          className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
                           value={smtpFromName}
                           onChange={(e) => setSmtpFromName(e.target.value)}
                         />
                       </div>
 
                       <div className="space-y-1">
-                        <label className="block text-xs font-bold text-slate-300">Sender From Email Address</label>
+                        <label className="block text-xs font-bold text-zinc-300">Sender From Email Address</label>
                         <input
                           type="email"
                           placeholder="e.g. noreply@zerolord.com"
-                          className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                          className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
                           value={smtpFromEmail}
                           onChange={(e) => setSmtpFromEmail(e.target.value)}
                         />
                       </div>
 
                       <div className="flex items-end pb-1">
-                        <label className="inline-flex items-center gap-2 cursor-pointer bg-[#07080c] border border-slate-800 p-2.5 rounded-xl w-full">
+                        <label className="inline-flex items-center gap-2 cursor-pointer bg-[#080203] border border-[#2e1015] p-2.5 rounded-xl w-full">
                           <input
                             type="checkbox"
                             className="w-4 h-4 accent-purple-600 cursor-pointer"
                             checked={smtpSecure}
                             onChange={(e) => setSmtpSecure(e.target.checked)}
                           />
-                          <span className="text-xs font-semibold text-slate-300">
+                          <span className="text-xs font-semibold text-zinc-300">
                             Use SSL/TLS Security (Port 465)
                           </span>
                         </label>
@@ -4866,20 +5728,20 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     </div>
 
                     {/* SMTP Live Connection Testing Tool */}
-                    <div className="bg-[#07080c] border border-slate-800/80 p-4 rounded-xl space-y-3 mt-4">
+                    <div className="bg-[#080203] border border-[#2e1015] p-4 rounded-xl space-y-3 mt-4">
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                        <span className="text-xs font-bold text-zinc-300 flex items-center gap-1.5">
                           <Send className="w-3.5 h-3.5 text-purple-400" />
                           <span>Test SMTP Server Connection</span>
                         </span>
-                        <span className="text-[10px] text-slate-500">Delivers an immediate diagnostic test message</span>
+                        <span className="text-[10px] text-zinc-500">Delivers an immediate diagnostic test message</span>
                       </div>
 
                       <div className="flex gap-2">
                         <input
                           type="email"
                           placeholder="Enter target test email address (e.g. admin@example.com)"
-                          className="flex-1 bg-[#11131e] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                          className="flex-1 bg-[#120507] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
                           value={smtpTestEmail}
                           onChange={(e) => setSmtpTestEmail(e.target.value)}
                         />
@@ -4908,19 +5770,19 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               </div>
 
               {/* Card 2: Email Verification & Signup Toggles */}
-              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800/60 pb-5">
+              <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#2e1015]/60 pb-5">
                   <div>
                     <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
                       <CheckCircle className="w-5 h-5 text-emerald-400" />
                       <span>Signup Email Verification Toggle & Template</span>
                     </h3>
-                    <p className="text-slate-400 text-xs mt-0.5">
+                    <p className="text-zinc-400 text-xs mt-0.5">
                       When enabled, new users will automatically receive a verification email upon signup and must confirm it before access.
                     </p>
                   </div>
 
-                  <label className="inline-flex items-center gap-3 cursor-pointer bg-[#07080c] border border-slate-800 py-2 px-4 rounded-xl">
+                  <label className="inline-flex items-center gap-3 cursor-pointer bg-[#080203] border border-[#2e1015] py-2 px-4 rounded-xl">
                     <input 
                       type="checkbox" 
                       className="w-4 h-4 accent-emerald-600 cursor-pointer"
@@ -4935,43 +5797,43 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
                 <div className="space-y-4">
                   <div className="space-y-1">
-                    <label className="block text-xs font-bold text-slate-300">Verification Email Subject</label>
+                    <label className="block text-xs font-bold text-zinc-300">Verification Email Subject</label>
                     <input
                       type="text"
                       placeholder="Verify Your Email Address - CINJELLY Stream"
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-emerald-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-emerald-500 transition"
                       value={emailVerificationSubject}
                       onChange={(e) => setEmailVerificationSubject(e.target.value)}
                     />
                   </div>
 
                   <div className="space-y-3">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[#07080c] p-2.5 rounded-xl border border-slate-800">
-                      <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[#080203] p-2.5 rounded-xl border border-[#2e1015]">
+                      <label className="text-xs font-bold text-zinc-300 flex items-center gap-1.5">
                         <Code className="w-3.5 h-3.5 text-emerald-400" />
                         <span>Verification HTML Email Template</span>
                       </label>
 
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <div className="bg-[#11131e] p-1 rounded-lg border border-slate-800 flex items-center gap-1">
+                        <div className="bg-[#120507] p-1 rounded-lg border border-[#2e1015] flex items-center gap-1">
                           <button
                             type="button"
                             onClick={() => setVerifViewMode('edit')}
-                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${verifViewMode === 'edit' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${verifViewMode === 'edit' ? 'bg-emerald-600 text-white' : 'text-zinc-400 hover:text-white'}`}
                           >
                             <Code className="w-3 h-3" /> Code
                           </button>
                           <button
                             type="button"
                             onClick={() => setVerifViewMode('preview')}
-                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${verifViewMode === 'preview' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${verifViewMode === 'preview' ? 'bg-emerald-600 text-white' : 'text-zinc-400 hover:text-white'}`}
                           >
                             <Eye className="w-3 h-3" /> Live Preview
                           </button>
                           <button
                             type="button"
                             onClick={() => setVerifViewMode('split')}
-                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${verifViewMode === 'split' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${verifViewMode === 'split' ? 'bg-emerald-600 text-white' : 'text-zinc-400 hover:text-white'}`}
                           >
                             <Layout className="w-3 h-3" /> Split View
                           </button>
@@ -4980,7 +5842,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                         <button
                           type="button"
                           onClick={handleResetVerifTemplate}
-                          className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                          className="px-2.5 py-1.5 bg-[#220a0e] hover:bg-[#381018] text-zinc-300 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
                           title="Reset to Factory Default"
                         >
                           <RotateCcw className="w-3 h-3 text-amber-400" /> Reset
@@ -5004,7 +5866,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                             subject: emailVerificationSubject || 'Verify Your Email Address',
                             html: renderSampleEmailHtml(emailVerificationTemplate)
                           })}
-                          className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                          className="px-2.5 py-1.5 bg-[#220a0e] hover:bg-[#381018] text-zinc-300 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
                         >
                           <Maximize2 className="w-3 h-3" /> Fullscreen
                         </button>
@@ -5016,14 +5878,14 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       <textarea
                         rows={12}
                         placeholder="Paste HTML or plain text email content here..."
-                        className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-3 text-emerald-300 text-xs font-mono focus:outline-none focus:border-emerald-500 transition leading-relaxed"
+                        className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-3 text-emerald-300 text-xs font-mono focus:outline-none focus:border-emerald-500 transition leading-relaxed"
                         value={emailVerificationTemplate}
                         onChange={(e) => setEmailVerificationTemplate(e.target.value)}
                       />
                     )}
 
                     {verifViewMode === 'preview' && (
-                      <div className="bg-white rounded-xl overflow-hidden border border-slate-700 shadow-inner p-2 min-h-[350px]">
+                      <div className="bg-white rounded-xl overflow-hidden border border-[#3d1319] shadow-inner p-2 min-h-[350px]">
                         <iframe
                           title="Verification Email Live Preview"
                           className="w-full h-[380px] border-0 rounded-lg"
@@ -5035,22 +5897,22 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     {verifViewMode === 'split' && (
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                         <div className="space-y-1">
-                          <span className="text-[10px] font-bold text-slate-400 block uppercase">HTML Code Editor (Edit Anytime)</span>
+                          <span className="text-[10px] font-bold text-zinc-400 block uppercase">HTML Code Editor (Edit Anytime)</span>
                           <textarea
                             rows={14}
                             placeholder="Paste HTML email content..."
-                            className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-3 text-emerald-300 text-xs font-mono focus:outline-none focus:border-emerald-500 transition leading-relaxed"
+                            className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-3 text-emerald-300 text-xs font-mono focus:outline-none focus:border-emerald-500 transition leading-relaxed"
                             value={emailVerificationTemplate}
                             onChange={(e) => setEmailVerificationTemplate(e.target.value)}
                           />
                         </div>
 
                         <div className="space-y-1">
-                          <div className="flex justify-between items-center text-[10px] font-bold text-slate-400 uppercase">
+                          <div className="flex justify-between items-center text-[10px] font-bold text-zinc-400 uppercase">
                             <span>Live Rendered Email Preview</span>
                             <span className="text-emerald-400 font-normal">Real-time update</span>
                           </div>
-                          <div className="bg-[#0b0d17] p-2 rounded-xl border border-slate-800 h-[280px] sm:h-[330px]">
+                          <div className="bg-[#120507] p-2 rounded-xl border border-[#2e1015] h-[280px] sm:h-[330px]">
                             <iframe
                               title="Verification Email Live Preview"
                               className="w-full h-full border-0 bg-white rounded-lg shadow-inner"
@@ -5065,56 +5927,56 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               </div>
 
               {/* Card 3: Welcome & Payment Confirmation Email Settings */}
-              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl">
-                <div className="border-b border-slate-800/60 pb-5">
+              <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl">
+                <div className="border-b border-[#2e1015]/60 pb-5">
                   <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
                     <FileText className="w-5 h-5 text-sky-400" />
                     <span>Welcome & Payment Approval Notification Email</span>
                   </h3>
-                  <p className="text-slate-400 text-xs mt-0.5">
+                  <p className="text-zinc-400 text-xs mt-0.5">
                     Automatically sent to subscribers whenever an admin approves their payment verification or activates their account.
                   </p>
                 </div>
 
                 <div className="space-y-4">
                   <div className="space-y-1">
-                    <label className="block text-xs font-bold text-slate-300">Welcome Email Subject</label>
+                    <label className="block text-xs font-bold text-zinc-300">Welcome Email Subject</label>
                     <input
                       type="text"
                       placeholder="Welcome to CINJELLY Stream! Payment Confirmed"
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-sky-500 transition"
                       value={welcomeEmailSubject}
                       onChange={(e) => setWelcomeEmailSubject(e.target.value)}
                     />
                   </div>
 
                   <div className="space-y-3">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[#07080c] p-2.5 rounded-xl border border-slate-800">
-                      <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-[#080203] p-2.5 rounded-xl border border-[#2e1015]">
+                      <label className="text-xs font-bold text-zinc-300 flex items-center gap-1.5">
                         <Code className="w-3.5 h-3.5 text-sky-400" />
                         <span>Welcome HTML Email Template</span>
                       </label>
 
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <div className="bg-[#11131e] p-1 rounded-lg border border-slate-800 flex items-center gap-1">
+                        <div className="bg-[#120507] p-1 rounded-lg border border-[#2e1015] flex items-center gap-1">
                           <button
                             type="button"
                             onClick={() => setWelcomeViewMode('edit')}
-                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${welcomeViewMode === 'edit' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${welcomeViewMode === 'edit' ? 'bg-sky-600 text-white' : 'text-zinc-400 hover:text-white'}`}
                           >
                             <Code className="w-3 h-3" /> Code
                           </button>
                           <button
                             type="button"
                             onClick={() => setWelcomeViewMode('preview')}
-                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${welcomeViewMode === 'preview' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${welcomeViewMode === 'preview' ? 'bg-sky-600 text-white' : 'text-zinc-400 hover:text-white'}`}
                           >
                             <Eye className="w-3 h-3" /> Live Preview
                           </button>
                           <button
                             type="button"
                             onClick={() => setWelcomeViewMode('split')}
-                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${welcomeViewMode === 'split' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${welcomeViewMode === 'split' ? 'bg-sky-600 text-white' : 'text-zinc-400 hover:text-white'}`}
                           >
                             <Layout className="w-3 h-3" /> Split View
                           </button>
@@ -5123,7 +5985,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                         <button
                           type="button"
                           onClick={handleResetWelcomeTemplate}
-                          className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                          className="px-2.5 py-1.5 bg-[#220a0e] hover:bg-[#381018] text-zinc-300 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
                           title="Reset to Factory Default"
                         >
                           <RotateCcw className="w-3 h-3 text-amber-400" /> Reset
@@ -5147,7 +6009,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                             subject: welcomeEmailSubject || 'Welcome to CINJELLY Stream!',
                             html: renderSampleEmailHtml(welcomeEmailTemplate)
                           })}
-                          className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                          className="px-2.5 py-1.5 bg-[#220a0e] hover:bg-[#381018] text-zinc-300 rounded-lg text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
                         >
                           <Maximize2 className="w-3 h-3" /> Fullscreen
                         </button>
@@ -5159,14 +6021,14 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       <textarea
                         rows={12}
                         placeholder="Paste Welcome HTML content here..."
-                        className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-3 text-sky-300 text-xs font-mono focus:outline-none focus:border-sky-500 transition leading-relaxed"
+                        className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-3 text-sky-300 text-xs font-mono focus:outline-none focus:border-sky-500 transition leading-relaxed"
                         value={welcomeEmailTemplate}
                         onChange={(e) => setWelcomeEmailTemplate(e.target.value)}
                       />
                     )}
 
                     {welcomeViewMode === 'preview' && (
-                      <div className="bg-white rounded-xl overflow-hidden border border-slate-700 shadow-inner p-2 min-h-[350px]">
+                      <div className="bg-white rounded-xl overflow-hidden border border-[#3d1319] shadow-inner p-2 min-h-[350px]">
                         <iframe
                           title="Welcome Email Live Preview"
                           className="w-full h-[380px] border-0 rounded-lg"
@@ -5178,22 +6040,22 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                     {welcomeViewMode === 'split' && (
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                         <div className="space-y-1">
-                          <span className="text-[10px] font-bold text-slate-400 block uppercase">HTML Code Editor (Edit Anytime)</span>
+                          <span className="text-[10px] font-bold text-zinc-400 block uppercase">HTML Code Editor (Edit Anytime)</span>
                           <textarea
                             rows={14}
                             placeholder="Paste Welcome HTML content..."
-                            className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-3 text-sky-300 text-xs font-mono focus:outline-none focus:border-sky-500 transition leading-relaxed"
+                            className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-3 text-sky-300 text-xs font-mono focus:outline-none focus:border-sky-500 transition leading-relaxed"
                             value={welcomeEmailTemplate}
                             onChange={(e) => setWelcomeEmailTemplate(e.target.value)}
                           />
                         </div>
 
                         <div className="space-y-1">
-                          <div className="flex justify-between items-center text-[10px] font-bold text-slate-400 uppercase">
+                          <div className="flex justify-between items-center text-[10px] font-bold text-zinc-400 uppercase">
                             <span>Live Rendered Email Preview</span>
                             <span className="text-sky-400 font-normal">Real-time update</span>
                           </div>
-                          <div className="bg-[#0b0d17] p-2 rounded-xl border border-slate-800 h-[280px] sm:h-[330px]">
+                          <div className="bg-[#120507] p-2 rounded-xl border border-[#2e1015] h-[280px] sm:h-[330px]">
                             <iframe
                               title="Welcome Email Live Preview"
                               className="w-full h-full border-0 bg-white rounded-lg shadow-inner"
@@ -5208,63 +6070,63 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               </div>
 
               {/* Card 4: Variables Reference Cheat Sheet */}
-              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl">
+              <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-amber-400 mb-3 flex items-center gap-2">
                   <Info className="w-4 h-4" />
                   <span>Dynamic Template Variables Cheat Sheet</span>
                 </h4>
-                <p className="text-slate-400 text-xs mb-4">
+                <p className="text-zinc-400 text-xs mb-4">
                   Insert these variable placeholders into your HTML email templates. They will automatically be populated with each recipient's actual details upon delivery:
                 </p>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 text-xs font-mono">
-                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                  <div className="bg-[#080203] p-2.5 rounded-lg border border-[#2e1015]">
                     <span className="text-amber-400 font-bold block">{`{username}`}</span>
-                    <span className="text-slate-500 text-[10px]">User's login username</span>
+                    <span className="text-zinc-500 text-[10px]">User's login username</span>
                   </div>
-                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                  <div className="bg-[#080203] p-2.5 rounded-lg border border-[#2e1015]">
                     <span className="text-amber-400 font-bold block">{`{fullName}`}</span>
-                    <span className="text-slate-500 text-[10px]">User's full display name</span>
+                    <span className="text-zinc-500 text-[10px]">User's full display name</span>
                   </div>
-                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                  <div className="bg-[#080203] p-2.5 rounded-lg border border-[#2e1015]">
                     <span className="text-amber-400 font-bold block">{`{email}`}</span>
-                    <span className="text-slate-500 text-[10px]">User's email address</span>
+                    <span className="text-zinc-500 text-[10px]">User's email address</span>
                   </div>
-                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                  <div className="bg-[#080203] p-2.5 rounded-lg border border-[#2e1015]">
                     <span className="text-purple-400 font-bold block">{`{support_email}`}</span>
-                    <span className="text-slate-500 text-[10px]">Support contact email</span>
+                    <span className="text-zinc-500 text-[10px]">Support contact email</span>
                   </div>
-                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                  <div className="bg-[#080203] p-2.5 rounded-lg border border-[#2e1015]">
                     <span className="text-purple-400 font-bold block">{`{website_url}`}</span>
-                    <span className="text-slate-500 text-[10px]">Portal/Server website URL</span>
+                    <span className="text-zinc-500 text-[10px]">Portal/Server website URL</span>
                   </div>
-                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                  <div className="bg-[#080203] p-2.5 rounded-lg border border-[#2e1015]">
                     <span className="text-purple-400 font-bold block">{`{current_year}`}</span>
-                    <span className="text-slate-500 text-[10px]">Current year (e.g. 2026)</span>
+                    <span className="text-zinc-500 text-[10px]">Current year (e.g. 2026)</span>
                   </div>
-                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                  <div className="bg-[#080203] p-2.5 rounded-lg border border-[#2e1015]">
                     <span className="text-emerald-400 font-bold block">{`{verification_code}`}</span>
-                    <span className="text-slate-500 text-[10px]">6-digit OTP security code</span>
+                    <span className="text-zinc-500 text-[10px]">6-digit OTP security code</span>
                   </div>
-                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                  <div className="bg-[#080203] p-2.5 rounded-lg border border-[#2e1015]">
                     <span className="text-emerald-400 font-bold block">{`{verification_link}`}</span>
-                    <span className="text-slate-500 text-[10px]">Direct 1-click verification link</span>
+                    <span className="text-zinc-500 text-[10px]">Direct 1-click verification link</span>
                   </div>
-                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                  <div className="bg-[#080203] p-2.5 rounded-lg border border-[#2e1015]">
                     <span className="text-sky-400 font-bold block">{`{ios_app_link}`}</span>
-                    <span className="text-slate-500 text-[10px]">iOS Apple Store app link</span>
+                    <span className="text-zinc-500 text-[10px]">iOS Apple Store app link</span>
                   </div>
-                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                  <div className="bg-[#080203] p-2.5 rounded-lg border border-[#2e1015]">
                     <span className="text-sky-400 font-bold block">{`{android_app_link}`}</span>
-                    <span className="text-slate-500 text-[10px]">Android APK / Store app link</span>
+                    <span className="text-zinc-500 text-[10px]">Android APK / Store app link</span>
                   </div>
-                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                  <div className="bg-[#080203] p-2.5 rounded-lg border border-[#2e1015]">
                     <span className="text-rose-400 font-bold block">{`{app_name}`}</span>
-                    <span className="text-slate-500 text-[10px]">CINJELLY Stream</span>
+                    <span className="text-zinc-500 text-[10px]">CINJELLY Stream</span>
                   </div>
-                  <div className="bg-[#07080c] p-2.5 rounded-lg border border-slate-800">
+                  <div className="bg-[#080203] p-2.5 rounded-lg border border-[#2e1015]">
                     <span className="text-rose-400 font-bold block">{`{login_url}`}</span>
-                    <span className="text-slate-500 text-[10px]">Portal login portal URL</span>
+                    <span className="text-zinc-500 text-[10px]">Portal login portal URL</span>
                   </div>
                 </div>
               </div>
@@ -5297,7 +6159,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
           <div className="space-y-6" id="cpanel-deploy-panel">
             
             {/* Header Hero Banner */}
-            <div className="bg-[#11131e] border border-amber-500/30 rounded-2xl p-6 sm:p-8 shadow-2xl relative overflow-hidden">
+            <div className="bg-[#120507] border border-amber-500/30 rounded-2xl p-6 sm:p-8 shadow-2xl relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-[3px] bg-gradient-to-r from-amber-500 via-rose-500 to-purple-500"></div>
               
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
@@ -5309,7 +6171,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   <h2 className="text-xl sm:text-2xl font-display font-extrabold text-white tracking-tight">
                     cPanel Production FTP & Automated Deployment Console
                   </h2>
-                  <p className="text-slate-400 text-xs sm:text-sm leading-relaxed">
+                  <p className="text-zinc-400 text-xs sm:text-sm leading-relaxed">
                     View, copy, and manage the live production FTP connection credentials, serverless PHP backend bridge, and deployment scripts for hosting on cPanel (<code className="text-amber-300 font-mono">ftp.zerolord.com</code>).
                   </p>
                 </div>
@@ -5339,7 +6201,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   <button
                     type="button"
                     onClick={() => handleCopyFtpField('npm run build && python3 deploy_via_ftp.py', 'cmd')}
-                    className="bg-slate-900 hover:bg-slate-800 border border-slate-700 text-white font-bold py-3 px-4 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-md font-mono"
+                    className="bg-[#180608] hover:bg-[#220a0e] border border-[#3d1319] text-white font-bold py-3 px-4 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-md font-mono"
                   >
                     {copiedDeployCmd ? (
                       <>
@@ -5357,43 +6219,43 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               </div>
 
               {/* Status Ribbon */}
-              <div className="mt-6 pt-5 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-                <div className="bg-[#07080c] p-3 rounded-xl border border-slate-800/80 flex items-center gap-3">
+              <div className="mt-6 pt-5 border-t border-[#2e1015] grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="bg-[#080203] p-3 rounded-xl border border-[#2e1015] flex items-center gap-3">
                   <div className="p-2 bg-emerald-500/10 text-emerald-400 rounded-lg">
                     <CheckCircle className="w-4 h-4" />
                   </div>
                   <div>
-                    <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold block">Status</span>
+                    <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-bold block">Status</span>
                     <span className="text-xs font-extrabold text-emerald-400">Live & Deployed</span>
                   </div>
                 </div>
 
-                <div className="bg-[#07080c] p-3 rounded-xl border border-slate-800/80 flex items-center gap-3">
+                <div className="bg-[#080203] p-3 rounded-xl border border-[#2e1015] flex items-center gap-3">
                   <div className="p-2 bg-amber-500/10 text-amber-400 rounded-lg">
                     <Server className="w-4 h-4" />
                   </div>
                   <div>
-                    <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold block">Host Server</span>
+                    <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-bold block">Host Server</span>
                     <span className="text-xs font-bold text-white font-mono">ftp.zerolord.com</span>
                   </div>
                 </div>
 
-                <div className="bg-[#07080c] p-3 rounded-xl border border-slate-800/80 flex items-center gap-3">
+                <div className="bg-[#080203] p-3 rounded-xl border border-[#2e1015] flex items-center gap-3">
                   <div className="p-2 bg-purple-500/10 text-purple-400 rounded-lg">
                     <Users className="w-4 h-4" />
                   </div>
                   <div>
-                    <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold block">Account</span>
+                    <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-bold block">Account</span>
                     <span className="text-xs font-bold text-purple-300 font-mono truncate max-w-[140px] block">cinjelly@zerolord.com</span>
                   </div>
                 </div>
 
-                <div className="bg-[#07080c] p-3 rounded-xl border border-slate-800/80 flex items-center gap-3">
+                <div className="bg-[#080203] p-3 rounded-xl border border-[#2e1015] flex items-center gap-3">
                   <div className="p-2 bg-sky-500/10 text-sky-400 rounded-lg">
                     <Globe className="w-4 h-4" />
                   </div>
                   <div>
-                    <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold block">Web Protocol</span>
+                    <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-bold block">Web Protocol</span>
                     <span className="text-xs font-bold text-sky-300">HTTPS + mod_rewrite</span>
                   </div>
                 </div>
@@ -5401,13 +6263,13 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             </div>
 
             {/* FTP Credentials Individual Cards Grid */}
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl">
               <div>
                 <h3 className="text-base sm:text-lg font-display font-extrabold text-white flex items-center gap-2">
                   <Key className="w-5 h-5 text-amber-400" />
                   <span>Production FTP Connection Parameters</span>
                 </h3>
-                <p className="text-slate-400 text-xs mt-1">
+                <p className="text-zinc-400 text-xs mt-1">
                   Individual credentials for FileZilla, WinSCP, Cyberduck, cPanel FTP Accounts, or automated deployment scripts.
                 </p>
               </div>
@@ -5415,9 +6277,9 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 
                 {/* 1. Host */}
-                <div className="bg-[#07080c] border border-slate-800/80 rounded-xl p-4 space-y-2">
+                <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4 space-y-2">
                   <div className="flex items-center justify-between">
-                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
                       <Server className="w-3.5 h-3.5 text-amber-400" />
                       <span>FTP Host / Server Address</span>
                     </label>
@@ -5428,50 +6290,50 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       type="text"
                       readOnly
                       value="ftp.zerolord.com"
-                      className="w-full bg-[#11131e] border border-slate-800 text-amber-300 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
+                      className="w-full bg-[#120507] border border-[#2e1015] text-amber-300 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
                     />
                     <button
                       type="button"
                       onClick={() => handleCopyFtpField('ftp.zerolord.com', 'host')}
-                      className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                      className="bg-[#220a0e] hover:bg-[#381018] text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
                     >
-                      {copiedFtpHost ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-300" />}
+                      {copiedFtpHost ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-zinc-300" />}
                       <span>{copiedFtpHost ? 'Copied' : 'Copy'}</span>
                     </button>
                   </div>
                 </div>
 
                 {/* 2. Port */}
-                <div className="bg-[#07080c] border border-slate-800/80 rounded-xl p-4 space-y-2">
+                <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4 space-y-2">
                   <div className="flex items-center justify-between">
-                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
                       <HardDrive className="w-3.5 h-3.5 text-sky-400" />
                       <span>FTP Port & Protocol</span>
                     </label>
-                    <span className="text-[10px] text-slate-500">Standard FTP / TLS</span>
+                    <span className="text-[10px] text-zinc-500">Standard FTP / TLS</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <input
                       type="text"
                       readOnly
                       value="21 (Protocol: FTP / Explicit TLS)"
-                      className="w-full bg-[#11131e] border border-slate-800 text-white text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
+                      className="w-full bg-[#120507] border border-[#2e1015] text-white text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
                     />
                     <button
                       type="button"
                       onClick={() => handleCopyFtpField('21', 'port')}
-                      className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                      className="bg-[#220a0e] hover:bg-[#381018] text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
                     >
-                      {copiedFtpPort ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-300" />}
+                      {copiedFtpPort ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-zinc-300" />}
                       <span>{copiedFtpPort ? 'Copied' : 'Copy'}</span>
                     </button>
                   </div>
                 </div>
 
                 {/* 3. Username */}
-                <div className="bg-[#07080c] border border-slate-800/80 rounded-xl p-4 space-y-2">
+                <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4 space-y-2">
                   <div className="flex items-center justify-between">
-                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
                       <Users className="w-3.5 h-3.5 text-purple-400" />
                       <span>FTP Username / Target Login</span>
                     </label>
@@ -5482,32 +6344,32 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       type="text"
                       readOnly
                       value="cinjelly@zerolord.com"
-                      className="w-full bg-[#11131e] border border-slate-800 text-purple-200 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
+                      className="w-full bg-[#120507] border border-[#2e1015] text-purple-200 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
                     />
                     <button
                       type="button"
                       onClick={() => handleCopyFtpField('cinjelly@zerolord.com', 'user')}
-                      className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                      className="bg-[#220a0e] hover:bg-[#381018] text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
                     >
-                      {copiedFtpUser ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-300" />}
+                      {copiedFtpUser ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-zinc-300" />}
                       <span>{copiedFtpUser ? 'Copied' : 'Copy'}</span>
                     </button>
                   </div>
                 </div>
 
                 {/* 4. Password */}
-                <div className="bg-[#07080c] border border-slate-800/80 rounded-xl p-4 space-y-2">
+                <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4 space-y-2">
                   <div className="flex items-center justify-between">
-                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
                       <Lock className="w-3.5 h-3.5 text-rose-400" />
                       <span>FTP Account Password</span>
                     </label>
                     <button
                       type="button"
                       onClick={() => setShowFtpPassword(!showFtpPassword)}
-                      className="text-[10px] text-slate-400 hover:text-white flex items-center gap-1 transition cursor-pointer"
+                      className="text-[10px] text-zinc-400 hover:text-white flex items-center gap-1 transition cursor-pointer"
                     >
-                      {showFtpPassword ? <EyeOff className="w-3 h-3 text-rose-400" /> : <Eye className="w-3 h-3 text-slate-400" />}
+                      {showFtpPassword ? <EyeOff className="w-3 h-3 text-rose-400" /> : <Eye className="w-3 h-3 text-zinc-400" />}
                       <span>{showFtpPassword ? 'Hide' : 'Reveal'}</span>
                     </button>
                   </div>
@@ -5516,50 +6378,50 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       type={showFtpPassword ? 'text' : 'password'}
                       readOnly
                       value="@f33rinimi"
-                      className="w-full bg-[#11131e] border border-slate-800 text-rose-300 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
+                      className="w-full bg-[#120507] border border-[#2e1015] text-rose-300 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
                     />
                     <button
                       type="button"
                       onClick={() => handleCopyFtpField('@f33rinimi', 'pass')}
-                      className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                      className="bg-[#220a0e] hover:bg-[#381018] text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
                     >
-                      {copiedFtpPass ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-300" />}
+                      {copiedFtpPass ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-zinc-300" />}
                       <span>{copiedFtpPass ? 'Copied' : 'Copy'}</span>
                     </button>
                   </div>
                 </div>
 
                 {/* 5. Target Directories */}
-                <div className="bg-[#07080c] border border-slate-800/80 rounded-xl p-4 space-y-2">
+                <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4 space-y-2">
                   <div className="flex items-center justify-between">
-                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
                       <FolderSync className="w-3.5 h-3.5 text-emerald-400" />
                       <span>Remote Target Directories</span>
                     </label>
-                    <span className="text-[10px] text-slate-500">public_html root</span>
+                    <span className="text-[10px] text-zinc-500">public_html root</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <input
                       type="text"
                       readOnly
                       value="/ (Root: index.html, .htaccess), /assets, /backend, /php-backend"
-                      className="w-full bg-[#11131e] border border-slate-800 text-emerald-300 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
+                      className="w-full bg-[#120507] border border-[#2e1015] text-emerald-300 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
                     />
                     <button
                       type="button"
                       onClick={() => handleCopyFtpField('/, /assets, /backend, /php-backend', 'target')}
-                      className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                      className="bg-[#220a0e] hover:bg-[#381018] text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
                     >
-                      {copiedFtpTarget ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-300" />}
+                      {copiedFtpTarget ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-zinc-300" />}
                       <span>{copiedFtpTarget ? 'Copied' : 'Copy'}</span>
                     </button>
                   </div>
                 </div>
 
                 {/* 6. Complete FTP Connection URL */}
-                <div className="bg-[#07080c] border border-slate-800/80 rounded-xl p-4 space-y-2">
+                <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4 space-y-2">
                   <div className="flex items-center justify-between">
-                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
                       <Code className="w-3.5 h-3.5 text-amber-400" />
                       <span>Complete FTP Connection String</span>
                     </label>
@@ -5570,14 +6432,14 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       type="text"
                       readOnly
                       value="ftp://cinjelly%40zerolord.com:@f33rinimi@ftp.zerolord.com:21/"
-                      className="w-full bg-[#11131e] border border-slate-800 text-amber-200 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
+                      className="w-full bg-[#120507] border border-[#2e1015] text-amber-200 text-xs font-mono py-2.5 px-3 rounded-lg focus:outline-none select-all"
                     />
                     <button
                       type="button"
                       onClick={() => handleCopyFtpField('ftp://cinjelly%40zerolord.com:@f33rinimi@ftp.zerolord.com:21/', 'url')}
-                      className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
+                      className="bg-[#220a0e] hover:bg-[#381018] text-white font-bold py-2.5 px-3.5 rounded-lg text-xs transition cursor-pointer flex items-center gap-1.5 shrink-0"
                     >
-                      {copiedFtpUrl ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-300" />}
+                      {copiedFtpUrl ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-zinc-300" />}
                       <span>{copiedFtpUrl ? 'Copied' : 'Copy'}</span>
                     </button>
                   </div>
@@ -5587,14 +6449,14 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             </div>
 
             {/* CLI Build & Automated Deployment Terminal Box */}
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
                   <h3 className="text-base sm:text-lg font-display font-extrabold text-white flex items-center gap-2">
                     <Terminal className="w-5 h-5 text-amber-400" />
                     <span>Automated CLI Build & Deployment Pipeline</span>
                   </h3>
-                  <p className="text-slate-400 text-xs mt-1">
+                  <p className="text-zinc-400 text-xs mt-1">
                     Execute the production compilation and deploy all assets directly to cPanel via Python FTP in a single step.
                   </p>
                 </div>
@@ -5610,19 +6472,19 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               </div>
 
               {/* Terminal Code Display */}
-              <div className="bg-[#05060a] border border-slate-800 rounded-xl p-4 sm:p-5 font-mono text-xs text-slate-200 overflow-x-auto space-y-3">
-                <div className="flex items-center gap-2 text-slate-500 pb-2 border-b border-slate-800/60">
+              <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4 sm:p-5 font-mono text-xs text-zinc-200 overflow-x-auto space-y-3">
+                <div className="flex items-center gap-2 text-zinc-500 pb-2 border-b border-[#2e1015]/60">
                   <div className="w-2.5 h-2.5 rounded-full bg-rose-500"></div>
                   <div className="w-2.5 h-2.5 rounded-full bg-amber-500"></div>
                   <div className="w-2.5 h-2.5 rounded-full bg-emerald-500"></div>
-                  <span className="text-[11px] ml-2 text-slate-400">bash — production build & deploy</span>
+                  <span className="text-[11px] ml-2 text-zinc-400">bash — production build & deploy</span>
                 </div>
                 
                 <div className="text-amber-400 font-bold flex items-center gap-2 select-all">
-                  <span className="text-slate-600">$</span> npm run build && python3 deploy_via_ftp.py
+                  <span className="text-zinc-600">$</span> npm run build && python3 deploy_via_ftp.py
                 </div>
 
-                <div className="text-slate-400 text-[11px] space-y-1 pt-2 border-t border-slate-800/40">
+                <div className="text-zinc-400 text-[11px] space-y-1 pt-2 border-t border-[#2e1015]/40">
                   <div className="text-emerald-400">✓ vite build — Compiles React frontend into /dist</div>
                   <div className="text-emerald-400">✓ esbuild server.ts — Compiles Node/Express fallback bundle</div>
                   <div className="text-emerald-400">✓ ftplib.FTP.connect — Logs into ftp.zerolord.com (cinjelly@zerolord.com)</div>
@@ -5639,42 +6501,42 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               
               {/* Architecture Details */}
-              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 space-y-4 shadow-xl">
+              <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 space-y-4 shadow-xl">
                 <h4 className="text-sm font-bold text-white flex items-center gap-2 font-display">
                   <Globe className="w-4 h-4 text-sky-400" />
                   <span>cPanel Production Architecture</span>
                 </h4>
-                <p className="text-slate-400 text-xs leading-relaxed">
+                <p className="text-zinc-400 text-xs leading-relaxed">
                   The application operates as a high-performance hybrid deployment on cPanel:
                 </p>
 
                 <div className="space-y-2.5 text-xs">
-                  <div className="p-3 bg-[#07080c] rounded-xl border border-slate-800/80">
+                  <div className="p-3 bg-[#080203] rounded-xl border border-[#2e1015]">
                     <div className="font-bold text-white flex items-center gap-2">
                       <span className="w-2 h-2 rounded-full bg-rose-500"></span>
                       <span>Frontend Client (React 18 + Vite)</span>
                     </div>
-                    <p className="text-slate-400 text-[11px] mt-1">
+                    <p className="text-zinc-400 text-[11px] mt-1">
                       Rendered statically from <code className="text-amber-300">/index.html</code> and <code className="text-amber-300">/assets/*</code> with client-side SPA routing fallback.
                     </p>
                   </div>
 
-                  <div className="p-3 bg-[#07080c] rounded-xl border border-slate-800/80">
+                  <div className="p-3 bg-[#080203] rounded-xl border border-[#2e1015]">
                     <div className="font-bold text-white flex items-center gap-2">
                       <span className="w-2 h-2 rounded-full bg-purple-500"></span>
                       <span>Backend Engine (Serverless PHP 8+)</span>
                     </div>
-                    <p className="text-slate-400 text-[11px] mt-1">
+                    <p className="text-zinc-400 text-[11px] mt-1">
                       Located in <code className="text-amber-300">/php-backend/</code> and <code className="text-amber-300">/backend/</code>. Handles all auth, SQLite database, payments, and Jellyfin proxy.
                     </p>
                   </div>
 
-                  <div className="p-3 bg-[#07080c] rounded-xl border border-slate-800/80">
+                  <div className="p-3 bg-[#080203] rounded-xl border border-[#2e1015]">
                     <div className="font-bold text-white flex items-center gap-2">
                       <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
                       <span>Daily Expiry Cron Job</span>
                     </div>
-                    <p className="text-slate-400 text-[11px] mt-1">
+                    <p className="text-zinc-400 text-[11px] mt-1">
                       Run daily via cPanel Cron: <code className="text-emerald-300">/usr/local/bin/php /home/cinjelly/public_html/php-backend/expiry-cron.php</code>
                     </p>
                   </div>
@@ -5682,28 +6544,28 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               </div>
 
               {/* Root .htaccess Preview */}
-              <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 space-y-4 shadow-xl">
+              <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 space-y-4 shadow-xl">
                 <div className="flex items-center justify-between">
                   <h4 className="text-sm font-bold text-white flex items-center gap-2 font-display">
                     <Code className="w-4 h-4 text-emerald-400" />
                     <span>Root Apache .htaccess Mod_Rewrite</span>
                   </h4>
-                  <span className="text-[10px] text-slate-500 font-mono">public_html/.htaccess</span>
+                  <span className="text-[10px] text-zinc-500 font-mono">public_html/.htaccess</span>
                 </div>
-                <p className="text-slate-400 text-xs leading-relaxed">
+                <p className="text-zinc-400 text-xs leading-relaxed">
                   Directs all <code className="text-sky-300">/api/*</code> and <code className="text-sky-300">/jellyfin/*</code> traffic to PHP while serving React on client paths:
                 </p>
 
-                <div className="bg-[#05060a] border border-slate-800 rounded-xl p-3.5 font-mono text-[11px] text-slate-300 overflow-x-auto leading-relaxed select-all">
+                <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-3.5 font-mono text-[11px] text-zinc-300 overflow-x-auto leading-relaxed select-all">
                   <div>&lt;IfModule mod_rewrite.c&gt;</div>
                   <div className="pl-4">RewriteEngine On</div>
                   <div className="pl-4">RewriteBase /</div>
-                  <div className="pl-4 text-slate-500"># API &amp; Jellyfin reverse proxy routes</div>
+                  <div className="pl-4 text-zinc-500"># API &amp; Jellyfin reverse proxy routes</div>
                   <div className="pl-4 text-amber-300">RewriteRule ^api(/.*)?$ php-backend/index.php [QSA,L]</div>
                   <div className="pl-4 text-amber-300">RewriteRule ^jellyfin(/.*)?$ php-backend/index.php [QSA,L]</div>
                   <div className="pl-4 text-amber-300">RewriteRule ^php-backend(/.*)?$ php-backend/index.php [QSA,L]</div>
                   <div className="pl-4 text-amber-300">RewriteRule ^backend(/.*)?$ php-backend/index.php [QSA,L]</div>
-                  <div className="pl-4 text-slate-500"># React Router fallback</div>
+                  <div className="pl-4 text-zinc-500"># React Router fallback</div>
                   <div className="pl-4">RewriteCond %&#123;REQUEST_FILENAME&#125; !-f</div>
                   <div className="pl-4">RewriteCond %&#123;REQUEST_FILENAME&#125; !-d</div>
                   <div className="pl-4 text-emerald-400">RewriteRule . index.html [L]</div>
@@ -5716,15 +6578,20 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
           </div>
         )}
 
+        {/* LANDING PAGE CMS TAB */}
+        {activeTab === 'landing_cms' && (
+          <LandingCmsTab showToast={showToast} />
+        )}
+
         {/* Media Server Connection card served at bottom of page */}
         {activeTab === 'subscriptions' && (
-          <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl" id="server-config-card">
+          <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl" id="server-config-card">
             <div>
               <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
                 <Tv className="w-5 h-5 text-rose-500" />
                 <span>Media Server Connection Settings</span>
               </h3>
-              <p className="text-slate-400 text-xs mt-1">
+              <p className="text-zinc-400 text-xs mt-1">
                 Directly adjust the connection parameters to your streaming server. Settings are stored securely in your active database.
               </p>
             </div>
@@ -5742,7 +6609,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             )}
 
             {configLoading ? (
-              <div className="py-8 text-center text-slate-500">
+              <div className="py-8 text-center text-zinc-500">
                 <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-rose-500" />
                 <span className="text-xs">Loading active configuration...</span>
               </div>
@@ -5750,7 +6617,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               <form onSubmit={handleSaveConfig} className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label htmlFor="serverUrl" className="block text-xs font-semibold text-slate-300">
+                    <label htmlFor="serverUrl" className="block text-xs font-semibold text-zinc-300">
                       Media Server URL
                     </label>
                     <input
@@ -5758,14 +6625,14 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       id="serverUrl"
                       required
                       placeholder="e.g. https://cinode.zerolord.com"
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs placeholder-slate-600 focus:outline-none focus:border-rose-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs placeholder-slate-600 focus:outline-none focus:border-rose-500 transition"
                       value={serverUrl}
                       onChange={(e) => setServerUrl(e.target.value)}
                     />
                   </div>
 
                   <div className="space-y-1">
-                    <label htmlFor="jellyfinAdminUser" className="block text-xs font-semibold text-slate-300">
+                    <label htmlFor="jellyfinAdminUser" className="block text-xs font-semibold text-zinc-300">
                       Server Admin Username
                     </label>
                     <input
@@ -5773,7 +6640,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       id="jellyfinAdminUser"
                       required
                       placeholder="e.g. admin"
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs placeholder-slate-600 focus:outline-none focus:border-rose-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs placeholder-slate-600 focus:outline-none focus:border-rose-500 transition"
                       value={jellyfinAdminUser}
                       onChange={(e) => setJellyfinAdminUser(e.target.value)}
                     />
@@ -5782,21 +6649,21 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1">
-                    <label htmlFor="jellyfinAdminPass" className="block text-xs font-semibold text-slate-300">
+                    <label htmlFor="jellyfinAdminPass" className="block text-xs font-semibold text-zinc-300">
                       Server Admin Password (Optional)
                     </label>
                     <input
                       type="password"
                       id="jellyfinAdminPass"
                       placeholder="Enter password"
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs placeholder-slate-600 focus:outline-none focus:border-rose-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs placeholder-slate-600 focus:outline-none focus:border-rose-500 transition"
                       value={jellyfinAdminPass}
                       onChange={(e) => setJellyfinAdminPass(e.target.value)}
                     />
                   </div>
 
                   <div className="space-y-1">
-                    <label htmlFor="apiKey" className="block text-xs font-semibold text-slate-300">
+                    <label htmlFor="apiKey" className="block text-xs font-semibold text-zinc-300">
                       Server API Key
                     </label>
                     <input
@@ -5804,7 +6671,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       id="apiKey"
                       required
                       placeholder="Paste your Server API Key"
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs placeholder-slate-600 focus:outline-none focus:border-rose-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs placeholder-slate-600 focus:outline-none focus:border-rose-500 transition"
                       value={apiKey}
                       onChange={(e) => setApiKey(e.target.value)}
                     />
@@ -5835,13 +6702,222 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
       </main>
 
+      {/* MOBILE BOTTOM NAVIGATION BAR */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-[#120507]/95 backdrop-blur-lg border-t border-[#2e1015] p-2 flex justify-around items-center z-40">
+        {[
+          { id: 'subscriptions', label: 'Users', icon: Tv },
+          { id: 'payments', label: 'Verify', icon: CreditCard, badge: users.filter(u => u.paymentStatus === 'Pending Verification').length },
+          { id: 'media_requests', label: 'Requests', icon: Film, badge: mediaRequests.filter(r => r.status === 'Pending').length },
+          { id: 'affiliates', label: 'Affiliates', icon: Users },
+          { id: 'cpanel_deploy', label: 'Deploy', icon: Server },
+        ].map((item) => {
+          const Icon = item.icon;
+          const isSelected = activeTab === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => setActiveTab(item.id as any)}
+              className={`flex flex-col items-center justify-center p-1.5 rounded-xl transition cursor-pointer min-w-12 relative ${
+                isSelected ? 'text-[#ff4d64]' : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+            >
+              <div className={`p-1 rounded-lg relative ${isSelected ? 'bg-[#d31d38]/20 border border-[#d31d38]/30 shadow-[0_0_10px_rgba(211,29,56,0.3)]' : ''}`}>
+                <Icon className="w-4.5 h-4.5" />
+                {item.badge !== undefined && item.badge > 0 && (
+                  <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-[#d31d38] text-[8px] font-extrabold text-white rounded-full flex items-center justify-center animate-pulse">
+                    {item.badge}
+                  </span>
+                )}
+              </div>
+              <span className="text-[9px] font-bold mt-0.5 tracking-tight">{item.label}</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* ALL MODALS PRESERVED INTACT */}
+
+      {/* MARK AFFILIATE WITHDRAWAL AS PAID MODAL */}
+      {selectedWithdrawalForPay && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-7 shadow-2xl relative animate-in zoom-in-95 duration-150">
+            <button 
+              onClick={() => setSelectedWithdrawalForPay(null)}
+              className="absolute top-4 right-4 text-zinc-400 hover:text-white transition cursor-pointer font-bold text-lg"
+            >
+              ×
+            </button>
+
+            <div className="text-center mb-6">
+              <div className="inline-flex items-center justify-center p-3 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full mb-3">
+                <CheckCircle2 className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-display font-extrabold text-white">Confirm Manual Payout</h3>
+              <p className="text-zinc-400 text-xs mt-1">
+                Confirm you have completed the manual bank transfer for this affiliate.
+              </p>
+            </div>
+
+            <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4 mb-5 space-y-3">
+              <div className="flex justify-between items-center text-xs pb-2 border-b border-[#2e1015]">
+                <span className="text-zinc-400">Affiliate:</span>
+                <span className="font-bold text-white">{selectedWithdrawalForPay.full_name || selectedWithdrawalForPay.fullName || selectedWithdrawalForPay.username}</span>
+              </div>
+              <div className="flex justify-between items-center text-xs pb-2 border-b border-[#2e1015]">
+                <span className="text-zinc-400">Payout Amount:</span>
+                <span className="font-mono font-black text-emerald-400 text-sm">
+                  ₦{parseFloat(selectedWithdrawalForPay.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </span>
+              </div>
+              <div className="flex justify-between items-center text-xs pb-2 border-b border-[#2e1015]">
+                <span className="text-zinc-400">Bank Name:</span>
+                <span className="font-bold text-zinc-200">{selectedWithdrawalForPay.bank_name}</span>
+              </div>
+              <div className="flex justify-between items-center text-xs pb-2 border-b border-[#2e1015]">
+                <span className="text-zinc-400">Account Number:</span>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono font-bold text-zinc-100 bg-[#120507] px-2 py-0.5 rounded border border-[#2e1015]">
+                    {selectedWithdrawalForPay.account_number}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyAccount(selectedWithdrawalForPay.account_number, selectedWithdrawalForPay.id)}
+                    className="text-[10px] text-emerald-400 hover:text-emerald-300 font-bold cursor-pointer"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-zinc-400">Account Holder:</span>
+                <span className="font-bold text-zinc-300 text-right">{selectedWithdrawalForPay.account_name}</span>
+              </div>
+            </div>
+
+            <form onSubmit={handleConfirmPayWithdrawal} className="space-y-4">
+              <div>
+                <label className="block text-[11px] font-bold text-zinc-300 uppercase tracking-wider mb-1.5">
+                  Bank Transfer Reference / Note (Optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. TRF-19283921 or Access-Ref"
+                  value={paymentReferenceInput}
+                  onChange={(e) => setPaymentReferenceInput(e.target.value)}
+                  className="w-full bg-[#080203] border border-[#2e1015] rounded-xl px-3.5 py-2.5 text-white text-xs focus:outline-none focus:border-emerald-500 transition font-mono"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedWithdrawalForPay(null)}
+                  disabled={payingWithdrawal}
+                  className="flex-1 bg-[#080203] hover:bg-[#180608] border border-[#2e1015] text-zinc-300 font-bold py-2.5 rounded-xl text-xs transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={payingWithdrawal}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-emerald-950/40"
+                >
+                  {payingWithdrawal ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Confirming...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      <span>Confirm as Paid</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* DECLINE AFFILIATE WITHDRAWAL MODAL */}
+      {selectedWithdrawalForDecline && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-7 shadow-2xl relative animate-in zoom-in-95 duration-150">
+            <button 
+              onClick={() => setSelectedWithdrawalForDecline(null)}
+              className="absolute top-4 right-4 text-zinc-400 hover:text-white transition cursor-pointer font-bold text-lg"
+            >
+              ×
+            </button>
+
+            <div className="text-center mb-6">
+              <div className="inline-flex items-center justify-center p-3 bg-rose-500/10 text-rose-400 border border-rose-500/20 rounded-full mb-3">
+                <Ban className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-display font-extrabold text-white">Decline Withdrawal Request</h3>
+              <p className="text-zinc-400 text-xs mt-1">
+                The affiliate's available balance of <span className="text-emerald-400 font-bold">₦{parseFloat(selectedWithdrawalForDecline.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span> will be restored immediately.
+              </p>
+            </div>
+
+            <form onSubmit={handleConfirmDeclineWithdrawal} className="space-y-4">
+              <div>
+                <label className="block text-[11px] font-bold text-zinc-300 uppercase tracking-wider mb-1.5">
+                  Reason for Decline <span className="text-rose-400">*</span>
+                </label>
+                <textarea
+                  required
+                  rows={3}
+                  placeholder="e.g. Account number does not match account name. Please update bank details and request again."
+                  value={declineReasonInput}
+                  onChange={(e) => setDeclineReasonInput(e.target.value)}
+                  className="w-full bg-[#080203] border border-[#2e1015] rounded-xl p-3 text-white text-xs focus:outline-none focus:border-rose-500 transition resize-none"
+                />
+                <p className="text-[11px] text-zinc-500 mt-1">
+                  This explanation will be shown in the affiliate's portal and sent to their email.
+                </p>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedWithdrawalForDecline(null)}
+                  disabled={decliningWithdrawal}
+                  className="flex-1 bg-[#080203] hover:bg-[#180608] border border-[#2e1015] text-zinc-300 font-bold py-2.5 rounded-xl text-xs transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={decliningWithdrawal || !declineReasonInput.trim()}
+                  className="flex-1 bg-rose-600 hover:bg-rose-500 text-white font-bold py-2.5 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-rose-950/40 disabled:opacity-50"
+                >
+                  {decliningWithdrawal ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Declining...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Ban className="w-4 h-4" />
+                      <span>Confirm Decline</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* EDIT AFFILIATE PARTNER MODAL */}
       {editingAffiliateUser && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-[#11131e] border border-slate-800 rounded-2xl p-6 shadow-2xl relative">
+          <div className="w-full max-w-sm bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-2xl relative">
             <button 
               onClick={() => setEditingAffiliateUser(null)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white transition cursor-pointer font-bold text-lg"
+              className="absolute top-4 right-4 text-zinc-400 hover:text-white transition cursor-pointer font-bold text-lg"
             >
               ×
             </button>
@@ -5851,7 +6927,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 <Percent className="w-6 h-6" />
               </div>
               <h3 className="text-lg font-display font-extrabold text-white">Configure Referral Settings</h3>
-              <p className="text-slate-400 text-xs mt-1">
+              <p className="text-zinc-400 text-xs mt-1">
                 Customize affiliate properties for <span className="text-rose-400 font-bold">{editingAffiliateUser.fullName}</span>.
               </p>
             </div>
@@ -5859,8 +6935,8 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             <form onSubmit={handleSaveAffiliate} className="space-y-4">
               
               {/* Toggle Affiliate Status */}
-              <div className="flex items-center justify-between p-3 bg-[#07080c] rounded-xl border border-slate-800">
-                <span className="text-xs font-semibold text-slate-300">Is Active Affiliate?</span>
+              <div className="flex items-center justify-between p-3 bg-[#080203] rounded-xl border border-[#2e1015]">
+                <span className="text-xs font-semibold text-zinc-300">Is Active Affiliate?</span>
                 <input 
                   type="checkbox"
                   className="w-4 h-4 accent-rose-600 cursor-pointer"
@@ -5880,16 +6956,16 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               {/* Customize Affiliate Code */}
               {editIsAffiliate && (
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Unique Affiliate Code</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Unique Affiliate Code</label>
                   <input 
                     type="text" 
                     required
                     placeholder="e.g. DUWI123" 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs uppercase"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs uppercase"
                     value={editAffiliateCode}
                     onChange={(e) => setEditAffiliateCode(e.target.value.toUpperCase())}
                   />
-                  <span className="text-[9px] text-slate-500 block">This unique code will be tracked inside user signup referral links.</span>
+                  <span className="text-[9px] text-zinc-500 block">This unique code will be tracked inside user signup referral links.</span>
                 </div>
               )}
 
@@ -5908,10 +6984,10 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       {/* ADD SUBSCRIBER MODAL */}
       {isAddModalOpen && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="w-full max-w-lg bg-[#11131e] border border-slate-800 rounded-2xl p-6 shadow-2xl relative overflow-y-auto max-h-[90vh]">
+          <div className="w-full max-w-lg bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-2xl relative overflow-y-auto max-h-[90vh]">
             <button 
               onClick={() => setIsAddModalOpen(false)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white transition cursor-pointer font-bold text-lg"
+              className="absolute top-4 right-4 text-zinc-400 hover:text-white transition cursor-pointer font-bold text-lg"
             >
               ×
             </button>
@@ -5921,7 +6997,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 <UserPlus className="w-6 h-6" />
               </div>
               <h3 className="text-lg font-display font-extrabold text-white">Create New Subscriber</h3>
-              <p className="text-slate-400 text-xs mt-1">
+              <p className="text-zinc-400 text-xs mt-1">
                 Add a new user locally and configure their synced streaming account.
               </p>
             </div>
@@ -5935,24 +7011,24 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             <form onSubmit={handleAddUser} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Full Name</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Full Name</label>
                   <input 
                     type="text" 
                     required
                     placeholder="e.g. John Doe"
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formFullName}
                     onChange={(e) => setFormFullName(e.target.value)}
                   />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Username</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Username</label>
                   <input 
                     type="text" 
                     required
                     placeholder="e.g. johndoe"
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formUsername}
                     onChange={(e) => setFormUsername(e.target.value)}
                   />
@@ -5961,24 +7037,24 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Email Address</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Email Address</label>
                   <input 
                     type="email" 
                     required
                     placeholder="e.g. john@example.com"
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formEmail}
                     onChange={(e) => setFormEmail(e.target.value)}
                   />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Password</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Password</label>
                   <input 
                     type="text" 
                     required
                     placeholder="Enter password"
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formPassword}
                     onChange={(e) => setFormPassword(e.target.value)}
                   />
@@ -5987,9 +7063,9 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Subscription Status</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Subscription Status</label>
                   <select 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formSubscriptionStatus}
                     onChange={(e) => setFormSubscriptionStatus(e.target.value as any)}
                   >
@@ -6000,11 +7076,11 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Subscription Expiry Date</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Subscription Expiry Date</label>
                   <input 
                     type="date" 
                     required={formSubscriptionStatus === 'Active'}
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formSubscriptionExpiryDate}
                     onChange={(e) => setFormSubscriptionExpiryDate(e.target.value)}
                   />
@@ -6013,9 +7089,9 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Payment Status</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Payment Status</label>
                   <select 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formPaymentStatus}
                     onChange={(e) => setFormPaymentStatus(e.target.value as any)}
                   >
@@ -6025,9 +7101,9 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Account Status</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Account Status</label>
                   <select 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formAccountStatus}
                     onChange={(e) => setFormAccountStatus(e.target.value as any)}
                   >
@@ -6037,9 +7113,9 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">System Role</label>
+                  <label className="block text-xs font-semibold text-zinc-300">System Role</label>
                   <select 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formRole}
                     onChange={(e) => setFormRole(e.target.value as any)}
                   >
@@ -6049,20 +7125,20 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-slate-800 pt-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-[#2e1015] pt-3">
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Referred By (Affiliate Code)</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Referred By (Affiliate Code)</label>
                   <input 
                     type="text" 
                     placeholder="e.g. CODER123"
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formReferredBy}
                     onChange={(e) => setFormReferredBy(e.target.value)}
                   />
                 </div>
 
-                <div className="flex items-center gap-3 p-3 bg-[#07080c] rounded-xl border border-slate-800 self-end h-[38px]">
-                  <span className="text-xs font-semibold text-slate-300">Is Active Affiliate?</span>
+                <div className="flex items-center gap-3 p-3 bg-[#080203] rounded-xl border border-[#2e1015] self-end h-[38px]">
+                  <span className="text-xs font-semibold text-zinc-300">Is Active Affiliate?</span>
                   <input 
                     type="checkbox"
                     className="w-4 h-4 accent-rose-600 cursor-pointer"
@@ -6081,12 +7157,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
               {formIsAffiliate && (
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Unique Affiliate Code</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Unique Affiliate Code</label>
                   <input 
                     type="text" 
                     required
                     placeholder="e.g. DUWI123" 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs uppercase"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs uppercase"
                     value={formAffiliateCode}
                     onChange={(e) => setFormAffiliateCode(e.target.value.toUpperCase())}
                   />
@@ -6108,13 +7184,13 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       {/* EDIT SUBSCRIBER MODAL */}
       {isEditModalOpen && targetUser && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="w-full max-w-lg bg-[#11131e] border border-slate-800 rounded-2xl p-6 shadow-2xl relative overflow-y-auto max-h-[90vh]">
+          <div className="w-full max-w-lg bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-2xl relative overflow-y-auto max-h-[90vh]">
             <button 
               onClick={() => {
                 setIsEditModalOpen(false);
                 setTargetUser(null);
               }}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white transition cursor-pointer font-bold text-lg"
+              className="absolute top-4 right-4 text-zinc-400 hover:text-white transition cursor-pointer font-bold text-lg"
             >
               ×
             </button>
@@ -6124,7 +7200,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 <Edit className="w-6 h-6" />
               </div>
               <h3 className="text-lg font-display font-extrabold text-white">Modify Subscriber Profile</h3>
-              <p className="text-slate-400 text-xs mt-1">
+              <p className="text-zinc-400 text-xs mt-1">
                 Update account details for <span className="text-rose-400 font-bold">{targetUser.fullName}</span>.
               </p>
             </div>
@@ -6138,24 +7214,24 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             <form onSubmit={handleEditUser} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Full Name</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Full Name</label>
                   <input 
                     type="text" 
                     required
                     placeholder="e.g. John Doe"
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formFullName}
                     onChange={(e) => setFormFullName(e.target.value)}
                   />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Username</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Username</label>
                   <input 
                     type="text" 
                     required
                     placeholder="e.g. johndoe"
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formUsername}
                     onChange={(e) => setFormUsername(e.target.value)}
                   />
@@ -6164,23 +7240,23 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Email Address</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Email Address</label>
                   <input 
                     type="email" 
                     required
                     placeholder="e.g. john@example.com"
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formEmail}
                     onChange={(e) => setFormEmail(e.target.value)}
                   />
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Password (Leave blank to keep current)</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Password (Leave blank to keep current)</label>
                   <input 
                     type="password" 
                     placeholder="Enter new password"
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formPassword}
                     onChange={(e) => setFormPassword(e.target.value)}
                   />
@@ -6189,9 +7265,9 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Subscription Status</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Subscription Status</label>
                   <select 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formSubscriptionStatus}
                     onChange={(e) => setFormSubscriptionStatus(e.target.value as any)}
                   >
@@ -6202,11 +7278,11 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Subscription Expiry Date</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Subscription Expiry Date</label>
                   <input 
                     type="date" 
                     required={formSubscriptionStatus === 'Active'}
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formSubscriptionExpiryDate}
                     onChange={(e) => setFormSubscriptionExpiryDate(e.target.value)}
                   />
@@ -6215,9 +7291,9 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Payment Status</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Payment Status</label>
                   <select 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formPaymentStatus}
                     onChange={(e) => setFormPaymentStatus(e.target.value as any)}
                   >
@@ -6227,9 +7303,9 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Account Status</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Account Status</label>
                   <select 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formAccountStatus}
                     onChange={(e) => setFormAccountStatus(e.target.value as any)}
                   >
@@ -6239,9 +7315,9 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">System Role</label>
+                  <label className="block text-xs font-semibold text-zinc-300">System Role</label>
                   <select 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formRole}
                     onChange={(e) => setFormRole(e.target.value as any)}
                   >
@@ -6251,20 +7327,20 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-slate-800 pt-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-[#2e1015] pt-3">
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Referred By (Affiliate Code)</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Referred By (Affiliate Code)</label>
                   <input 
                     type="text" 
                     placeholder="e.g. CODER123"
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs focus:outline-none focus:border-rose-500 transition"
                     value={formReferredBy}
                     onChange={(e) => setFormReferredBy(e.target.value)}
                   />
                 </div>
 
-                <div className="flex items-center gap-3 p-3 bg-[#07080c] rounded-xl border border-slate-800 self-end h-[38px]">
-                  <span className="text-xs font-semibold text-slate-300">Is Active Affiliate?</span>
+                <div className="flex items-center gap-3 p-3 bg-[#080203] rounded-xl border border-[#2e1015] self-end h-[38px]">
+                  <span className="text-xs font-semibold text-zinc-300">Is Active Affiliate?</span>
                   <input 
                     type="checkbox"
                     className="w-4 h-4 accent-rose-600 cursor-pointer"
@@ -6283,12 +7359,12 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
               {formIsAffiliate && (
                 <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-slate-300">Unique Affiliate Code</label>
+                  <label className="block text-xs font-semibold text-zinc-300">Unique Affiliate Code</label>
                   <input 
                     type="text" 
                     required
                     placeholder="e.g. DUWI123" 
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2 px-3 text-white text-xs uppercase"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2 px-3 text-white text-xs uppercase"
                     value={formAffiliateCode}
                     onChange={(e) => setFormAffiliateCode(e.target.value.toUpperCase())}
                   />
@@ -6298,7 +7374,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               <button 
                 type="submit"
                 disabled={crudLoading}
-                className="w-full bg-amber-500 hover:bg-amber-600 text-[#090a0f] font-bold py-2.5 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs disabled:opacity-50"
+                className="w-full bg-amber-500 hover:bg-amber-600 text-[#0c0305] font-bold py-2.5 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-xs disabled:opacity-50"
               >
                 {crudLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Save Modifications'}
               </button>
@@ -6310,54 +7386,54 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       {/* BIRDS-EYE VIEW & USER MANAGEMENT MODAL */}
       {selectedUserForView && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="w-full max-w-lg bg-[#11131e] border border-slate-800 rounded-2xl p-6 shadow-2xl relative overflow-hidden">
+          <div className="w-full max-w-lg bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-2xl relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-[4px] bg-indigo-500"></div>
             
             <button 
               onClick={() => setSelectedUserForView(null)}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white transition cursor-pointer font-bold text-lg"
+              className="absolute top-4 right-4 text-zinc-400 hover:text-white transition cursor-pointer font-bold text-lg"
             >
               ×
             </button>
 
-            <div className="flex items-center gap-4 mb-6 border-b border-slate-800/60 pb-5">
+            <div className="flex items-center gap-4 mb-6 border-b border-[#2e1015]/60 pb-5">
               <div className="w-12 h-12 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 font-extrabold text-lg">
                 {selectedUserForView.fullName.charAt(0).toUpperCase()}
               </div>
               <div>
                 <h3 className="text-lg font-display font-extrabold text-white">{selectedUserForView.fullName}</h3>
-                <p className="text-slate-400 text-xs">@{selectedUserForView.username} • {selectedUserForView.email}</p>
+                <p className="text-zinc-400 text-xs">@{selectedUserForView.username} • {selectedUserForView.email}</p>
               </div>
             </div>
 
             {/* Birds-eye View Grid */}
             <div className="space-y-4">
-              <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Account Summary & Birds-eye View</h4>
+              <h4 className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2">Account Summary & Birds-eye View</h4>
               
               <div className="grid grid-cols-2 gap-3">
-                <div className="bg-[#07080c] border border-slate-800/60 p-3 rounded-xl">
-                  <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">Role</span>
-                  <span className={`inline-block text-[11px] font-bold mt-1 px-2 py-0.5 rounded ${selectedUserForView.role === 'admin' ? 'bg-rose-500/15 text-rose-400' : 'bg-slate-800 text-slate-300'}`}>
+                <div className="bg-[#080203] border border-[#2e1015]/60 p-3 rounded-xl">
+                  <span className="block text-[9px] font-bold text-zinc-500 uppercase tracking-wider">Role</span>
+                  <span className={`inline-block text-[11px] font-bold mt-1 px-2 py-0.5 rounded ${selectedUserForView.role === 'admin' ? 'bg-rose-500/15 text-rose-400' : 'bg-[#220a0e] text-zinc-300'}`}>
                     {selectedUserForView.role.toUpperCase()}
                   </span>
                 </div>
 
-                <div className="bg-[#07080c] border border-slate-800/60 p-3 rounded-xl">
-                  <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">Plan Access Status</span>
-                  <span className={`inline-block text-[11px] font-bold mt-1 px-2 py-0.5 rounded ${selectedUserForView.subscriptionStatus === 'Active' ? 'bg-emerald-500/15 text-emerald-400' : selectedUserForView.subscriptionStatus === 'Disabled' ? 'bg-slate-800 text-slate-400' : 'bg-rose-500/15 text-rose-400'}`}>
+                <div className="bg-[#080203] border border-[#2e1015]/60 p-3 rounded-xl">
+                  <span className="block text-[9px] font-bold text-zinc-500 uppercase tracking-wider">Plan Access Status</span>
+                  <span className={`inline-block text-[11px] font-bold mt-1 px-2 py-0.5 rounded ${selectedUserForView.subscriptionStatus === 'Active' ? 'bg-emerald-500/15 text-emerald-400' : selectedUserForView.subscriptionStatus === 'Disabled' ? 'bg-[#220a0e] text-zinc-400' : 'bg-rose-500/15 text-rose-400'}`}>
                     {selectedUserForView.subscriptionStatus.toUpperCase()}
                   </span>
                 </div>
 
-                <div className="bg-[#07080c] border border-slate-800/60 p-3 rounded-xl">
-                  <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">Payment Status</span>
+                <div className="bg-[#080203] border border-[#2e1015]/60 p-3 rounded-xl">
+                  <span className="block text-[9px] font-bold text-zinc-500 uppercase tracking-wider">Payment Status</span>
                   <span className={`inline-block text-[11px] font-bold mt-1 px-2 py-0.5 rounded ${selectedUserForView.paymentStatus === 'Paid' ? 'bg-emerald-500/15 text-emerald-400' : selectedUserForView.paymentStatus === 'Pending Verification' ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30' : 'bg-rose-500/15 text-rose-400'}`}>
                     {selectedUserForView.paymentStatus.toUpperCase()}
                   </span>
                 </div>
 
-                <div className="bg-[#07080c] border border-slate-800/60 p-3 rounded-xl">
-                  <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">Account State</span>
+                <div className="bg-[#080203] border border-[#2e1015]/60 p-3 rounded-xl">
+                  <span className="block text-[9px] font-bold text-zinc-500 uppercase tracking-wider">Account State</span>
                   <span className={`inline-block text-[11px] font-bold mt-1 px-2 py-0.5 rounded ${selectedUserForView.accountStatus === 'Active' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
                     {selectedUserForView.accountStatus ? selectedUserForView.accountStatus.toUpperCase() : 'DISABLED'}
                   </span>
@@ -6365,26 +7441,26 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
               </div>
 
               {/* Extended Details */}
-              <div className="bg-[#07080c] border border-slate-800/60 rounded-xl p-4 space-y-2.5 text-xs">
-                <div className="flex justify-between items-center border-b border-slate-800/40 pb-2">
-                  <span className="text-slate-500">Synced Server ID:</span>
-                  <span className="font-mono text-slate-300 truncate max-w-[200px]" title={selectedUserForView.jellyfinUserId || 'None'}>
+              <div className="bg-[#080203] border border-[#2e1015]/60 rounded-xl p-4 space-y-2.5 text-xs">
+                <div className="flex justify-between items-center border-b border-[#2e1015]/40 pb-2">
+                  <span className="text-zinc-500">Synced Server ID:</span>
+                  <span className="font-mono text-zinc-300 truncate max-w-[200px]" title={selectedUserForView.jellyfinUserId || 'None'}>
                     {selectedUserForView.jellyfinUserId || 'Not Synced'}
                   </span>
                 </div>
                 
-                <div className="flex justify-between items-center border-b border-slate-800/40 pb-2">
-                  <span className="text-slate-500">Affiliate Status:</span>
-                  <span className="text-slate-300">
+                <div className="flex justify-between items-center border-b border-[#2e1015]/40 pb-2">
+                  <span className="text-zinc-500">Affiliate Status:</span>
+                  <span className="text-zinc-300">
                     {selectedUserForView.isAffiliate ? (
                       <span className="text-emerald-400 font-bold">Yes (Code: {selectedUserForView.affiliateCode})</span>
                     ) : 'No'}
                   </span>
                 </div>
 
-                <div className="flex justify-between items-center border-b border-slate-800/40 pb-2">
-                  <span className="text-slate-500">Signed Up Date & Day:</span>
-                  <span className="text-slate-200 font-medium flex items-center gap-1.5 text-right">
+                <div className="flex justify-between items-center border-b border-[#2e1015]/40 pb-2">
+                  <span className="text-zinc-500">Signed Up Date & Day:</span>
+                  <span className="text-zinc-200 font-medium flex items-center gap-1.5 text-right">
                     {formatSignupDateAndDay(selectedUserForView.registrationDate)}
                     {isNewUser(selectedUserForView.registrationDate) && (
                       <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[9px] font-extrabold px-1.5 py-0.5 rounded font-mono">
@@ -6394,29 +7470,29 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   </span>
                 </div>
 
-                <div className="flex justify-between items-center border-b border-slate-800/40 pb-2">
-                  <span className="text-slate-500">Referred By Code:</span>
-                  <span className="text-slate-300 font-bold">{selectedUserForView.referredBy || 'None (Direct)'}</span>
+                <div className="flex justify-between items-center border-b border-[#2e1015]/40 pb-2">
+                  <span className="text-zinc-500">Referred By Code:</span>
+                  <span className="text-zinc-300 font-bold">{selectedUserForView.referredBy || 'None (Direct)'}</span>
                 </div>
 
-                <div className="flex justify-between items-center border-b border-slate-800/40 pb-2">
-                  <span className="text-slate-500">Subscription Started:</span>
-                  <span className="text-slate-300 font-mono">
+                <div className="flex justify-between items-center border-b border-[#2e1015]/40 pb-2">
+                  <span className="text-zinc-500">Subscription Started:</span>
+                  <span className="text-zinc-300 font-mono">
                     {selectedUserForView.subscriptionStartDate ? new Date(selectedUserForView.subscriptionStartDate).toLocaleDateString() + ' ' + new Date(selectedUserForView.subscriptionStartDate).toLocaleTimeString() : 'N/A'}
                   </span>
                 </div>
 
                 <div className="flex justify-between items-center">
-                  <span className="text-slate-500">Subscription Expiry:</span>
-                  <span className="text-slate-300 font-mono font-bold">
+                  <span className="text-zinc-500">Subscription Expiry:</span>
+                  <span className="text-zinc-300 font-mono font-bold">
                     {selectedUserForView.subscriptionExpiryDate ? new Date(selectedUserForView.subscriptionExpiryDate).toLocaleDateString() + ' ' + new Date(selectedUserForView.subscriptionExpiryDate).toLocaleTimeString() : 'N/A'}
                   </span>
                 </div>
               </div>
 
               {/* Action Controls */}
-              <div className="pt-4 border-t border-slate-800/60">
-                <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2.5">Instant Subscription Operations</span>
+              <div className="pt-4 border-t border-[#2e1015]/60">
+                <span className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2.5">Instant Subscription Operations</span>
                 
                 <div className="flex flex-wrap gap-2">
                   {selectedUserForView.role !== 'admin' && (
@@ -6440,7 +7516,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                               exp.setDate(exp.getDate() + 30);
                               setSelectedUserForView(prev => prev ? { ...prev, subscriptionExpiryDate: exp.toISOString() } : null);
                             }}
-                            className="bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 font-bold py-2 px-4 rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5"
+                            className="bg-[#180608] hover:bg-[#220a0e] border border-[#2e1015] text-zinc-200 font-bold py-2 px-4 rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5"
                           >
                             <RefreshCw className="w-3.5 h-3.5 text-rose-500" /> Renew 30 Days
                           </button>
@@ -6476,7 +7552,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                       setSelectedUserForView(null);
                       openEditModal(user);
                     }}
-                    className="bg-slate-900 hover:bg-slate-800 border border-slate-800 text-amber-400 font-bold py-2 px-4 rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5"
+                    className="bg-[#180608] hover:bg-[#220a0e] border border-[#2e1015] text-amber-400 font-bold py-2 px-4 rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5"
                   >
                     <Edit className="w-3.5 h-3.5" /> Edit Profile Details
                   </button>
@@ -6487,7 +7563,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             <div className="mt-6 flex justify-end">
               <button
                 onClick={() => setSelectedUserForView(null)}
-                className="bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white font-bold py-2 px-5 rounded-xl text-xs transition cursor-pointer"
+                className="bg-[#180608] hover:bg-[#220a0e] border border-[#2e1015] text-zinc-300 hover:text-white font-bold py-2 px-5 rounded-xl text-xs transition cursor-pointer"
               >
                 Close View
               </button>
@@ -6499,13 +7575,13 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       {/* DELETE SUBSCRIBER CONFIRMATION MODAL */}
       {isDeleteModalOpen && targetUser && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-[#11131e] border border-slate-800 rounded-2xl p-6 shadow-2xl relative">
+          <div className="w-full max-w-sm bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-2xl relative">
             <button 
               onClick={() => {
                 setIsDeleteModalOpen(false);
                 setTargetUser(null);
               }}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white transition cursor-pointer font-bold text-lg"
+              className="absolute top-4 right-4 text-zinc-400 hover:text-white transition cursor-pointer font-bold text-lg"
             >
               ×
             </button>
@@ -6515,10 +7591,10 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 <Trash2 className="w-6 h-6" />
               </div>
               <h3 className="text-lg font-display font-extrabold text-white">Delete Subscriber</h3>
-              <p className="text-slate-400 text-xs mt-2">
+              <p className="text-zinc-400 text-xs mt-2">
                 Are you absolutely sure you want to delete <span className="text-rose-400 font-bold">{targetUser.fullName}</span> (@{targetUser.username})?
               </p>
-              <p className="text-slate-500 text-[10px] mt-2">
+              <p className="text-zinc-500 text-[10px] mt-2">
                 This action is irreversible. The account will be deleted locally from the database AND removed from your streaming server.
               </p>
             </div>
@@ -6535,7 +7611,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   setIsDeleteModalOpen(false);
                   setTargetUser(null);
                 }}
-                className="flex-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white font-bold py-2.5 rounded-xl text-xs transition cursor-pointer"
+                className="flex-1 bg-[#180608] hover:bg-[#220a0e] border border-[#2e1015] text-zinc-300 hover:text-white font-bold py-2.5 rounded-xl text-xs transition cursor-pointer"
               >
                 Cancel
               </button>
@@ -6554,13 +7630,13 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
       {/* Decline Payment Modal */}
       {declineTargetUser && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#11131e] border border-slate-800 rounded-2xl max-w-md w-full p-6 relative shadow-2xl">
+          <div className="bg-[#120507] border border-[#2e1015] rounded-2xl max-w-md w-full p-6 relative shadow-2xl">
             <button
               onClick={() => {
                 setDeclineTargetUser(null);
                 setDeclineReasonText('');
               }}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white transition cursor-pointer font-bold text-lg"
+              className="absolute top-4 right-4 text-zinc-400 hover:text-white transition cursor-pointer font-bold text-lg"
             >
               ×
             </button>
@@ -6570,22 +7646,22 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                 <ShieldAlert className="w-6 h-6" />
               </div>
               <h3 className="text-lg font-display font-extrabold text-white">Decline Payment Request</h3>
-              <p className="text-slate-400 text-xs mt-2">
+              <p className="text-zinc-400 text-xs mt-2">
                 Specify why you are declining the payment request from <strong className="text-white">{declineTargetUser.fullName}</strong>. This reason will be visible to the user on their dashboard.
               </p>
             </div>
 
             <div className="space-y-4 mb-6">
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                  Decline Reason <span className="text-slate-600">(Optional)</span>
+                <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                  Decline Reason <span className="text-zinc-600">(Optional)</span>
                 </label>
                 <textarea
                   value={declineReasonText}
                   onChange={(e) => setDeclineReasonText(e.target.value)}
                   placeholder="e.g., Image uploaded is blurry, session ID is invalid, or payment was not received."
                   rows={3}
-                  className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-xs transition"
+                  className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-xs transition"
                 />
               </div>
             </div>
@@ -6596,7 +7672,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
                   setDeclineTargetUser(null);
                   setDeclineReasonText('');
                 }}
-                className="flex-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white font-bold py-2.5 rounded-xl text-xs transition cursor-pointer"
+                className="flex-1 bg-[#180608] hover:bg-[#220a0e] border border-[#2e1015] text-zinc-300 hover:text-white font-bold py-2.5 rounded-xl text-xs transition cursor-pointer"
               >
                 Cancel
               </button>
@@ -6625,17 +7701,17 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
           <div className="max-w-4xl max-h-[90vh] w-full h-full flex flex-col justify-center items-center relative">
             <button
               onClick={() => setFullScreenReceiptUrl(null)}
-              className="absolute top-0 right-0 bg-slate-900 hover:bg-slate-800 text-white font-black text-xl p-2.5 rounded-full border border-slate-800/80 z-10"
+              className="absolute top-0 right-0 bg-[#180608] hover:bg-[#220a0e] text-white font-black text-xl p-2.5 rounded-full border border-[#2e1015] z-10"
             >
               ×
             </button>
             <img 
               src={fullScreenReceiptUrl} 
               alt="Fullscreen Receipt Screenshot" 
-              className="max-w-full max-h-[85vh] object-contain rounded-lg border border-slate-800"
+              className="max-w-full max-h-[85vh] object-contain rounded-lg border border-[#2e1015]"
               onClick={(e) => e.stopPropagation()} 
             />
-            <p className="text-xs text-slate-400 mt-3 font-medium bg-slate-950/80 py-1.5 px-4 rounded-full border border-slate-800">
+            <p className="text-xs text-zinc-400 mt-3 font-medium bg-slate-950/80 py-1.5 px-4 rounded-full border border-[#2e1015]">
               Click anywhere outside the image to close.
             </p>
           </div>
@@ -6649,35 +7725,35 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
           onClick={() => setEmailModal(null)}
         >
           <div 
-            className="w-full max-w-5xl bg-[#11131e] border border-slate-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[85vh] relative"
+            className="w-full max-w-5xl bg-[#120507] border border-[#2e1015] rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[85vh] relative"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b border-slate-800/80 bg-[#07080c]">
+            <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b border-[#2e1015] bg-[#080203]">
               <div>
                 <h3 className="text-sm font-display font-bold text-white flex items-center gap-2">
                   <Eye className="w-4 h-4 text-emerald-400" />
                   <span>{emailModal.title}</span>
                 </h3>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  Subject: <span className="text-slate-200 font-semibold">{emailModal.subject}</span>
+                <p className="text-[11px] text-zinc-400 mt-0.5">
+                  Subject: <span className="text-zinc-200 font-semibold">{emailModal.subject}</span>
                 </p>
               </div>
 
               <div className="flex items-center gap-3">
                 {/* Device Selector */}
-                <div className="bg-[#11131e] p-1 rounded-lg border border-slate-800 flex items-center gap-1">
+                <div className="bg-[#120507] p-1 rounded-lg border border-[#2e1015] flex items-center gap-1">
                   <button
                     type="button"
                     onClick={() => setModalDevice('desktop')}
-                    className={`px-3 py-1 rounded text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${modalDevice === 'desktop' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                    className={`px-3 py-1 rounded text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${modalDevice === 'desktop' ? 'bg-emerald-600 text-white' : 'text-zinc-400 hover:text-white'}`}
                   >
                     <Monitor className="w-3.5 h-3.5" /> Desktop Mode
                   </button>
                   <button
                     type="button"
                     onClick={() => setModalDevice('mobile')}
-                    className={`px-3 py-1 rounded text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${modalDevice === 'mobile' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                    className={`px-3 py-1 rounded text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${modalDevice === 'mobile' ? 'bg-emerald-600 text-white' : 'text-zinc-400 hover:text-white'}`}
                   >
                     <Smartphone className="w-3.5 h-3.5" /> Mobile View (375px)
                   </button>
@@ -6685,7 +7761,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
 
                 <button
                   onClick={() => setEmailModal(null)}
-                  className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white flex items-center justify-center font-bold text-lg transition cursor-pointer"
+                  className="w-8 h-8 rounded-xl bg-[#220a0e] hover:bg-[#381018] text-zinc-300 hover:text-white flex items-center justify-center font-bold text-lg transition cursor-pointer"
                 >
                   ×
                 </button>
@@ -6693,7 +7769,7 @@ export default function AdminDashboard({ currentUser, onBackToPortal }: AdminDas
             </div>
 
             {/* Modal Body */}
-            <div className="flex-1 bg-[#07080c] p-6 flex justify-center items-center overflow-auto">
+            <div className="flex-1 bg-[#080203] p-6 flex justify-center items-center overflow-auto">
               <div 
                 className="w-full h-full transition-all duration-300 mx-auto shadow-2xl rounded-xl overflow-hidden bg-white"
                 style={{ maxWidth: modalDevice === 'mobile' ? '390px' : '100%' }}

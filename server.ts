@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import multer from 'multer';
 import { createServer as createViteServer } from 'vite';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import crypto from 'crypto';
@@ -13,28 +14,75 @@ import {
   replaceTemplateVars, 
   DEFAULT_VERIFICATION_TEMPLATE, 
   DEFAULT_WELCOME_TEMPLATE, 
-  DEFAULT_NOTIFICATION_TEMPLATE 
+  DEFAULT_NOTIFICATION_TEMPLATE,
+  DEFAULT_PASSWORD_RESET_SUBJECT,
+  DEFAULT_PASSWORD_RESET_TEMPLATE
 } from './server/email.js';
 
 const app = express();
 const PORT = 3000;
 
-// Sessions memory store is replaced with persistent MySQL DB sessions to survive server restarts/compiles
-// and prevent unauthorized access or 403 errors during active development sessions.
+// Ensure upload directories exist at startup
+const uploadDirectories = [
+  path.join(process.cwd(), 'uploads', 'landing'),
+  path.join(process.cwd(), 'uploads', 'notifications'),
+  path.join(process.cwd(), 'dist', 'uploads', 'landing'),
+  path.join(process.cwd(), 'dist', 'uploads', 'notifications'),
+  path.join(process.cwd(), 'public', 'uploads', 'landing'),
+  path.join(process.cwd(), 'public', 'uploads', 'notifications')
+];
+uploadDirectories.forEach(dir => {
+  try {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  } catch (e) {}
+});
 
-// JSON body parser (applied BEFORE other handlers, but we must make sure it doesn't break proxy)
+// Configure Multer for streaming high-capacity media uploads up to 250MB (supporting 200MB videos)
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dest = path.join(process.cwd(), 'uploads', 'landing');
+    if (!fs.existsSync(dest)) {
+      fs.mkdirSync(dest, { recursive: true });
+    }
+    cb(null, dest);
+  },
+  filename: (req, file, cb) => {
+    const ext = (path.extname(file.originalname) || '').toLowerCase();
+    const baseName = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+    const cleanFileName = `media_${baseName}_${Date.now()}${ext || '.mp4'}`;
+    cb(null, cleanFileName);
+  }
+});
+
+const uploadMiddleware = multer({
+  storage,
+  limits: {
+    fileSize: 250 * 1024 * 1024 // 250MB limit
+  }
+});
+
+// Serve uploaded files statically across all environments
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+app.use('/uploads', express.static(path.join(process.cwd(), 'public', 'uploads')));
+app.use('/uploads', express.static(path.join(process.cwd(), 'dist', 'uploads')));
+
+// JSON body parser (applied BEFORE other handlers, with 250MB support)
 app.use((req: any, res, next) => {
   // If request is for Jellyfin, skip body parsing so http-proxy-middleware can stream it natively
   if (req.url.startsWith('/jellyfin')) {
     next();
   } else {
     express.json({
+      limit: '250mb',
       verify: (reqVal: any, _res, buf) => {
         reqVal.rawBody = buf;
       }
     })(req, res, next);
   }
 });
+app.use(express.urlencoded({ limit: '250mb', extended: true }));
 
 // Custom Cookies and Session parser
 app.use(async (req: any, res, next) => {
@@ -127,6 +175,295 @@ app.use('/jellyfin', jellyfinProxy);
 // --- API Endpoints ---
 
 // Check server status (Has config, Has users)
+// =========================================================================
+// LANDING PAGE CMS ENDPOINTS (Hero Slides, About Config, FAQs)
+// =========================================================================
+
+// Public fetch for landing page content
+app.get('/api/landing/content', async (req: any, res) => {
+  try {
+    const content = await db.getLandingContent();
+    res.json(content);
+  } catch (err: any) {
+    console.error('Error fetching landing content:', err);
+    res.status(500).json({ error: 'Failed to fetch landing page content' });
+  }
+});
+
+// Admin save all landing content
+app.post('/api/admin/landing/content', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin session required.' });
+  }
+  try {
+    const { heroSlides, heroSlideDelaySeconds, about, faqs } = req.body;
+    if (heroSlides && Array.isArray(heroSlides)) {
+      await db.saveHeroSlides(heroSlides, heroSlideDelaySeconds);
+    }
+    if (about && typeof about === 'object') {
+      await db.saveAboutConfig(about);
+    }
+    if (faqs && Array.isArray(faqs)) {
+      await db.saveFaqs(faqs);
+    }
+    const updated = await db.getLandingContent();
+    res.json({ success: true, message: 'Landing page content saved successfully!', content: updated });
+  } catch (err: any) {
+    console.error('Error saving landing content:', err);
+    res.status(500).json({ error: err.message || 'Failed to save landing page content' });
+  }
+});
+
+// Admin save hero slides
+app.post('/api/admin/landing/hero-slides', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin session required.' });
+  }
+  try {
+    const { slides, delaySeconds } = req.body;
+    if (!Array.isArray(slides)) {
+      return res.status(400).json({ error: 'Invalid slides array' });
+    }
+    await db.saveHeroSlides(slides, delaySeconds);
+    const updated = await db.getLandingContent();
+    res.json({ success: true, message: 'Hero slides updated successfully!', heroSlides: updated.heroSlides, heroSlideDelaySeconds: updated.heroSlideDelaySeconds });
+  } catch (err: any) {
+    console.error('Error saving hero slides:', err);
+    res.status(500).json({ error: err.message || 'Failed to save hero slides' });
+  }
+});
+
+// Admin save about section
+app.post('/api/admin/landing/about', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin session required.' });
+  }
+  try {
+    const about = req.body;
+    if (!about || typeof about !== 'object') {
+      return res.status(400).json({ error: 'Invalid about configuration payload' });
+    }
+    await db.saveAboutConfig(about);
+    const updated = await db.getLandingContent();
+    res.json({ success: true, message: 'About section updated successfully!', about: updated.about });
+  } catch (err: any) {
+    console.error('Error saving about section:', err);
+    res.status(500).json({ error: err.message || 'Failed to save about section' });
+  }
+});
+
+// Admin save FAQs
+app.post('/api/admin/landing/faqs', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin session required.' });
+  }
+  try {
+    const { faqs } = req.body;
+    if (!Array.isArray(faqs)) {
+      return res.status(400).json({ error: 'Invalid faqs array' });
+    }
+    await db.saveFaqs(faqs);
+    const updated = await db.getLandingContent();
+    res.json({ success: true, message: 'FAQs updated successfully!', faqs: updated.faqs });
+  } catch (err: any) {
+    console.error('Error saving FAQs:', err);
+    res.status(500).json({ error: err.message || 'Failed to save FAQs' });
+  }
+});
+
+// POST /api/admin/landing/upload - Upload media files (images or videos up to 250MB)
+app.post('/api/admin/landing/upload', (req: any, res: any, next: any) => {
+  uploadMiddleware.single('file')(req, res, (err: any) => {
+    if (err) {
+      console.error('Multer upload error:', err);
+      return res.status(400).json({ error: err.message || 'File upload failed. Max size is 250MB.' });
+    }
+    next();
+  });
+}, async (req: any, res) => {
+  if (!req.user) {
+    const rawToken = (req.headers.authorization && req.headers.authorization.split(' ')[1]) || 
+                     req.query?.token || 
+                     req.body?.token || 
+                     req.cookies?.session;
+    if (rawToken) {
+      try {
+        const session = await db.getSession(rawToken);
+        if (session && session.expiresAt > Date.now()) {
+          req.user = await db.getUserById(session.userId);
+        }
+      } catch (err) {}
+    }
+  }
+
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized. Admin session required.' });
+  }
+
+  try {
+    const uploadDir = path.join('uploads', 'landing');
+    const distDirPath = path.join(process.cwd(), 'dist', uploadDir);
+    const publicDirPath = path.join(process.cwd(), 'public', uploadDir);
+    const uploadsRootPath = path.join(process.cwd(), uploadDir);
+
+    [distDirPath, publicDirPath, uploadsRootPath].forEach(dir => {
+      try {
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+      } catch (e) {}
+    });
+
+    let cleanFileName = '';
+    let fileSize = 0;
+    let originalName = '';
+    let fileExt = '';
+    let mimeType = '';
+
+    // Check if this is a chunked upload slice
+    const totalChunks = parseInt(req.body.totalChunks || req.query.totalChunks || '0', 10);
+    const chunkIndex = parseInt(req.body.chunkIndex || req.query.chunkIndex || '0', 10);
+    const uploadId = (req.body.uploadId || req.query.uploadId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+
+    if (totalChunks > 0 && uploadId) {
+      const tempDir = path.join(process.cwd(), 'uploads', 'landing', 'temp');
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+      const tempChunkFile = path.join(tempDir, `part_${uploadId}.tmp`);
+
+      let chunkBuffer: Buffer | null = null;
+      if (req.file) {
+        chunkBuffer = fs.readFileSync(req.file.path);
+        try { fs.unlinkSync(req.file.path); } catch (e) {}
+      } else if (req.body.chunkData) {
+        chunkBuffer = Buffer.from(req.body.chunkData.replace(/^data:[^;]+;base64,/, ''), 'base64');
+      }
+
+      if (!chunkBuffer || chunkBuffer.length === 0) {
+        return res.status(400).json({ error: `Empty chunk buffer at index ${chunkIndex}/${totalChunks}` });
+      }
+
+      if (chunkIndex === 0) {
+        fs.writeFileSync(tempChunkFile, chunkBuffer);
+      } else {
+        fs.appendFileSync(tempChunkFile, chunkBuffer);
+      }
+
+      if (chunkIndex >= totalChunks - 1) {
+        const reqFileName = req.body.fileName || req.query.fileName || 'media.mp4';
+        fileExt = (path.extname(reqFileName) || '.mp4').toLowerCase();
+        const baseName = path.basename(reqFileName, fileExt).replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+        cleanFileName = `media_${baseName}_${Date.now()}${fileExt}`;
+
+        const assembledBuffer = fs.readFileSync(tempChunkFile);
+        try { fs.unlinkSync(tempChunkFile); } catch (e) {}
+
+        const distFilePath = path.join(distDirPath, cleanFileName);
+        fs.writeFileSync(distFilePath, assembledBuffer);
+        try { fs.writeFileSync(path.join(publicDirPath, cleanFileName), assembledBuffer); } catch (e) {}
+        try { fs.writeFileSync(path.join(uploadsRootPath, cleanFileName), assembledBuffer); } catch (e) {}
+
+        fileSize = assembledBuffer.length;
+        originalName = reqFileName;
+        mimeType = req.body.fileType || '';
+
+        const videoExts = ['.mp4', '.webm', '.mov', '.mkv', '.avi', '.ogg', '.m4v', '.ts', '.m3u8', '.flv', '.wmv'];
+        const isVideo = videoExts.includes(fileExt) || (mimeType && mimeType.startsWith('video/'));
+        const mediaType = isVideo ? 'video' : 'image';
+        const relativeUrl = `/uploads/landing/${cleanFileName}`;
+
+        return res.json({
+          success: true,
+          url: relativeUrl,
+          fileName: cleanFileName,
+          originalName,
+          mediaType,
+          size: fileSize
+        });
+      } else {
+        return res.json({
+          success: true,
+          status: 'chunk_saved',
+          chunkIndex,
+          totalChunks
+        });
+      }
+    }
+
+    // Handle Multipart FormData file upload (single request)
+    if (req.file) {
+      cleanFileName = req.file.filename;
+      fileSize = req.file.size;
+      originalName = req.file.originalname;
+      fileExt = (path.extname(originalName) || '').toLowerCase();
+      mimeType = req.file.mimetype || '';
+
+      const uploadedFilePath = req.file.path;
+      // Mirror to dist and public directories for preview availability
+      try {
+        const distFilePath = path.join(distDirPath, cleanFileName);
+        if (!fs.existsSync(distFilePath) || distFilePath !== uploadedFilePath) {
+          fs.copyFileSync(uploadedFilePath, distFilePath);
+        }
+      } catch (e) {}
+
+      try {
+        const publicFilePath = path.join(publicDirPath, cleanFileName);
+        if (!fs.existsSync(publicFilePath) || publicFilePath !== uploadedFilePath) {
+          fs.copyFileSync(uploadedFilePath, publicFilePath);
+        }
+      } catch (e) {}
+    } else {
+      // Fallback for Base64 payload
+      const { base64Data, fileName, fileType } = req.body;
+      if (!base64Data || !fileName) {
+        return res.status(400).json({ error: 'No file or base64Data provided for upload.' });
+      }
+
+      originalName = fileName;
+      mimeType = fileType || '';
+      fileExt = (path.extname(fileName) || '').toLowerCase();
+      const sanitizedName = path.basename(fileName, fileExt).replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+      cleanFileName = `media_${sanitizedName}_${Date.now()}${fileExt || '.mp4'}`;
+
+      const base64Clean = base64Data.replace(/^data:[^;]+;base64,/, '');
+      const buffer = Buffer.from(base64Clean, 'base64');
+      fileSize = buffer.length;
+
+      const distFilePath = path.join(distDirPath, cleanFileName);
+      fs.writeFileSync(distFilePath, buffer);
+
+      try {
+        const publicFilePath = path.join(publicDirPath, cleanFileName);
+        fs.writeFileSync(publicFilePath, buffer);
+      } catch (e) {}
+
+      try {
+        const rootFilePath = path.join(uploadsRootPath, cleanFileName);
+        fs.writeFileSync(rootFilePath, buffer);
+      } catch (e) {}
+    }
+
+    const videoExts = ['.mp4', '.webm', '.mov', '.mkv', '.avi', '.ogg', '.m4v', '.ts', '.m3u8', '.flv', '.wmv'];
+    const isVideo = videoExts.includes(fileExt) || (mimeType && mimeType.startsWith('video/'));
+    const mediaType = isVideo ? 'video' : 'image';
+
+    const relativeUrl = `/uploads/landing/${cleanFileName}`;
+    res.json({
+      success: true,
+      url: relativeUrl,
+      fileName: cleanFileName,
+      originalName,
+      mediaType,
+      size: fileSize
+    });
+  } catch (err: any) {
+    console.error('Error uploading landing media:', err);
+    res.status(500).json({ error: err.message || 'Failed to upload media file' });
+  }
+});
+
 app.get('/api/status', async (req, res) => {
   try {
     if (!mysqlAvailable) {
@@ -295,6 +632,7 @@ app.post('/api/admin/config', async (req: any, res) => {
     bankName, 
     bankBeneficiary, 
     bankInstructions,
+    manualPaymentEnabled,
     chatbotInfo,
     chatbotInstructions,
     contactEmail,
@@ -359,6 +697,7 @@ app.post('/api/admin/config', async (req: any, res) => {
     bankName: bankName || '',
     bankBeneficiary: bankBeneficiary || '',
     bankInstructions: bankInstructions || '',
+    manualPaymentEnabled: manualPaymentEnabled !== undefined ? (manualPaymentEnabled ? 1 : 0) : (existingConfig?.manualPaymentEnabled !== undefined ? Number(existingConfig.manualPaymentEnabled) : 1),
     chatbotInfo: chatbotInfo || '',
     chatbotInstructions: chatbotInstructions || '',
     contactEmail: contactEmail || '',
@@ -904,6 +1243,209 @@ app.post('/api/auth/logout', async (req: any, res) => {
   res.json({ success: true, message: 'Logged out successfully' });
 });
 
+// =========================================================================
+// PASSWORD RESET / FORGOT PASSWORD FLOW
+// =========================================================================
+
+// POST /api/auth/forgot-password
+// Generates a single-use, 60-minute secure token and sends a reset link via email.
+// Always returns a generic success response to prevent account/email enumeration.
+app.post('/api/auth/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email || typeof email !== 'string' || !email.trim()) {
+      return res.status(400).json({ error: 'Please enter your email address.' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const user = await db.getUserByEmail(cleanEmail);
+
+    if (user) {
+      // Rate limiting: check recent requests in last 2 minutes
+      const recentCount = await db.getRecentResetRequestCount(user.id, 120);
+      if (recentCount < 3) {
+        // Generate a 32-byte (64 hex characters) cryptographically secure random token
+        const rawToken = crypto.randomBytes(32).toString('hex');
+        // Store only the SHA-256 hash in the database
+        const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+        // Token expires in 60 minutes
+        const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+        await db.createPasswordResetToken(user.id, tokenHash, expiresAt);
+
+        // Build the reset link pointing to the frontend reset page
+        const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'http';
+        const host = req.get('host') || 'localhost:3000';
+        const resetLink = `${proto}://${host}/reset-password?token=${rawToken}`;
+
+        const config = await db.getConfig();
+        const appName = 'CINJELLY Stream';
+        const subject = replaceTemplateVars(DEFAULT_PASSWORD_RESET_SUBJECT, user, config, {
+          app_name: appName,
+          reset_link: resetLink
+        });
+        const template = replaceTemplateVars(DEFAULT_PASSWORD_RESET_TEMPLATE, user, config, {
+          app_name: appName,
+          reset_link: resetLink
+        });
+
+        try {
+          await sendEmail(user.email, subject, template);
+        } catch (emailErr: any) {
+          console.warn('Password reset email sending error:', emailErr.message);
+        }
+      }
+    }
+
+    // Always respond with a generic success message to prevent user enumeration
+    res.json({
+      success: true,
+      message: 'If an account associated with that email exists, we have sent a secure password reset link to your inbox.'
+    });
+  } catch (err: any) {
+    console.error('Forgot password error:', err);
+    res.status(500).json({ error: 'Failed to process password reset request. Please try again later.' });
+  }
+});
+
+// GET /api/auth/verify-reset-token
+// Validates whether a given reset token is valid, unused, and not expired before showing the reset form.
+app.get('/api/auth/verify-reset-token', async (req, res) => {
+  try {
+    const rawToken = (req.query.token || '').toString().trim();
+    if (!rawToken) {
+      return res.status(400).json({ valid: false, error: 'Reset token is required.' });
+    }
+
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const tokenRecord = await db.getPasswordResetTokenByHash(tokenHash);
+
+    if (!tokenRecord) {
+      return res.status(400).json({
+        valid: false,
+        error: 'This password reset link is invalid or does not exist. Please request a new one.'
+      });
+    }
+
+    if (tokenRecord.usedAt) {
+      return res.status(400).json({
+        valid: false,
+        error: 'This password reset link has already been used. Please request a new password reset if needed.'
+      });
+    }
+
+    const expiresTime = new Date(tokenRecord.expiresAt).getTime();
+    if (isNaN(expiresTime) || expiresTime < Date.now()) {
+      return res.status(400).json({
+        valid: false,
+        error: 'This password reset link has expired (links are valid for 60 minutes). Please request a new one.'
+      });
+    }
+
+    const user = await db.getUserById(tokenRecord.userId);
+    if (!user) {
+      return res.status(400).json({
+        valid: false,
+        error: 'User account associated with this reset link was not found.'
+      });
+    }
+
+    // Return masked email (e.g. j***n@example.com) for safe UI verification display
+    const emailParts = user.email.split('@');
+    const localPart = emailParts[0];
+    const domainPart = emailParts[1] || '';
+    const maskedLocal = localPart.length > 2
+      ? `${localPart[0]}${'*'.repeat(Math.min(localPart.length - 2, 5))}${localPart[localPart.length - 1]}`
+      : `${localPart[0]}*`;
+    const maskedEmail = `${maskedLocal}@${domainPart}`;
+
+    res.json({
+      valid: true,
+      username: user.username,
+      email: maskedEmail
+    });
+  } catch (err: any) {
+    console.error('Verify reset token error:', err);
+    res.status(500).json({ valid: false, error: 'Failed to verify reset token.' });
+  }
+});
+
+// POST /api/auth/reset-password
+// Verifies token, updates user password hash, marks token used, syncs Jellyfin password, and invalidates all existing sessions.
+app.post('/api/auth/reset-password', async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    if (!token || typeof token !== 'string' || !token.trim()) {
+      return res.status(400).json({ error: 'Reset token is required.' });
+    }
+
+    if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters long.' });
+    }
+
+    const tokenHash = crypto.createHash('sha256').update(token.trim()).digest('hex');
+    const tokenRecord = await db.getPasswordResetTokenByHash(tokenHash);
+
+    if (!tokenRecord) {
+      return res.status(400).json({
+        error: 'This password reset link is invalid. Please request a new password reset.'
+      });
+    }
+
+    if (tokenRecord.usedAt) {
+      return res.status(400).json({
+        error: 'This password reset link has already been used. Please request a new password reset.'
+      });
+    }
+
+    const expiresTime = new Date(tokenRecord.expiresAt).getTime();
+    if (isNaN(expiresTime) || expiresTime < Date.now()) {
+      return res.status(400).json({
+        error: 'This password reset link has expired. Please request a new one.'
+      });
+    }
+
+    const user = await db.getUserById(tokenRecord.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User account associated with this token was not found.' });
+    }
+
+    // 1. Update password in the database
+    const newPasswordHash = hashPassword(newPassword);
+    await db.updateUser(user.id, { passwordHash: newPasswordHash });
+
+    // 2. Mark this token as used so it cannot be re-used
+    await db.markPasswordResetTokenUsed(tokenRecord.id);
+
+    // 3. Invalidate all active user sessions for security
+    await db.invalidateUserSessions(user.id);
+
+    // 4. Synchronize the updated password with Jellyfin server if connected
+    try {
+      const config = await db.getConfig();
+      if (config && user.jellyfinUserId) {
+        const jellyfin = new JellyfinService(config);
+        await jellyfin.updateUserPassword(user.jellyfinUserId, newPassword, user.username);
+        console.log(`Successfully synced updated password for user "${user.username}" to Jellyfin.`);
+      }
+    } catch (jellyfinErr: any) {
+      console.warn('Could not sync password update to Jellyfin server:', jellyfinErr.message);
+    }
+
+    // 5. Clear any existing session cookie
+    res.clearCookie('session');
+
+    res.json({
+      success: true,
+      message: 'Your password has been reset successfully! You can now log in with your new password.'
+    });
+  } catch (err: any) {
+    console.error('Reset password error:', err);
+    res.status(500).json({ error: 'Failed to reset password. Please try again.' });
+  }
+});
+
 app.get('/api/auth/me', async (req: any, res) => {
   try {
     if (!req.user) {
@@ -1087,6 +1629,7 @@ app.get('/api/payment/bank-info', async (req: any, res) => {
       bankName: config.bankName || '',
       bankBeneficiary: config.bankBeneficiary || '',
       bankInstructions: config.bankInstructions || '',
+      manualPaymentEnabled: config.manualPaymentEnabled !== undefined ? Boolean(config.manualPaymentEnabled) : true,
       chatbotInfo: config.chatbotInfo || '',
       chatbotInstructions: config.chatbotInstructions || '',
       contactEmail: config.contactEmail || '',
@@ -3418,6 +3961,10 @@ app.post('/api/payment/request-verification', async (req: any, res) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+  const config = await db.getConfig();
+  if (config && (config.manualPaymentEnabled === 0 || config.manualPaymentEnabled === false)) {
+    return res.status(403).json({ error: 'Manual bank transfer payments are currently disabled by the administrator.' });
+  }
   try {
     const updatedUser = await db.updateUser(req.user.id, {
       paymentStatus: 'Pending Verification'
@@ -3432,6 +3979,10 @@ app.post('/api/payment/request-verification', async (req: any, res) => {
 app.post('/api/payment/upload-receipt', async (req: any, res) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const config = await db.getConfig();
+  if (config && (config.manualPaymentEnabled === 0 || config.manualPaymentEnabled === false)) {
+    return res.status(403).json({ error: 'Manual bank transfer payments are currently disabled by the administrator.' });
   }
   try {
     const { base64Data, fileName, phone, transactionRef } = req.body;
@@ -3909,6 +4460,8 @@ app.get('/api/affiliate/stats', async (req: any, res) => {
     const affiliateCode = user.affiliateCode || '';
     const users = await db.getUsers();
     const commissions = await db.getCommissionsByAffiliate(user.id);
+    const balances = await db.getAffiliateBalances(user.id);
+    const withdrawals = await db.getAffiliateWithdrawals(user.id);
 
     const referredUsers = [];
     let registeredCount = 0;
@@ -3958,11 +4511,168 @@ app.get('/api/affiliate/stats', async (req: any, res) => {
       paidCommission,
       totalCommission,
       defaultCommission,
+      totalEarnings: balances.totalEarnings,
+      availableEarnings: balances.availableEarnings,
+      pendingWithdrawal: balances.pendingWithdrawal,
+      totalPaidOut: balances.totalPaidOut,
+      bankDetails: {
+        bankName: user.bankName || '',
+        accountNumber: user.accountNumber || '',
+        accountName: user.accountName || user.fullName
+      },
+      withdrawals,
       referredUsers,
       commissions
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/affiliate/withdrawals
+app.get('/api/affiliate/withdrawals', async (req: any, res) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const user = await db.getUserById(req.user.id);
+  if (!user || !user.isAffiliate) {
+    return res.status(403).json({ error: 'User is not registered as an affiliate' });
+  }
+
+  try {
+    const balances = await db.getAffiliateBalances(user.id);
+    const withdrawals = await db.getAffiliateWithdrawals(user.id);
+
+    res.json({
+      success: true,
+      balances,
+      withdrawals,
+      bankDetails: {
+        bankName: user.bankName || '',
+        accountNumber: user.accountNumber || '',
+        accountName: user.accountName || user.fullName
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/affiliate/withdrawal/request or /api/affiliate/withdrawals
+app.post(['/api/affiliate/withdrawal/request', '/api/affiliate/withdrawals'], async (req: any, res) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const user = await db.getUserById(req.user.id);
+  if (!user || !user.isAffiliate) {
+    return res.status(403).json({ error: 'User is not registered as an affiliate' });
+  }
+
+  const bankName = (req.body.bank_name || req.body.bankName || '').trim();
+  const accountNumber = (req.body.account_number || req.body.accountNumber || '').trim();
+  const accountName = (req.body.account_name || req.body.accountName || '').trim();
+  const requestedAmount = req.body.amount !== undefined ? Number(req.body.amount) : undefined;
+
+  if (!bankName) {
+    return res.status(400).json({ error: 'Please select or enter your destination bank name.' });
+  }
+  if (!accountNumber || accountNumber.length < 5) {
+    return res.status(400).json({ error: 'Please provide a valid destination bank account number.' });
+  }
+  if (!accountName) {
+    return res.status(400).json({ error: 'Please provide the account holder name.' });
+  }
+
+  try {
+    const withdrawal = await db.requestAffiliateWithdrawal(
+      user.id,
+      bankName,
+      accountNumber,
+      accountName,
+      requestedAmount
+    );
+
+    const updatedBalances = await db.getAffiliateBalances(user.id);
+
+    res.json({
+      success: true,
+      message: `Your withdrawal request for ₦${Number(withdrawal.amount).toFixed(2)} has been submitted successfully and is awaiting admin manual transfer.`,
+      withdrawal,
+      balances: updatedBalances
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/affiliate-withdrawals or /api/admin/affiliate/withdrawals
+app.get(['/api/admin/affiliate-withdrawals', '/api/admin/affiliate/withdrawals'], async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const statusFilter = typeof req.query.status === 'string' && req.query.status !== 'all' && req.query.status.trim() !== ''
+      ? req.query.status.trim()
+      : null;
+
+    const withdrawals = await db.getAllAffiliateWithdrawals(statusFilter);
+    res.json({
+      success: true,
+      withdrawals
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/affiliate-withdrawals/:id/pay
+app.post('/api/admin/affiliate-withdrawals/:id/pay', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  const withdrawalId = req.params.id;
+  const paymentRef = (req.body.payment_reference || req.body.paymentReference || '').trim();
+
+  try {
+    const updated = await db.markAffiliateWithdrawalAsPaid(withdrawalId, req.user.username, paymentRef);
+
+    res.json({
+      success: true,
+      message: 'Withdrawal marked as paid successfully.',
+      withdrawal: updated
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/affiliate-withdrawals/:id/decline
+app.post('/api/admin/affiliate-withdrawals/:id/decline', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  const withdrawalId = req.params.id;
+  const declineReason = (req.body.decline_reason || req.body.reason || '').trim();
+
+  if (!declineReason) {
+    return res.status(400).json({ error: 'Please provide a reason for declining this withdrawal request.' });
+  }
+
+  try {
+    const updated = await db.markAffiliateWithdrawalAsDeclined(withdrawalId, req.user.username, declineReason);
+
+    res.json({
+      success: true,
+      message: 'Withdrawal declined and balance restored to affiliate available earnings.',
+      withdrawal: updated
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
   }
 });
 
@@ -4243,6 +4953,37 @@ app.get('/api/admin/notifications/all', async (req: any, res) => {
   try {
     const allNotifs = await db.getBroadcastNotifications();
     res.json(allNotifs);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/notifications/all
+app.delete('/api/admin/notifications/all', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    await db.clearAllBroadcastNotifications();
+    res.json({ success: true, message: 'All notifications cleared' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/notifications/:id
+app.delete('/api/admin/notifications/:id', async (req: any, res) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  try {
+    const deleted = await db.deleteBroadcastNotification(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+    res.json({ success: true, message: 'Notification deleted' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

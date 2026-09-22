@@ -125,49 +125,49 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
 
   if (checkingEnv) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#090a0f] text-white">
+      <div className="min-h-screen flex items-center justify-center bg-[#0a0304] text-white">
         <div className="text-center space-y-4">
-          <Loader2 className="w-10 h-10 animate-spin text-rose-500 mx-auto" />
-          <p className="text-sm font-medium text-slate-300">Securing environment & validating keys...</p>
+          <Loader2 className="w-10 h-10 animate-spin text-[#d31d38] mx-auto" />
+          <p className="text-sm font-medium text-zinc-300">Securing environment & validating keys...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#090a0f] px-4 py-12 selection:bg-rose-600 selection:text-white" id="setup-wizard-container">
-      <div className="w-full max-w-lg bg-[#11131e] border border-slate-800/80 rounded-2xl overflow-hidden shadow-2xl p-8 sm:p-10 relative">
+    <div className="min-h-screen flex items-center justify-center bg-[#0a0304] px-4 py-12 selection:bg-[#d31d38] selection:text-white" id="setup-wizard-container">
+      <div className="w-full max-w-lg bg-[#120507] border border-[#2e1015] rounded-2xl overflow-hidden shadow-2xl p-8 sm:p-10 relative">
         
         {/* Soft elegant red/rose glow line */}
-        <div className="absolute top-0 left-0 right-0 h-[4px] bg-gradient-to-r from-rose-500 to-amber-500"></div>
+        <div className="absolute top-0 left-0 right-0 h-[4px] bg-gradient-to-r from-[#d31d38] to-[#ff4d64]"></div>
 
         {/* Back to Landing Button */}
         <div className="mb-6 flex justify-start">
           <button 
             type="button"
             onClick={() => { window.location.hash = ''; }}
-            className="flex items-center gap-2 text-slate-400 hover:text-white text-xs font-bold transition bg-slate-900 border border-slate-800/80 px-3.5 py-2 rounded-xl cursor-pointer"
+            className="flex items-center gap-2 text-zinc-400 hover:text-white text-xs font-bold transition bg-[#180608] border border-[#2e1015] px-3.5 py-2 rounded-xl cursor-pointer"
           >
-            <ArrowLeft className="w-3.5 h-3.5 text-rose-500" />
+            <ArrowLeft className="w-3.5 h-3.5 text-[#d31d38]" />
             <span>Back to Landing</span>
           </button>
         </div>
 
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center p-3.5 bg-rose-500/10 border border-rose-500/20 rounded-full mb-4 text-rose-500">
+          <div className="inline-flex items-center justify-center p-3.5 bg-[#d31d38]/10 border border-[#d31d38]/20 rounded-full mb-4 text-[#d31d38]">
             <Tv className="w-6 h-6" />
           </div>
           <h1 className="text-3xl font-display font-extrabold tracking-tight text-white sm:text-4xl">
             Stream Portal Setup
           </h1>
-          <p className="mt-2 text-slate-400 text-sm">
+          <p className="mt-2 text-zinc-400 text-sm">
             Create your master administrator account to manage streaming access.
           </p>
         </div>
 
         {error && (
-          <div className="mb-6 p-4 bg-rose-500/10 border border-rose-500/20 text-rose-200 text-xs rounded-xl flex gap-3 items-start leading-relaxed">
-            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-400" />
+          <div className="mb-6 p-4 bg-[#d31d38]/10 border border-[#d31d38]/20 text-rose-200 text-xs rounded-xl flex gap-3 items-start leading-relaxed">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-[#ff4d64]" />
             <span>{error}</span>
           </div>
         )}
@@ -197,7 +197,7 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
             </div>
 
             <div className="space-y-1">
-              <label htmlFor="serverUrl" className="block text-xs font-semibold text-slate-300">
+              <label htmlFor="serverUrl" className="block text-xs font-semibold text-zinc-300">
                 Media Server URL
               </label>
               <input
@@ -205,14 +205,14 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
                 id="serverUrl"
                 required
                 placeholder="e.g. https://cinode.zerolord.com"
-                className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-sm transition"
+                className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-[#d31d38] focus:ring-1 focus:ring-[#d31d38] text-sm transition"
                 value={serverUrl}
                 onChange={(e) => setServerUrl(e.target.value)}
               />
             </div>
 
             <div className="space-y-1">
-              <label htmlFor="jellyfinAdminUser" className="block text-xs font-semibold text-slate-300">
+              <label htmlFor="jellyfinAdminUser" className="block text-xs font-semibold text-zinc-300">
                 Server Admin Username
               </label>
               <input
@@ -220,28 +220,28 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
                 id="jellyfinAdminUser"
                 required
                 placeholder="e.g. admin"
-                className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-sm transition"
+                className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-[#d31d38] focus:ring-1 focus:ring-[#d31d38] text-sm transition"
                 value={jellyfinAdminUser}
                 onChange={(e) => setJellyfinAdminUser(e.target.value)}
               />
             </div>
 
             <div className="space-y-1">
-              <label htmlFor="jellyfinAdminPass" className="block text-xs font-semibold text-slate-300">
+              <label htmlFor="jellyfinAdminPass" className="block text-xs font-semibold text-zinc-300">
                 Server Admin Password (Optional)
               </label>
               <input
                 type="password"
                 id="jellyfinAdminPass"
                 placeholder="Enter password (if required for auth)"
-                className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-sm transition"
+                className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-[#d31d38] focus:ring-1 focus:ring-[#d31d38] text-sm transition"
                 value={jellyfinAdminPass}
                 onChange={(e) => setJellyfinAdminPass(e.target.value)}
               />
             </div>
 
             <div className="space-y-1">
-              <label htmlFor="apiKey" className="block text-xs font-semibold text-slate-300">
+              <label htmlFor="apiKey" className="block text-xs font-semibold text-zinc-300">
                 Server API Key
               </label>
               <input
@@ -249,11 +249,11 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
                 id="apiKey"
                 required
                 placeholder="Paste your Server API Key"
-                className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-sm transition"
+                className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-[#d31d38] focus:ring-1 focus:ring-[#d31d38] text-sm transition"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
               />
-              <span className="text-[10px] text-slate-500 block mt-1">
+              <span className="text-[10px] text-zinc-500 block mt-1">
                 Generated in Server Admin Dashboard &gt; API Keys
               </span>
             </div>
@@ -262,7 +262,7 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
               <button
                 type="submit"
                 disabled={savingConfig}
-                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition disabled:opacity-50 text-sm shadow-lg shadow-rose-950/20"
+                className="flex-1 bg-[#d31d38] hover:bg-[#b0162c] text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition disabled:opacity-50 text-sm shadow-lg shadow-rose-950/20"
               >
                 {savingConfig ? (
                   <>
@@ -278,7 +278,7 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
                 <button
                   type="button"
                   onClick={() => setStep(2)}
-                  className="bg-slate-900 hover:bg-slate-800 text-slate-300 font-bold py-3.5 px-5 rounded-xl text-sm transition border border-slate-800"
+                  className="bg-[#180608] hover:bg-[#2b0c12] text-zinc-300 font-bold py-3.5 px-5 rounded-xl text-sm transition border border-[#2e1015]"
                 >
                   Skip ➡️
                 </button>
@@ -289,7 +289,7 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
               <button
                 type="button"
                 onClick={verifyEnvStatus}
-                className="text-[11px] text-rose-400 hover:text-rose-300 font-bold transition hover:underline"
+                className="text-[11px] text-[#ff4d64] hover:text-rose-300 font-bold transition hover:underline"
               >
                 Verify Connection via Environment Variables Again
               </button>
@@ -304,20 +304,20 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
                   <strong>Step 2: Register Portal Administrator</strong>
                 </span>
               </div>
-              <p className="text-slate-400 text-[11px]">
+              <p className="text-zinc-400 text-[11px]">
                 Create your local administrator account to access the control panel.
               </p>
               <button
                 type="button"
                 onClick={() => setStep(1)}
-                className="text-left text-xs text-rose-400 hover:text-rose-300 underline font-semibold transition mt-1.5 w-fit cursor-pointer flex items-center gap-1"
+                className="text-left text-xs text-[#ff4d64] hover:text-rose-300 underline font-semibold transition mt-1.5 w-fit cursor-pointer flex items-center gap-1"
               >
                 ⬅️ Back to Jellyfin connection
               </button>
             </div>
 
             <div className="space-y-1">
-              <label htmlFor="fullName" className="block text-xs font-semibold text-slate-300">
+              <label htmlFor="fullName" className="block text-xs font-semibold text-zinc-300">
                 Full Name
               </label>
               <input
@@ -325,7 +325,7 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
                 id="fullName"
                 required
                 placeholder="e.g. John Doe"
-                className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-sm transition"
+                className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-[#d31d38] focus:ring-1 focus:ring-[#d31d38] text-sm transition"
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
               />
@@ -333,7 +333,7 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1">
-                <label htmlFor="username" className="block text-xs font-semibold text-slate-300">
+                <label htmlFor="username" className="block text-xs font-semibold text-zinc-300">
                   Username
                 </label>
                 <input
@@ -341,14 +341,14 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
                   id="username"
                   required
                   placeholder="e.g. admin"
-                  className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-sm transition"
+                  className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-[#d31d38] focus:ring-1 focus:ring-[#d31d38] text-sm transition"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                 />
               </div>
 
               <div className="space-y-1">
-                <label htmlFor="email" className="block text-xs font-semibold text-slate-300">
+                <label htmlFor="email" className="block text-xs font-semibold text-zinc-300">
                   Email Address
                 </label>
                 <input
@@ -356,7 +356,7 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
                   id="email"
                   required
                   placeholder="admin@yourportal.com"
-                  className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-sm transition"
+                  className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-[#d31d38] focus:ring-1 focus:ring-[#d31d38] text-sm transition"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                 />
@@ -364,7 +364,7 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
             </div>
 
             <div className="space-y-1">
-              <label htmlFor="password" className="block text-xs font-semibold text-slate-300">
+              <label htmlFor="password" className="block text-xs font-semibold text-zinc-300">
                 Password
               </label>
               <div className="relative">
@@ -373,13 +373,13 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
                   id="password"
                   required
                   placeholder="Create a strong security password"
-                  className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-sm transition"
+                  className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-[#d31d38] focus:ring-1 focus:ring-[#d31d38] text-sm transition"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
                 <button
                   type="button"
-                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-500 hover:text-white"
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-zinc-500 hover:text-white"
                   onClick={() => setShowAdminPass(!showAdminPass)}
                 >
                   {showAdminPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -390,7 +390,7 @@ export default function SetupWizard({ onSetupSuccess }: SetupWizardProps) {
             <button
               type="submit"
               disabled={loading}
-              className="w-full mt-6 bg-rose-600 hover:bg-rose-700 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition disabled:opacity-50 text-sm shadow-lg shadow-rose-950/20"
+              className="w-full mt-6 bg-[#d31d38] hover:bg-[#b0162c] text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition disabled:opacity-50 text-sm shadow-lg shadow-rose-950/20"
               id="portal-admin-submit"
             >
               {loading ? (

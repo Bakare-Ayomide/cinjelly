@@ -42,6 +42,7 @@ export interface JellyfinConfigDetails {
   defaultCommission?: number;
   iosDownloadUrl?: string;
   androidDownloadUrl?: string;
+  manualPaymentEnabled?: boolean;
 }
 
 export interface SquadMandate {
@@ -107,6 +108,32 @@ export interface Commission {
   updatedAt: string;
 }
 
+export interface AffiliateWithdrawal {
+  id: string;
+  affiliate_user_id: string;
+  affiliateName?: string;
+  affiliateUsername?: string;
+  affiliateEmail?: string;
+  fullName?: string;
+  full_name?: string;
+  username?: string;
+  email?: string;
+  phone?: string;
+  amount: number;
+  bank_name: string;
+  account_number: string;
+  account_name: string;
+  status: 'pending' | 'paid' | 'declined' | 'cancelled';
+  admin_note?: string | null;
+  requested_at: string;
+  processed_at?: string | null;
+  processed_by?: string | null;
+  payment_reference?: string | null;
+  decline_reason?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AffiliateStats {
   affiliateCode: string;
   registeredCount: number;
@@ -115,6 +142,17 @@ export interface AffiliateStats {
   approvedCommission: number;
   paidCommission: number;
   totalCommission: number;
+  defaultCommission?: number;
+  totalEarnings?: number;
+  availableEarnings?: number;
+  pendingWithdrawal?: number;
+  totalPaidOut?: number;
+  bankDetails?: {
+    bankName: string;
+    accountNumber: string;
+    accountName: string;
+  };
+  withdrawals?: AffiliateWithdrawal[];
   referredUsers: {
     id: string;
     fullName: string;
@@ -124,6 +162,58 @@ export interface AffiliateStats {
     subscriptionStatus: string;
   }[];
   commissions: Commission[];
+}
+
+export interface HeroSlideConfig {
+  id: string;
+  title: string;
+  tagline: string;
+  year: string;
+  rating: string;
+  quality: string;
+  duration: string;
+  mediaType: 'image' | 'video';
+  mediaUrl: string;
+  posterUrl?: string;
+  autoplaySound?: boolean;
+  announcement: string;
+  slideOrder: number;
+  isActive: boolean;
+}
+
+export interface LandingAboutCard {
+  id: string;
+  title: string;
+  desc: string;
+  icon?: string;
+}
+
+export interface LandingAboutConfig {
+  header: string;
+  badge: string;
+  subtitle: string;
+  contentHtml: string;
+  imageUrl: string;
+  imageAlt?: string;
+  captionTitle?: string;
+  captionDesc?: string;
+  featurePills?: string[];
+  cards?: LandingAboutCard[];
+}
+
+export interface LandingFaqItem {
+  id: string;
+  question: string;
+  answer: string;
+  faqOrder: number;
+  isActive: boolean;
+}
+
+export interface LandingPageContent {
+  heroSlides: HeroSlideConfig[];
+  heroSlideDelaySeconds: number;
+  about: LandingAboutConfig;
+  faqs: LandingFaqItem[];
 }
 
 declare global {

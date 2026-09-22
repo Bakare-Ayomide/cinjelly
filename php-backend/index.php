@@ -10,6 +10,13 @@ ini_set('display_errors', 0);
 ini_set('log_errors', 1);
 error_reporting(E_ALL);
 
+// Increase resource limits to support up to 250MB video/image uploads
+@ini_set('upload_max_filesize', '256M');
+@ini_set('post_max_size', '256M');
+@ini_set('memory_limit', '512M');
+@ini_set('max_execution_time', '300');
+@ini_set('max_input_time', '300');
+
 // Output buffering ensures no PHP warnings/notices leak before JSON headers
 ob_start();
 
@@ -185,6 +192,11 @@ if ($sessionToken) {
     }
 }
 
+function getCurrentUser() {
+    global $currentUser;
+    return $currentUser;
+}
+
 // Parse request input JSON payload
 $input = json_decode(file_get_contents('php://input'), true) ?? [];
 
@@ -205,6 +217,337 @@ function setSessionCookie($token) {
 // --- 3. API ROUTING DISPATCHER ---
 
 // GET /api/status
+// =========================================================================
+// LANDING PAGE CMS ENDPOINTS (Hero Slides, About Config, FAQs)
+// =========================================================================
+
+// Public fetch for landing page content
+if ($method === 'GET' && $path === '/api/landing/content') {
+    try {
+        $content = DB::getLandingContent();
+        echo json_encode($content);
+        exit;
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Failed to fetch landing page content: ' . $e->getMessage()]);
+        exit;
+    }
+}
+
+// Admin save all landing content
+if ($method === 'POST' && $path === '/api/admin/landing/content') {
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized. Admin session required.']);
+        exit;
+    }
+    $input = json_decode(file_get_contents('php://input'), true) ?? [];
+    try {
+        if (isset($input['heroSlides']) && is_array($input['heroSlides'])) {
+            $delay = isset($input['heroSlideDelaySeconds']) ? intval($input['heroSlideDelaySeconds']) : null;
+            DB::saveHeroSlides($input['heroSlides'], $delay);
+        }
+        if (isset($input['about']) && is_array($input['about'])) {
+            DB::saveAboutConfig($input['about']);
+        }
+        if (isset($input['faqs']) && is_array($input['faqs'])) {
+            DB::saveFaqs($input['faqs']);
+        }
+        $updated = DB::getLandingContent();
+        echo json_encode(['success' => true, 'message' => 'Landing page content saved successfully!', 'content' => $updated]);
+        exit;
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Failed to save landing content: ' . $e->getMessage()]);
+        exit;
+    }
+}
+
+// Admin save hero slides
+if ($method === 'POST' && $path === '/api/admin/landing/hero-slides') {
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized. Admin session required.']);
+        exit;
+    }
+    $input = json_decode(file_get_contents('php://input'), true) ?? [];
+    if (!isset($input['slides']) || !is_array($input['slides'])) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid slides array']);
+        exit;
+    }
+    try {
+        $delay = isset($input['delaySeconds']) ? intval($input['delaySeconds']) : null;
+        DB::saveHeroSlides($input['slides'], $delay);
+        $updated = DB::getLandingContent();
+        echo json_encode([
+            'success' => true,
+            'message' => 'Hero slides updated successfully!',
+            'heroSlides' => $updated['heroSlides'],
+            'heroSlideDelaySeconds' => $updated['heroSlideDelaySeconds']
+        ]);
+        exit;
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Failed to save hero slides: ' . $e->getMessage()]);
+        exit;
+    }
+}
+
+// Admin save about section
+if ($method === 'POST' && $path === '/api/admin/landing/about') {
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized. Admin session required.']);
+        exit;
+    }
+    $input = json_decode(file_get_contents('php://input'), true) ?? [];
+    if (!is_array($input)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid about payload']);
+        exit;
+    }
+    try {
+        DB::saveAboutConfig($input);
+        $updated = DB::getLandingContent();
+        echo json_encode([
+            'success' => true,
+            'message' => 'About section updated successfully!',
+            'about' => $updated['about']
+        ]);
+        exit;
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Failed to save about section: ' . $e->getMessage()]);
+        exit;
+    }
+}
+
+// Admin save FAQs
+if ($method === 'POST' && $path === '/api/admin/landing/faqs') {
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized. Admin session required.']);
+        exit;
+    }
+    $input = json_decode(file_get_contents('php://input'), true) ?? [];
+    if (!isset($input['faqs']) || !is_array($input['faqs'])) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid faqs array']);
+        exit;
+    }
+    try {
+        DB::saveFaqs($input['faqs']);
+        $updated = DB::getLandingContent();
+        echo json_encode([
+            'success' => true,
+            'message' => 'FAQs updated successfully!',
+            'faqs' => $updated['faqs']
+        ]);
+        exit;
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Failed to save FAQs: ' . $e->getMessage()]);
+        exit;
+    }
+}
+
+// POST /api/admin/landing/upload - Upload media files (images or videos up to 250MB with chunked upload protocol)
+if ($method === 'POST' && $path === '/api/admin/landing/upload') {
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        $tokenToCheck = $sessionToken ?: ($_GET['token'] ?? ($_POST['token'] ?? null));
+        if ($tokenToCheck) {
+            $session = DB::getSession($tokenToCheck);
+            $nowMs = round(microtime(true) * 1000);
+            if ($session && $session['expiresAt'] > $nowMs) {
+                $currentUser = DB::getUserById($session['userId']);
+            }
+        }
+    }
+
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized. Admin session required.']);
+        exit;
+    }
+
+    try {
+        $uploadDir = dirname(__DIR__) . '/uploads/landing';
+        if (!file_exists($uploadDir)) {
+            mkdir($uploadDir, 0777, true);
+        }
+        $tempDir = $uploadDir . '/temp';
+        if (!file_exists($tempDir)) {
+            mkdir($tempDir, 0777, true);
+        }
+
+        // Check if this is a Chunked Upload slice
+        $isChunked = isset($_POST['totalChunks']) || isset($_GET['totalChunks']);
+
+        if ($isChunked) {
+            $totalChunks = intval($_POST['totalChunks'] ?? $_GET['totalChunks']);
+            $chunkIndex = intval($_POST['chunkIndex'] ?? $_GET['chunkIndex']);
+            $uploadId = preg_replace('/[^a-zA-Z0-9_-]/', '', $_POST['uploadId'] ?? $_GET['uploadId'] ?? 'upload_' . time());
+            $fileName = $_POST['fileName'] ?? $_GET['fileName'] ?? 'media.mp4';
+            $fileType = $_POST['fileType'] ?? $_GET['fileType'] ?? '';
+
+            $tempChunkFile = $tempDir . '/part_' . $uploadId . '.tmp';
+
+            // Extract chunk payload
+            $chunkData = null;
+            if (!empty($_FILES['chunk']) && $_FILES['chunk']['error'] === UPLOAD_ERR_OK) {
+                $chunkData = file_get_contents($_FILES['chunk']['tmp_name']);
+            } elseif (!empty($_FILES['file']) && $_FILES['file']['error'] === UPLOAD_ERR_OK) {
+                $chunkData = file_get_contents($_FILES['file']['tmp_name']);
+            } else {
+                $rawInput = file_get_contents('php://input');
+                if (!empty($rawInput)) {
+                    $json = json_decode($rawInput, true);
+                    if ($json && !empty($json['chunkData'])) {
+                        $chunkData = base64_decode($json['chunkData']);
+                    } else {
+                        $chunkData = $rawInput;
+                    }
+                }
+            }
+
+            if ($chunkData === null || strlen($chunkData) === 0) {
+                $fileErr = !empty($_FILES['chunk']['error']) ? ' (Error code: ' . $_FILES['chunk']['error'] . ')' : '';
+                http_response_code(400);
+                echo json_encode(['error' => "Empty chunk data received at chunk {$chunkIndex}/{$totalChunks}{$fileErr}."]);
+                exit;
+            }
+
+            // Append or create chunk
+            if ($chunkIndex === 0) {
+                file_put_contents($tempChunkFile, $chunkData);
+            } else {
+                file_put_contents($tempChunkFile, $chunkData, FILE_APPEND);
+            }
+
+            // Final chunk reached -> finalize destination file
+            if ($chunkIndex >= $totalChunks - 1) {
+                $fileExt = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+                if (empty($fileExt)) {
+                    $fileExt = 'mp4';
+                }
+                $baseName = pathinfo($fileName, PATHINFO_FILENAME);
+                $cleanBase = preg_replace('/[^a-zA-Z0-9_-]/', '_', strtolower($baseName));
+                $cleanFileName = 'media_' . $cleanBase . '_' . time() . '.' . $fileExt;
+                $finalPath = $uploadDir . '/' . $cleanFileName;
+
+                if (!rename($tempChunkFile, $finalPath)) {
+                    copy($tempChunkFile, $finalPath);
+                    @unlink($tempChunkFile);
+                }
+
+                $fileSize = filesize($finalPath);
+                $videoExts = ['mp4', 'webm', 'mov', 'mkv', 'avi', 'ogg', 'm4v', 'ts', 'm3u8', 'flv', 'wmv', '3gp'];
+                $isVideo = in_array($fileExt, $videoExts) || (strpos($fileType, 'video/') === 0);
+                $mediaType = $isVideo ? 'video' : 'image';
+                $relativeUrl = '/uploads/landing/' . $cleanFileName;
+
+                echo json_encode([
+                    'success' => true,
+                    'url' => $relativeUrl,
+                    'fileName' => $cleanFileName,
+                    'mediaType' => $mediaType,
+                    'size' => $fileSize
+                ]);
+                exit;
+            } else {
+                // Chunk successfully stored
+                echo json_encode([
+                    'success' => true,
+                    'status' => 'chunk_saved',
+                    'chunkIndex' => $chunkIndex,
+                    'totalChunks' => $totalChunks
+                ]);
+                exit;
+            }
+        }
+
+        // Standard Single Request Upload (Fallback)
+        $cleanFileName = '';
+        $fileSize = 0;
+        $fileExt = 'mp4';
+        $fileMime = '';
+
+        // Handle Multipart FormData file upload (streaming, high efficiency for 200MB+ videos)
+        if (!empty($_FILES['file']) && $_FILES['file']['error'] === UPLOAD_ERR_OK) {
+            $uploadedFile = $_FILES['file'];
+            $origName = $uploadedFile['name'];
+            $fileExt = strtolower(pathinfo($origName, PATHINFO_EXTENSION));
+            if (empty($fileExt)) {
+                $fileExt = 'mp4';
+            }
+            $baseName = pathinfo($origName, PATHINFO_FILENAME);
+            $cleanBase = preg_replace('/[^a-zA-Z0-9_-]/', '_', strtolower($baseName));
+            $cleanFileName = 'media_' . $cleanBase . '_' . time() . '.' . $fileExt;
+            $filePath = $uploadDir . '/' . $cleanFileName;
+
+            if (!move_uploaded_file($uploadedFile['tmp_name'], $filePath)) {
+                throw new Exception('Failed to move uploaded file to destination directory.');
+            }
+            $fileSize = filesize($filePath);
+            $fileMime = $uploadedFile['type'] ?? '';
+        } else {
+            // Fallback to Base64 JSON payload
+            $input = json_decode(file_get_contents('php://input'), true) ?? [];
+            $base64Data = $input['base64Data'] ?? '';
+            $fileName = $input['fileName'] ?? '';
+            $fileType = $input['fileType'] ?? '';
+
+            if (empty($base64Data) || empty($fileName)) {
+                $uploadErr = !empty($_FILES['file']['error']) ? ' Upload error code: ' . $_FILES['file']['error'] : '';
+                http_response_code(400);
+                echo json_encode(['error' => 'No file uploaded or missing base64Data.' . $uploadErr]);
+                exit;
+            }
+
+            if (strpos($base64Data, ';base64,') !== false) {
+                $parts = explode(';base64,', $base64Data);
+                $base64Content = end($parts);
+            } else {
+                $base64Content = $base64Data;
+            }
+            $decodedData = base64_decode($base64Content);
+
+            $fileExt = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+            if (empty($fileExt)) {
+                $fileExt = 'mp4';
+            }
+            
+            $baseName = pathinfo($fileName, PATHINFO_FILENAME);
+            $cleanBase = preg_replace('/[^a-zA-Z0-9_-]/', '_', strtolower($baseName));
+            $cleanFileName = 'media_' . $cleanBase . '_' . time() . '.' . $fileExt;
+            $filePath = $uploadDir . '/' . $cleanFileName;
+
+            file_put_contents($filePath, $decodedData);
+            $fileSize = strlen($decodedData);
+            $fileMime = $fileType;
+        }
+
+        $relativeUrl = '/uploads/landing/' . $cleanFileName;
+
+        $videoExts = ['mp4', 'webm', 'mov', 'mkv', 'avi', 'ogg', 'm4v', 'ts', 'm3u8', 'flv', 'wmv', '3gp'];
+        $isVideo = in_array($fileExt, $videoExts) || (strpos($fileMime, 'video/') === 0);
+        $mediaType = $isVideo ? 'video' : 'image';
+
+        echo json_encode([
+            'success' => true,
+            'url' => $relativeUrl,
+            'fileName' => $cleanFileName,
+            'mediaType' => $mediaType,
+            'size' => $fileSize
+        ]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'Failed to save media: ' . $e->getMessage()]);
+    }
+    exit;
+}
+
 if ($method === 'GET' && $path === '/api/status') {
     $config = DB::getConfig();
     $users = DB::getUsers();
@@ -341,6 +684,7 @@ if ($path === '/api/admin/config') {
         $bankName = $input['bankName'] ?? ($existingConfig['bankName'] ?? '');
         $bankBeneficiary = $input['bankBeneficiary'] ?? ($existingConfig['bankBeneficiary'] ?? '');
         $bankInstructions = $input['bankInstructions'] ?? ($existingConfig['bankInstructions'] ?? '');
+        $manualPaymentEnabled = isset($input['manualPaymentEnabled']) ? ((bool)$input['manualPaymentEnabled'] ? 1 : 0) : ($existingConfig['manualPaymentEnabled'] ?? 1);
         $chatbotInfo = $input['chatbotInfo'] ?? ($existingConfig['chatbotInfo'] ?? '');
         $chatbotInstructions = $input['chatbotInstructions'] ?? ($existingConfig['chatbotInstructions'] ?? '');
         $contactEmail = $input['contactEmail'] ?? ($existingConfig['contactEmail'] ?? '');
@@ -379,6 +723,7 @@ if ($path === '/api/admin/config') {
             'bankName' => $bankName,
             'bankBeneficiary' => $bankBeneficiary,
             'bankInstructions' => $bankInstructions,
+            'manualPaymentEnabled' => $manualPaymentEnabled,
             'chatbotInfo' => $chatbotInfo,
             'chatbotInstructions' => $chatbotInstructions,
             'contactEmail' => $contactEmail,
@@ -892,6 +1237,249 @@ if ($method === 'POST' && $path === '/api/auth/logout') {
     exit;
 }
 
+// =========================================================================
+// PASSWORD RESET / FORGOT PASSWORD FLOW (PHP Backend)
+// =========================================================================
+
+// POST /api/auth/forgot-password
+if ($method === 'POST' && $path === '/api/auth/forgot-password') {
+    $email = trim($input['email'] ?? '');
+    if (empty($email)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Please enter your email address.']);
+        exit;
+    }
+
+    $cleanEmail = strtolower($email);
+    $user = DB::getUserByEmail($cleanEmail);
+    if (!$user) {
+        $user = DB::getUserByUsername($email);
+    }
+
+    if ($user && !empty($user['email'])) {
+        $recentCount = DB::getRecentResetRequestCount($user['id'], 900); // 15 minutes window
+        if ($recentCount < 10) {
+            $rawToken = bin2hex(random_bytes(32));
+            $tokenHash = hash('sha256', $rawToken);
+            $expiresAt = date(DATE_ISO8601, time() + 60 * 60);
+
+            DB::createPasswordResetToken($user['id'], $tokenHash, $expiresAt);
+
+            $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ||
+                       ($_SERVER['SERVER_PORT'] ?? 80) == 443 ||
+                       ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https';
+            $protocol = $isHttps ? 'https://' : 'http://';
+            $host = !empty($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'zerolord.com';
+            $resetLink = "{$protocol}{$host}/reset-password?token={$rawToken}";
+
+            $config = DB::getConfig();
+            $subject = "Reset Your Password - CINJELLY Stream";
+            $template = "<div style=\"font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #0c0406; color: #e2e8f0; padding: 32px 24px; border-radius: 16px; border: 1px solid #2e1015;\">
+  <div style=\"text-align: center; margin-bottom: 28px;\">
+    <div style=\"display: inline-block; padding: 10px 18px; background: rgba(211, 29, 56, 0.15); border: 1px solid rgba(211, 29, 56, 0.3); border-radius: 12px; margin-bottom: 12px;\">
+      <span style=\"font-size: 22px; font-weight: 900; color: #ff4d64; letter-spacing: -0.5px;\">CINJELLY</span>
+    </div>
+    <h1 style=\"color: #ffffff; font-size: 22px; margin: 0; font-weight: 800;\">Password Reset Request</h1>
+    <p style=\"color: #a1a1aa; font-size: 13px; margin-top: 6px;\">Secure account verification for CINJELLY Stream</p>
+  </div>
+  <div style=\"background-color: #14070a; border: 1px solid #2e1015; padding: 26px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);\">
+    <h2 style=\"color: #ffffff; font-size: 18px; margin-top: 0; font-weight: 700;\">Hello, {{username}} 👋</h2>
+    <p style=\"color: #d4d4d8; font-size: 14px; line-height: 1.6; margin-bottom: 24px;\">
+      We received a request to reset the password for your Cinode streaming account. Click the button below to choose a new password:
+    </p>
+    <div style=\"text-align: center; margin: 28px 0;\">
+      <a href=\"{{reset_link}}\" style=\"background: linear-gradient(135deg, #d31d38, #b0162c); color: #ffffff; font-weight: 800; padding: 14px 34px; text-decoration: none; border-radius: 10px; font-size: 14px; display: inline-block; letter-spacing: 0.5px; box-shadow: 0 4px 18px rgba(211,29,56,0.45); text-transform: uppercase;\">Reset Password</a>
+    </div>
+    <p style=\"color: #a1a1aa; font-size: 12px; line-height: 1.5; margin-top: 20px;\">
+      ⏱️ <strong>Security Notice:</strong> This password reset link is valid for <strong>60 minutes</strong> and can only be used once.
+    </p>
+    <p style=\"color: #f59e0b; font-size: 12px; line-height: 1.5; margin-top: 14px; background: rgba(245, 158, 11, 0.1); padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(245, 158, 11, 0.2);\">
+      📬 <strong>Tip:</strong> If you don't see this email in your inbox within a few minutes, please check your <strong>Spam</strong> or <strong>Junk</strong> folder.
+    </p>
+    <p style=\"color: #71717a; font-size: 12px; line-height: 1.5; margin-top: 14px;\">
+      If you did not request a password reset, you can safely ignore this email. Your current password will remain completely secure and unchanged.
+    </p>
+    <hr style=\"border: 0; border-top: 1px solid #2e1015; margin: 24px 0 16px 0;\">
+    <p style=\"color: #71717a; font-size: 11px; word-break: break-all; margin: 0;\">
+      If the button above does not work, copy and paste this link into your browser:<br>
+      <a href=\"{{reset_link}}\" style=\"color: #ff4d64; text-decoration: underline;\">{{reset_link}}</a>
+    </p>
+  </div>
+  <p style=\"color: #52525b; font-size: 11px; text-align: center; margin-top: 24px;\">
+    Cinode 4K Cinema Network • Automated Security System
+  </p>
+</div>";
+
+            $body = replace_template_vars($template, $user, $config, [
+                'reset_link' => $resetLink,
+                'app_name' => 'CINJELLY Stream'
+            ]);
+
+            try {
+                $sendRes = send_smtp_email($user['email'], $subject, $body, $config);
+                if (!$sendRes['success']) {
+                    error_log("[Password Reset] Email send failed for {$user['email']}: " . ($sendRes['error'] ?? 'Unknown error'));
+                    @file_put_contents(__DIR__ . '/email_error_log.txt', date('[Y-m-d H:i:s] ') . "Reset email failed to {$user['email']}: " . ($sendRes['error'] ?? '') . "\n", FILE_APPEND);
+                } else {
+                    @file_put_contents(__DIR__ . '/email_error_log.txt', date('[Y-m-d H:i:s] ') . "Reset email successfully sent to {$user['email']}\n", FILE_APPEND);
+                }
+            } catch (Exception $e) {
+                error_log("Failed to deliver reset email: " . $e->getMessage());
+                @file_put_contents(__DIR__ . '/email_error_log.txt', date('[Y-m-d H:i:s] ') . "Exception in reset email to {$user['email']}: " . $e->getMessage() . "\n", FILE_APPEND);
+            }
+        } else {
+            @file_put_contents(__DIR__ . '/email_error_log.txt', date('[Y-m-d H:i:s] ') . "Reset rate limited for user {$user['id']} ({$user['email']}): {$recentCount} requests in 15min\n", FILE_APPEND);
+        }
+    }
+
+    echo json_encode([
+        'success' => true,
+        'message' => 'If an account associated with that email exists, we have sent a password reset link. Please check your Inbox and Spam/Junk folder.'
+    ]);
+    exit;
+}
+
+// GET /api/auth/verify-reset-token
+if ($method === 'GET' && $path === '/api/auth/verify-reset-token') {
+    $rawToken = trim($_GET['token'] ?? '');
+    if (empty($rawToken)) {
+        http_response_code(400);
+        echo json_encode(['valid' => false, 'error' => 'Reset token is required.']);
+        exit;
+    }
+
+    $tokenHash = hash('sha256', $rawToken);
+    $tokenRecord = DB::getPasswordResetTokenByHash($tokenHash);
+
+    if (!$tokenRecord) {
+        http_response_code(400);
+        echo json_encode(['valid' => false, 'error' => 'This password reset link is invalid or does not exist. Please request a new one.']);
+        exit;
+    }
+
+    if (!empty($tokenRecord['usedAt'])) {
+        http_response_code(400);
+        echo json_encode(['valid' => false, 'error' => 'This password reset link has already been used. Please request a new password reset if needed.']);
+        exit;
+    }
+
+    $expiresTime = strtotime($tokenRecord['expiresAt']);
+    if ($expiresTime === false || $expiresTime < time()) {
+        http_response_code(400);
+        echo json_encode(['valid' => false, 'error' => 'This password reset link has expired (links are valid for 60 minutes). Please request a new one.']);
+        exit;
+    }
+
+    $user = DB::getUserById($tokenRecord['userId']);
+    if (!$user) {
+        http_response_code(400);
+        echo json_encode(['valid' => false, 'error' => 'User account associated with this reset link was not found.']);
+        exit;
+    }
+
+    $emailParts = explode('@', $user['email']);
+    $localPart = $emailParts[0] ?? '';
+    $domainPart = $emailParts[1] ?? '';
+    $maskedLocal = strlen($localPart) > 2
+        ? $localPart[0] . str_repeat('*', min(strlen($localPart) - 2, 5)) . substr($localPart, -1)
+        : $localPart[0] . '*';
+    $maskedEmail = "{$maskedLocal}@{$domainPart}";
+
+    echo json_encode([
+        'valid' => true,
+        'username' => $user['username'],
+        'email' => $maskedEmail
+    ]);
+    exit;
+}
+
+// POST /api/auth/reset-password
+if ($method === 'POST' && $path === '/api/auth/reset-password') {
+    $token = trim($input['token'] ?? '');
+    $newPassword = $input['newPassword'] ?? '';
+
+    if (empty($token)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Reset token is required.']);
+        exit;
+    }
+
+    if (empty($newPassword) || strlen($newPassword) < 6) {
+        http_response_code(400);
+        echo json_encode(['error' => 'New password must be at least 6 characters long.']);
+        exit;
+    }
+
+    $tokenHash = hash('sha256', $token);
+    $tokenRecord = DB::getPasswordResetTokenByHash($tokenHash);
+
+    if (!$tokenRecord) {
+        http_response_code(400);
+        echo json_encode(['error' => 'This password reset link is invalid. Please request a new password reset.']);
+        exit;
+    }
+
+    if (!empty($tokenRecord['usedAt'])) {
+        http_response_code(400);
+        echo json_encode(['error' => 'This password reset link has already been used. Please request a new password reset.']);
+        exit;
+    }
+
+    $expiresTime = strtotime($tokenRecord['expiresAt']);
+    if ($expiresTime === false || $expiresTime < time()) {
+        http_response_code(400);
+        echo json_encode(['error' => 'This password reset link has expired. Please request a new one.']);
+        exit;
+    }
+
+    $user = DB::getUserById($tokenRecord['userId']);
+    if (!$user) {
+        http_response_code(404);
+        echo json_encode(['error' => 'User account associated with this token was not found.']);
+        exit;
+    }
+
+    // 1. Update password in the database
+    $newPasswordHash = DB::hashPassword($newPassword);
+    DB::updateUser($user['id'], ['passwordHash' => $newPasswordHash]);
+
+    // 2. Mark token used
+    DB::markPasswordResetTokenUsed($tokenRecord['id']);
+
+    // 3. Invalidate all user sessions
+    DB::invalidateUserSessions($user['id']);
+
+    // 4. Update Jellyfin password
+    try {
+        $config = DB::getConfig();
+        if ($config && !empty($user['jellyfinUserId'])) {
+            $jellyfin = new JellyfinService($config);
+            $jellyfin->updateUserPassword($user['jellyfinUserId'], $newPassword, $user['username']);
+        }
+    } catch (Exception $e) {
+        error_log("Could not sync password update to Jellyfin server: " . $e->getMessage());
+    }
+
+    // 5. Clear session cookie
+    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ||
+               ($_SERVER['SERVER_PORT'] ?? 80) == 443 ||
+               ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https';
+
+    setcookie('session', '', [
+        'expires' => time() - 3600,
+        'path' => '/',
+        'secure' => $isHttps,
+        'httponly' => true,
+        'samesite' => $isHttps ? 'None' : 'Lax'
+    ]);
+
+    echo json_encode([
+        'success' => true,
+        'message' => 'Your password has been reset successfully! You can now log in with your new password.'
+    ]);
+    exit;
+}
+
 // GET /api/auth/me
 if ($method === 'GET' && $path === '/api/auth/me') {
     if (!$currentUser) {
@@ -1093,6 +1681,7 @@ if ($method === 'GET' && $path === '/api/payment/bank-info') {
         'bankName' => $config['bankName'] ?? '',
         'bankBeneficiary' => $config['bankBeneficiary'] ?? '',
         'bankInstructions' => $config['bankInstructions'] ?? '',
+        'manualPaymentEnabled' => isset($config['manualPaymentEnabled']) ? !empty($config['manualPaymentEnabled']) : true,
         'chatbotInfo' => $config['chatbotInfo'] ?? '',
         'chatbotInstructions' => $config['chatbotInstructions'] ?? '',
         'contactEmail' => $config['contactEmail'] ?? '',
@@ -2777,6 +3366,12 @@ if ($method === 'POST' && $path === '/api/payment/request-verification') {
         echo json_encode(['error' => 'Unauthorized']);
         exit;
     }
+    $config = DB::getConfig();
+    if (isset($config['manualPaymentEnabled']) && empty($config['manualPaymentEnabled'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Manual bank transfer payments are currently disabled by the administrator.']);
+        exit;
+    }
     try {
         $updatedUser = DB::updateUser($currentUser['id'], [
             'paymentStatus' => 'Pending Verification'
@@ -2794,6 +3389,13 @@ if ($method === 'POST' && $path === '/api/payment/upload-receipt') {
     if (!$currentUser) {
         http_response_code(401);
         echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+
+    $config = DB::getConfig();
+    if (isset($config['manualPaymentEnabled']) && empty($config['manualPaymentEnabled'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Manual bank transfer payments are currently disabled by the administrator.']);
         exit;
     }
 
@@ -3562,6 +4164,41 @@ if ($method === 'GET' && $path === '/api/admin/notifications/all') {
     exit;
 }
 
+// DELETE /api/admin/notifications/all
+if ($method === 'DELETE' && $path === '/api/admin/notifications/all') {
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+    try {
+        DB::clearAllBroadcastNotifications();
+        echo json_encode(['success' => true, 'message' => 'All notifications cleared']);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// DELETE /api/admin/notifications/{id}
+if ($method === 'DELETE' && preg_match('#^/api/admin/notifications/([^/]+)$#', $path, $matches)) {
+    $notifId = $matches[1];
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+    try {
+        DB::deleteBroadcastNotification($notifId);
+        echo json_encode(['success' => true, 'message' => 'Notification deleted']);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
 // POST /api/admin/notifications/upload
 if ($method === 'POST' && $path === '/api/admin/notifications/upload') {
     if (!$currentUser || $currentUser['role'] !== 'admin') {
@@ -3813,6 +4450,9 @@ if ($method === 'GET' && $path === '/api/affiliate/stats') {
             }
         }
 
+        $balances = DB::getAffiliateBalances($currentUser['id']);
+        $withdrawals = DB::getAffiliateWithdrawals($currentUser['id']);
+
         echo json_encode([
             'affiliateCode' => $affiliateCode,
             'registeredCount' => $registeredCount,
@@ -3822,11 +4462,215 @@ if ($method === 'GET' && $path === '/api/affiliate/stats') {
             'paidCommission' => $paidCommission,
             'totalCommission' => $totalCommission,
             'defaultCommission' => $defaultCommission,
+            // Withdrawal metrics
+            'totalEarnings' => $balances['totalEarnings'],
+            'availableEarnings' => $balances['availableEarnings'],
+            'pendingWithdrawal' => $balances['pendingWithdrawal'],
+            'totalPaidOut' => $balances['totalPaidOut'],
+            'bankDetails' => [
+                'bankName' => $currentUser['bankName'] ?? '',
+                'accountNumber' => $currentUser['accountNumber'] ?? '',
+                'accountName' => $currentUser['accountName'] ?? $currentUser['fullName']
+            ],
+            'withdrawals' => $withdrawals,
             'referredUsers' => $referredUsers,
             'commissions' => $commissions
         ]);
     } catch (Exception $e) {
         http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// GET /api/affiliate/withdrawals
+if ($method === 'GET' && $path === '/api/affiliate/withdrawals') {
+    if (!$currentUser) {
+        http_response_code(401);
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+
+    if (empty($currentUser['isAffiliate'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'User is not registered as an affiliate']);
+        exit;
+    }
+
+    try {
+        $balances = DB::getAffiliateBalances($currentUser['id']);
+        $withdrawals = DB::getAffiliateWithdrawals($currentUser['id']);
+
+        echo json_encode([
+            'success' => true,
+            'balances' => $balances,
+            'withdrawals' => $withdrawals,
+            'bankDetails' => [
+                'bankName' => $currentUser['bankName'] ?? '',
+                'accountNumber' => $currentUser['accountNumber'] ?? '',
+                'accountName' => $currentUser['accountName'] ?? $currentUser['fullName']
+            ]
+        ]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// POST /api/affiliate/withdrawal/request or POST /api/affiliate/withdrawals
+if ($method === 'POST' && ($path === '/api/affiliate/withdrawal/request' || $path === '/api/affiliate/withdrawals')) {
+    if (!$currentUser) {
+        http_response_code(401);
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+
+    if (empty($currentUser['isAffiliate'])) {
+        http_response_code(403);
+        echo json_encode(['error' => 'User is not registered as an affiliate']);
+        exit;
+    }
+
+    $bankName = trim($input['bank_name'] ?? ($input['bankName'] ?? ''));
+    $accountNumber = trim($input['account_number'] ?? ($input['accountNumber'] ?? ''));
+    $accountName = trim($input['account_name'] ?? ($input['accountName'] ?? ''));
+    $requestedAmount = isset($input['amount']) ? (float)$input['amount'] : null;
+
+    if (empty($bankName)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Please provide a valid destination bank name.']);
+        exit;
+    }
+
+    if (empty($accountNumber) || strlen($accountNumber) < 5) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Please provide a valid bank account number.']);
+        exit;
+    }
+
+    if (empty($accountName)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Please provide the account holder name.']);
+        exit;
+    }
+
+    try {
+        $withdrawal = DB::requestAffiliateWithdrawal(
+            $currentUser['id'],
+            $bankName,
+            $accountNumber,
+            $accountName,
+            $requestedAmount
+        );
+
+        $updatedBalances = DB::getAffiliateBalances($currentUser['id']);
+
+        echo json_encode([
+            'success' => true,
+            'message' => 'Your withdrawal request for ₦' . number_format($withdrawal['amount'], 2) . ' has been submitted successfully and is awaiting admin manual transfer.',
+            'withdrawal' => $withdrawal,
+            'balances' => $updatedBalances
+        ]);
+    } catch (Exception $e) {
+        http_response_code(400);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// GET /api/admin/affiliate-withdrawals or GET /api/admin/affiliate/withdrawals
+if ($method === 'GET' && ($path === '/api/admin/affiliate-withdrawals' || $path === '/api/admin/affiliate/withdrawals')) {
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+
+    try {
+        $statusFilter = isset($_GET['status']) ? trim($_GET['status']) : null;
+        if ($statusFilter === 'all' || empty($statusFilter)) {
+            $statusFilter = null;
+        }
+
+        $withdrawals = DB::getAllAffiliateWithdrawals($statusFilter);
+        echo json_encode([
+            'success' => true,
+            'withdrawals' => $withdrawals
+        ]);
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// POST /api/admin/affiliate-withdrawals/{id}/pay
+if ($method === 'POST' && preg_match('#^/api/admin/affiliate-withdrawals/([^/]+)/pay$#', $path, $matches)) {
+    $withdrawalId = $matches[1];
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+
+    $paymentRef = trim($input['payment_reference'] ?? ($input['paymentReference'] ?? ''));
+
+    try {
+        $config = DB::getConfig();
+        $updated = DB::markAffiliateWithdrawalAsPaid($withdrawalId, $currentUser['username'], $paymentRef);
+        $affiliateUser = DB::getUserById($updated['affiliate_user_id']);
+
+        // Send email receipt to affiliate
+        if ($affiliateUser) {
+            send_affiliate_withdrawal_paid_email($affiliateUser, $updated, $config);
+        }
+
+        echo json_encode([
+            'success' => true,
+            'message' => 'Withdrawal marked as paid successfully.',
+            'withdrawal' => $updated
+        ]);
+    } catch (Exception $e) {
+        http_response_code(400);
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// POST /api/admin/affiliate-withdrawals/{id}/decline
+if ($method === 'POST' && preg_match('#^/api/admin/affiliate-withdrawals/([^/]+)/decline$#', $path, $matches)) {
+    $withdrawalId = $matches[1];
+    if (!$currentUser || $currentUser['role'] !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Unauthorized']);
+        exit;
+    }
+
+    $declineReason = trim($input['decline_reason'] ?? ($input['reason'] ?? ''));
+    if (empty($declineReason)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Please provide a reason for declining this withdrawal request.']);
+        exit;
+    }
+
+    try {
+        $config = DB::getConfig();
+        $updated = DB::markAffiliateWithdrawalAsDeclined($withdrawalId, $currentUser['username'], $declineReason);
+        $affiliateUser = DB::getUserById($updated['affiliate_user_id']);
+
+        // Send decline email to affiliate
+        if ($affiliateUser) {
+            send_affiliate_withdrawal_declined_email($affiliateUser, $updated, $config);
+        }
+
+        echo json_encode([
+            'success' => true,
+            'message' => 'Withdrawal declined and balance restored to affiliate available earnings.',
+            'withdrawal' => $updated
+        ]);
+    } catch (Exception $e) {
+        http_response_code(400);
         echo json_encode(['error' => $e->getMessage()]);
     }
     exit;

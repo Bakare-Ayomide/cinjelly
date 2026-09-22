@@ -70,6 +70,47 @@ export const DEFAULT_NOTIFICATION_TEMPLATE = `<div style="font-family: Arial, sa
   </div>
 </div>`;
 
+export const DEFAULT_PASSWORD_RESET_SUBJECT = 'Reset Your Password - {app_name}';
+export const DEFAULT_PASSWORD_RESET_TEMPLATE = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #0c0406; color: #e2e8f0; padding: 32px 24px; border-radius: 16px; border: 1px solid #2e1015;">
+  <div style="text-align: center; margin-bottom: 28px;">
+    <div style="display: inline-block; padding: 10px 18px; background: rgba(211, 29, 56, 0.15); border: 1px solid rgba(211, 29, 56, 0.3); border-radius: 12px; margin-bottom: 12px;">
+      <span style="font-size: 22px; font-weight: 900; color: #ff4d64; letter-spacing: -0.5px;">CINJELLY</span>
+    </div>
+    <h1 style="color: #ffffff; font-size: 22px; margin: 0; font-weight: 800;">Password Reset Request</h1>
+    <p style="color: #a1a1aa; font-size: 13px; margin-top: 6px;">Secure account verification for {app_name}</p>
+  </div>
+  
+  <div style="background-color: #14070a; border: 1px solid #2e1015; padding: 26px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.5);">
+    <h2 style="color: #ffffff; font-size: 18px; margin-top: 0; font-weight: 700;">Hello, {username} 👋</h2>
+    <p style="color: #d4d4d8; font-size: 14px; line-height: 1.6; margin-bottom: 24px;">
+      We received a request to reset the password for your Cinode streaming account. Click the button below to choose a new password:
+    </p>
+    
+    <div style="text-align: center; margin: 28px 0;">
+      <a href="{reset_link}" style="background: linear-gradient(135deg, #d31d38, #b0162c); color: #ffffff; font-weight: 800; padding: 14px 34px; text-decoration: none; border-radius: 10px; font-size: 14px; display: inline-block; letter-spacing: 0.5px; box-shadow: 0 4px 18px rgba(211,29,56,0.45); text-transform: uppercase;">Reset Password</a>
+    </div>
+    
+    <p style="color: #a1a1aa; font-size: 12px; line-height: 1.5; margin-top: 20px;">
+      ⏱️ <strong>Security Notice:</strong> This password reset link is valid for <strong>60 minutes</strong> and can only be used once.
+    </p>
+
+    <p style="color: #71717a; font-size: 12px; line-height: 1.5; margin-top: 14px;">
+      If you did not request a password reset, you can safely ignore this email. Your current password will remain completely secure and unchanged.
+    </p>
+    
+    <hr style="border: 0; border-top: 1px solid #2e1015; margin: 24px 0 16px 0;">
+    
+    <p style="color: #71717a; font-size: 11px; word-break: break-all; margin: 0;">
+      If the button above does not work, copy and paste this link into your browser:<br>
+      <a href="{reset_link}" style="color: #ff4d64; text-decoration: underline;">{reset_link}</a>
+    </p>
+  </div>
+  
+  <p style="color: #52525b; font-size: 11px; text-align: center; margin-top: 24px;">
+    Cinode 4K Cinema Network • Automated Security System
+  </p>
+</div>`;
+
 export function replaceTemplateVariables(template: string, vars: Record<string, string>): string {
   let result = template || '';
   Object.keys(vars).forEach(key => {

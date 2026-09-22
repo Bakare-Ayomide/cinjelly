@@ -3,10 +3,56 @@ import {
   Tv, LogOut, CheckCircle, AlertTriangle, Play, ShieldAlert, CreditCard, 
   Loader2, RefreshCw, Key, HelpCircle, ArrowLeft, ExternalLink, X, Info, UserCheck, Calendar,
   Users, DollarSign, Gift, Clock, Share2, Copy, Check, Percent, MessageSquare, PlusCircle, Bell,
-  Smartphone, Download, Building2, Landmark, ShieldCheck
+  Smartphone, Download, Building2, Landmark, ShieldCheck, Menu, Film, Compass, ChevronRight, Settings, Sparkles,
+  Wallet, Banknote, ArrowUpRight, CheckCircle2, AlertCircle
 } from 'lucide-react';
-import { User, SquadMandate } from '../types';
+import { User, SquadMandate, AffiliateWithdrawal } from '../types';
 import { apiFetch } from '../lib/api';
+
+const NIGERIAN_BANKS = [
+  'Access Bank',
+  'Access Bank (Diamond)',
+  'ALAT by WEMA',
+  'Bowen Microfinance Bank',
+  'Carbon',
+  'Citibank Nigeria',
+  'Ecobank Nigeria',
+  'FairMoney Microfinance Bank',
+  'Fidelity Bank',
+  'First Bank of Nigeria',
+  'First City Monument Bank (FCMB)',
+  'Globus Bank',
+  'Guaranty Trust Bank (GTBank)',
+  'Heritage Bank',
+  'Jaiz Bank',
+  'Keystone Bank',
+  'Kuda Microfinance Bank',
+  'Lotus Bank',
+  'Moniepoint Microfinance Bank',
+  'OPay (PayCom)',
+  'Optimus Bank',
+  'Palmpay',
+  'Parallex Bank',
+  'Polaris Bank',
+  'PremiumTrust Bank',
+  'Providus Bank',
+  'Rubies Bank',
+  'Safe Haven Microfinance Bank',
+  'Signature Bank',
+  'Stanbic IBTC Bank',
+  'Standard Chartered Bank',
+  'Sterling Bank',
+  'SunTrust Bank',
+  'TAJ Bank',
+  'Titan Trust Bank',
+  'Union Bank of Nigeria',
+  'United Bank for Africa (UBA)',
+  'Unity Bank',
+  'VFD Microfinance Bank',
+  'Wema Bank',
+  'Zenith Bank',
+  'Other Bank (Type Custom Name)'
+];
 
 interface UserPortalProps {
   user: User;
@@ -23,10 +69,24 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
   const [success, setSuccess] = useState<string | null>(null);
   
   // Affiliate stats state
+  // Native Mobile App Screen Tab Navigation State
+  const [activeTab, setActiveTab] = useState<'overview' | 'subscription' | 'direct_debit' | 'requests' | 'affiliate' | 'apps' | 'support' | 'account'>('overview');
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
   const [affiliateStats, setAffiliateStats] = useState<any | null>(null);
   const [loadingStats, setLoadingStats] = useState(false);
   const [copied, setCopied] = useState(false);
   const [joiningAffiliate, setJoiningAffiliate] = useState(false);
+
+  // Affiliate Manual Withdrawal State
+  const [showWithdrawModal, setShowWithdrawModal] = useState(false);
+  const [withdrawBankName, setWithdrawBankName] = useState('Guaranty Trust Bank (GTBank)');
+  const [withdrawAccountNumber, setWithdrawAccountNumber] = useState('');
+  const [withdrawAccountName, setWithdrawAccountName] = useState('');
+  const [withdrawCustomBank, setWithdrawCustomBank] = useState('');
+  const [withdrawLoading, setWithdrawLoading] = useState(false);
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
+  const [withdrawSuccess, setWithdrawSuccess] = useState<string | null>(null);
 
   // Credentials sync state
   const [showSyncModal, setShowSyncModal] = useState(false);
@@ -1141,6 +1201,9 @@ export default function UserPortal({ user, jellyfinToken, onLogout, onReloadUser
       if (response.ok) {
         const data = await response.json();
         setBankInfo(data);
+        if (data && (data.manualPaymentEnabled === false || data.manualPaymentEnabled === 0)) {
+          setShowManualPay(false);
+        }
       }
     } catch (err) {
       console.error('Error fetching bank info:', err);
@@ -1320,6 +1383,95 @@ Note: My payment receipt has been uploaded to the portal.`;
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleOpenWithdrawModal = () => {
+    setWithdrawError(null);
+    setWithdrawSuccess(null);
+    
+    // Prefill bank details if previously saved
+    if (affiliateStats?.bankDetails?.bankName) {
+      if (NIGERIAN_BANKS.includes(affiliateStats.bankDetails.bankName)) {
+        setWithdrawBankName(affiliateStats.bankDetails.bankName);
+        setWithdrawCustomBank('');
+      } else {
+        setWithdrawBankName('Other Bank (Type Custom Name)');
+        setWithdrawCustomBank(affiliateStats.bankDetails.bankName);
+      }
+    } else if (!withdrawBankName) {
+      setWithdrawBankName('Guaranty Trust Bank (GTBank)');
+    }
+
+    if (affiliateStats?.bankDetails?.accountNumber) {
+      setWithdrawAccountNumber(affiliateStats.bankDetails.accountNumber);
+    }
+    if (affiliateStats?.bankDetails?.accountName) {
+      setWithdrawAccountName(affiliateStats.bankDetails.accountName);
+    } else if (!withdrawAccountName) {
+      setWithdrawAccountName(user.fullName || '');
+    }
+
+    setShowWithdrawModal(true);
+  };
+
+  const handleWithdrawalRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setWithdrawError(null);
+    setWithdrawSuccess(null);
+
+    const effectiveBankName = withdrawBankName === 'Other Bank (Type Custom Name)' 
+      ? withdrawCustomBank.trim() 
+      : withdrawBankName.trim();
+
+    if (!effectiveBankName) {
+      setWithdrawError('Please specify your destination bank name.');
+      return;
+    }
+
+    if (!withdrawAccountNumber.trim() || withdrawAccountNumber.trim().length < 5) {
+      setWithdrawError('Please enter a valid bank account number (10 digits).');
+      return;
+    }
+
+    if (!withdrawAccountName.trim()) {
+      setWithdrawError('Please enter the exact bank account holder name.');
+      return;
+    }
+
+    const available = Number(affiliateStats?.availableEarnings ?? 0);
+    if (available <= 0) {
+      setWithdrawError('You do not have any available earnings to withdraw.');
+      return;
+    }
+
+    setWithdrawLoading(true);
+    try {
+      const response = await apiFetch('/api/affiliate/withdrawal/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bank_name: effectiveBankName,
+          account_number: withdrawAccountNumber.trim(),
+          account_name: withdrawAccountName.trim(),
+          amount: available
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to submit withdrawal request.');
+      }
+
+      setWithdrawSuccess(data.message || 'Withdrawal request submitted successfully.');
+      await fetchAffiliateStats();
+      setTimeout(() => {
+        setShowWithdrawModal(false);
+      }, 2500);
+    } catch (err: any) {
+      setWithdrawError(err.message || 'An error occurred while submitting withdrawal.');
+    } finally {
+      setWithdrawLoading(false);
+    }
+  };
+
   const isExplicitlyDisabled = user.accountStatus === 'Disabled' || user.subscriptionStatus === 'Disabled';
   const isActive = user.role === 'admin' || (!isExplicitlyDisabled && (user.subscriptionStatus === 'Active' || user.accountStatus === 'Active' || user.paymentStatus === 'Paid'));
 
@@ -1430,85 +1582,69 @@ Note: My payment receipt has been uploaded to the portal.`;
   const hasPaidBefore = Boolean(user.subscriptionExpiryDate);
 
   return (
-    <div className="min-h-screen bg-[#090a0f] py-8 px-4 sm:px-6 lg:px-8 selection:bg-rose-600 selection:text-white" id="user-portal-root">
+    <div className="min-h-screen bg-[#0a0304] text-white flex flex-col md:flex-row selection:bg-[#d31d38] selection:text-white relative" id="user-portal-root">
       
-      {/* Navigation Topbar */}
-      <nav className="max-w-5xl mx-auto flex items-center justify-between mb-12 border-b border-slate-800/60 pb-6">
-        <div className="flex items-center gap-4">
-          <button 
-            onClick={() => { window.location.hash = '#landing'; }}
-            className="flex items-center gap-1.5 text-slate-400 hover:text-white transition text-xs font-bold mr-2 cursor-pointer bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl shadow"
-            title="Return to Landing Page"
+      {/* MOBILE TOPBAR */}
+      <header className="md:hidden sticky top-0 z-30 bg-[#120507]/95 backdrop-blur-md border-b border-[#2e1015] px-4 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setMobileSidebarOpen(true)}
+            className="p-2 rounded-xl bg-[#180608] border border-[#2e1015] text-zinc-300 hover:text-white cursor-pointer"
+            title="Open Navigation Menu"
           >
-            <ArrowLeft className="w-3.5 h-3.5 text-rose-500 animate-pulse" />
-            <span className="hidden sm:inline">Landing Page</span>
+            <Menu className="w-5 h-5 text-[#d31d38]" />
           </button>
-          <div className="flex items-center">
-            <div className="w-8 h-8 bg-gradient-to-tr from-rose-600 to-amber-500 rounded-full mr-3 shrink-0 flex items-center justify-center text-white">
-              <Tv className="w-4.5 h-4.5" />
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 bg-gradient-to-tr from-[#d31d38] to-[#ff2b47] rounded-full flex items-center justify-center text-white shadow-[0_0_12px_rgba(211,29,56,0.5)]">
+              <Tv className="w-4 h-4" />
             </div>
-            <span className="font-display font-extrabold text-xl sm:text-2xl tracking-tight text-white">
-              Cin<span className="text-rose-500">ode</span>
+            <span className="font-display font-black text-lg tracking-wider text-white">
+              CIN<span className="text-[#d31d38]">ODE</span>
             </span>
           </div>
         </div>
-        <div className="flex items-center gap-4 sm:gap-6">
-          {/* Notification bell and dropdown list */}
+
+        <div className="flex items-center gap-2">
+          {/* Notification Bell */}
           <div className="relative">
             <button
               onClick={() => setShowHeaderNotifs(!showHeaderNotifs)}
-              className="relative p-2 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-white transition cursor-pointer flex items-center justify-center shadow-md hover:shadow-lg"
-              title="View notifications"
+              className="p-2 rounded-xl bg-[#180608] border border-[#2e1015] text-zinc-300 hover:text-white relative cursor-pointer"
+              title="Notifications"
             >
-              <Bell className="w-4 h-4 text-rose-400" />
+              <Bell className="w-4 h-4 text-[#d31d38]" />
               {unreadCount > 0 && (
-                <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-600 text-[9px] font-extrabold text-white rounded-full flex items-center justify-center animate-pulse">
+                <span className="absolute -top-1 -right-1 w-4 h-4 bg-[#d31d38] text-[9px] font-extrabold text-white rounded-full flex items-center justify-center animate-pulse">
                   {unreadCount}
                 </span>
               )}
             </button>
             {showHeaderNotifs && (
               <>
-                <div 
-                  className="fixed inset-0 z-40" 
-                  onClick={() => setShowHeaderNotifs(false)} 
-                />
-                <div className="absolute right-0 mt-2 w-80 bg-[#11131e] border border-slate-800 rounded-2xl shadow-2xl z-50 overflow-hidden text-left py-2 animate-in fade-in slide-in-from-top-3 duration-200">
-                  <div className="px-4 py-2.5 border-b border-slate-800/80 flex items-center justify-between bg-slate-950/20">
+                <div className="fixed inset-0 z-40" onClick={() => setShowHeaderNotifs(false)} />
+                <div className="absolute right-0 mt-2 w-72 bg-[#120507] border border-[#2e1015] rounded-2xl shadow-2xl z-50 overflow-hidden text-left py-2">
+                  <div className="px-4 py-2.5 border-b border-[#2e1015] flex items-center justify-between bg-[#0a0304]">
                     <span className="font-extrabold text-xs text-white uppercase tracking-wider font-display">Notifications</span>
-                    <span className="text-[10px] bg-rose-500/10 text-rose-400 px-2 py-0.5 rounded-full font-bold">{unreadCount} unread</span>
+                    <span className="text-[10px] bg-[#d31d38]/15 text-[#ff4d64] px-2 py-0.5 rounded-full font-bold">{unreadCount} unread</span>
                   </div>
-                  <div className="max-h-64 overflow-y-auto divide-y divide-slate-800/50">
-                    {notifications.map((notif, idx) => {
-                      const isUnread = !readNotifIds.includes(notif.id);
-                      return (
-                        <button
-                          key={notif.id}
-                          type="button"
-                          onClick={() => {
-                            handleOpenNotification(notif);
-                            setShowHeaderNotifs(false);
-                          }}
-                          className={`w-full px-4 py-3 text-left hover:bg-slate-900/60 transition block cursor-pointer group ${isUnread ? 'bg-rose-500/5 border-l-2 border-rose-500' : ''}`}
-                        >
-                          <div className="flex items-center justify-between gap-2 mb-0.5">
-                            <span className="text-rose-400 text-[9px] font-extrabold block uppercase tracking-wide">
-                              Notification {idx + 1}
-                            </span>
-                            {isUnread && (
-                              <span className="text-[8px] bg-rose-600 text-white font-extrabold px-1 rounded uppercase tracking-wider">New</span>
-                            )}
-                          </div>
-                          <span className="font-bold text-xs text-white block truncate group-hover:text-rose-400 transition">{notif.title}</span>
-                          <span className="text-[10px] text-slate-400 block truncate mt-0.5">{notif.message}</span>
-                          <span className="text-[9px] text-slate-500 block mt-1 font-mono">{new Date(notif.createdAt).toLocaleDateString()}</span>
-                        </button>
-                      );
-                    })}
+                  <div className="max-h-64 overflow-y-auto divide-y divide-[#2e1015]/60">
+                    {notifications.map((notif, idx) => (
+                      <button
+                        key={notif.id}
+                        type="button"
+                        onClick={() => {
+                          handleOpenNotification(notif);
+                          setShowHeaderNotifs(false);
+                        }}
+                        className="w-full px-4 py-3 text-left hover:bg-[#1c080b] transition block cursor-pointer"
+                      >
+                        <div className="text-[9px] text-[#ff4d64] font-extrabold uppercase">Notification {idx + 1}</div>
+                        <div className="font-bold text-xs text-white truncate">{notif.title}</div>
+                        <div className="text-[10px] text-zinc-400 truncate mt-0.5">{notif.message}</div>
+                      </button>
+                    ))}
                     {notifications.length === 0 && (
-                      <div className="py-8 text-center text-xs text-slate-500 font-medium">
-                        No announcements available.
-                      </div>
+                      <div className="py-6 text-center text-xs text-zinc-500">No notifications</div>
                     )}
                   </div>
                 </div>
@@ -1516,29 +1652,327 @@ Note: My payment receipt has been uploaded to the portal.`;
             )}
           </div>
 
-          {user.role === 'admin' && (
-            <button 
-              onClick={() => { window.location.href = '#admin'; }}
-              className="border border-rose-500/30 bg-rose-500/10 text-rose-400 hover:bg-rose-600 hover:text-white font-bold py-1.5 px-4 rounded-xl text-xs uppercase tracking-wider transition cursor-pointer"
-            >
-              Admin controls
-            </button>
-          )}
-          <div className="text-right hidden sm:block">
-            <span className="block text-xs font-bold text-slate-300">{user.fullName}</span>
-            <span className="block text-[10px] text-slate-500 font-medium">@{user.username}</span>
-          </div>
-          <button 
-            onClick={onLogout}
-            className="text-slate-400 hover:text-white font-bold text-xs uppercase tracking-wider transition flex items-center gap-1.5 cursor-pointer bg-slate-900 border border-slate-800 px-3.5 py-2 rounded-xl"
+          <button
+            onClick={() => setActiveTab('account')}
+            className="w-8 h-8 rounded-full bg-[#1c080b] border border-[#d31d38]/40 text-[#ff4d64] font-bold text-xs flex items-center justify-center uppercase cursor-pointer"
+            title="Account Settings"
           >
-            <LogOut className="w-3.5 h-3.5 text-rose-500" /> Sign Out
+            {user.fullName ? user.fullName[0] : 'U'}
           </button>
         </div>
-      </nav>
+      </header>
 
-      <main className="max-w-4xl mx-auto">
-        {/* Email Verification Banner */}
+      {/* MOBILE SLIDE-OVER DRAWER */}
+      {mobileSidebarOpen && (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <div 
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity" 
+            onClick={() => setMobileSidebarOpen(false)}
+          />
+          <div className="fixed inset-y-0 left-0 max-w-xs w-full bg-[#120507] border-r border-[#2e1015] p-5 flex flex-col justify-between shadow-2xl z-50 animate-in slide-in-from-left duration-200">
+            <div>
+              <div className="flex items-center justify-between pb-4 border-b border-[#2e1015] mb-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 bg-gradient-to-tr from-[#d31d38] to-[#ff2b47] rounded-full flex items-center justify-center text-white shadow-[0_0_15px_rgba(211,29,56,0.5)]">
+                    <Tv className="w-4.5 h-4.5" />
+                  </div>
+                  <span className="font-display font-black text-xl tracking-wider text-white">
+                    CIN<span className="text-[#d31d38]">ODE</span>
+                  </span>
+                </div>
+                <button
+                  onClick={() => setMobileSidebarOpen(false)}
+                  className="p-1.5 rounded-lg bg-[#180608] text-zinc-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* User badge */}
+              <div className="bg-[#180608] border border-[#2e1015] rounded-xl p-3 mb-4">
+                <div className="text-xs font-bold text-white truncate">{user.fullName}</div>
+                <div className="text-[10px] text-zinc-500 font-mono truncate">@{user.username}</div>
+                <div className="mt-2 flex items-center gap-1.5">
+                  {isActive ? (
+                    <span className="text-[9px] bg-emerald-500/15 text-emerald-400 font-bold px-2 py-0.5 rounded-full border border-emerald-500/20 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Active Subscriber
+                    </span>
+                  ) : (
+                    <span className="text-[9px] bg-[#d31d38]/15 text-[#ff4d64] font-bold px-2 py-0.5 rounded-full border border-[#d31d38]/20 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#d31d38]"></span> Subscription Inactive
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Nav Items */}
+              <nav className="space-y-1">
+                {[
+                  { id: 'overview', label: 'Overview & Stream', icon: Tv },
+                  { id: 'subscription', label: 'Subscription & Pay', icon: CreditCard },
+                  { id: 'direct_debit', label: 'Direct Debit Mandate', icon: Landmark },
+                  { id: 'requests', label: 'Media Requests', icon: Film },
+                  { id: 'affiliate', label: 'Affiliate & Earnings', icon: Gift },
+                  { id: 'apps', label: 'Apps & Devices', icon: Smartphone },
+                  { id: 'support', label: 'Help & Support', icon: HelpCircle },
+                  { id: 'account', label: 'Account & Security', icon: Key },
+                ].map((item) => {
+                  const Icon = item.icon;
+                  const isSelected = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => {
+                        setActiveTab(item.id as any);
+                        setMobileSidebarOpen(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                        isSelected 
+                          ? 'bg-gradient-to-r from-[#d31d38] to-[#b0162c] text-white shadow-[0_4px_15px_rgba(211,29,56,0.35)]' 
+                          : 'text-zinc-400 hover:text-white hover:bg-[#180608]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <Icon className={`w-4 h-4 ${isSelected ? 'text-white' : 'text-[#d31d38]'}`} />
+                        <span>{item.label}</span>
+                      </div>
+                      <ChevronRight className={`w-3.5 h-3.5 opacity-60 ${isSelected ? 'text-white' : 'text-zinc-600'}`} />
+                    </button>
+                  );
+                })}
+              </nav>
+            </div>
+
+            <div className="pt-4 border-t border-[#2e1015] space-y-2">
+              <button
+                onClick={() => { window.location.hash = '#landing'; }}
+                className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-[#180608] hover:bg-[#220a0e] text-zinc-300 text-xs font-bold border border-[#2e1015] transition cursor-pointer"
+              >
+                <ArrowLeft className="w-3.5 h-3.5 text-[#d31d38]" /> Back to Landing Page
+              </button>
+              {user.role === 'admin' && (
+                <button
+                  onClick={() => { window.location.hash = '#admin'; }}
+                  className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-[#d31d38]/15 hover:bg-[#d31d38]/25 text-[#ff4d64] text-xs font-bold border border-[#d31d38]/30 transition cursor-pointer"
+                >
+                  <ShieldAlert className="w-3.5 h-3.5" /> Admin Control Suite
+                </button>
+              )}
+              <button
+                onClick={onLogout}
+                className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-[#180608] hover:bg-rose-950/40 text-rose-300 text-xs font-bold border border-[#2e1015] transition cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5 text-[#d31d38]" /> Sign Out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DESKTOP APP SIDEBAR */}
+      <aside className="hidden md:flex md:w-64 lg:w-72 md:sticky md:top-0 md:h-screen flex-col justify-between bg-[#120507] border-r border-[#2e1015] p-5 shrink-0 z-20">
+        <div>
+          {/* Brand header */}
+          <div className="flex items-center gap-3 pb-5 border-b border-[#2e1015] mb-5">
+            <div className="w-9 h-9 bg-gradient-to-tr from-[#d31d38] to-[#ff2b47] rounded-xl flex items-center justify-center text-white shadow-[0_0_18px_rgba(211,29,56,0.6)] shrink-0">
+              <Tv className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="font-display font-black text-xl tracking-wider text-white block leading-none">
+                CIN<span className="text-[#d31d38]">ODE</span>
+              </span>
+              <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest block mt-1">Streaming Portal</span>
+            </div>
+          </div>
+
+          {/* User mini badge */}
+          <div className="bg-[#180608] border border-[#2e1015] rounded-2xl p-3.5 mb-5 shadow-inner">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[#d31d38]/30 to-[#b0162c]/10 border border-[#d31d38]/40 flex items-center justify-center font-bold text-sm text-[#ff4d64] shrink-0">
+                {user.fullName ? user.fullName[0].toUpperCase() : 'U'}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-extrabold text-white truncate">{user.fullName}</div>
+                <div className="text-[10px] text-zinc-400 truncate">@{user.username}</div>
+              </div>
+            </div>
+            <div className="mt-2.5 pt-2.5 border-t border-[#2e1015]/80 flex items-center justify-between">
+              {isActive ? (
+                <span className="text-[9px] bg-emerald-500/15 text-emerald-400 font-extrabold px-2 py-0.5 rounded-full border border-emerald-500/20 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> Active
+                </span>
+              ) : (
+                <span className="text-[9px] bg-[#d31d38]/15 text-[#ff4d64] font-extrabold px-2 py-0.5 rounded-full border border-[#d31d38]/20 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#d31d38]"></span> Expired
+                </span>
+              )}
+              <button
+                onClick={onReloadUser}
+                className="text-[10px] text-zinc-400 hover:text-white flex items-center gap-1 font-bold cursor-pointer"
+                title="Refresh Status"
+              >
+                <RefreshCw className="w-3 h-3 text-[#d31d38]" /> Refresh
+              </button>
+            </div>
+          </div>
+
+          {/* Sidebar Navigation */}
+          <nav className="space-y-1.5">
+            {[
+              { id: 'overview', label: 'Overview & Stream', icon: Tv },
+              { id: 'subscription', label: 'Subscription & Pay', icon: CreditCard },
+              { id: 'direct_debit', label: 'Direct Debit Auto-Renew', icon: Landmark },
+              { id: 'requests', label: 'Media Requests', icon: Film },
+              { id: 'affiliate', label: 'Affiliate & Earnings', icon: Gift },
+              { id: 'apps', label: 'Apps & Devices', icon: Smartphone },
+              { id: 'support', label: 'Help & Support', icon: HelpCircle },
+              { id: 'account', label: 'Account & Security', icon: Key },
+            ].map((item) => {
+              const Icon = item.icon;
+              const isSelected = activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setActiveTab(item.id as any)}
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                    isSelected 
+                      ? 'bg-gradient-to-r from-[#d31d38] to-[#b0162c] text-white shadow-[0_4px_20px_rgba(211,29,56,0.35)]' 
+                      : 'text-zinc-400 hover:text-white hover:bg-[#180608]'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <Icon className={`w-4 h-4 ${isSelected ? 'text-white' : 'text-[#d31d38]'}`} />
+                    <span>{item.label}</span>
+                  </div>
+                  <ChevronRight className={`w-3.5 h-3.5 opacity-60 ${isSelected ? 'text-white' : 'text-zinc-600'}`} />
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+
+        {/* Sidebar Footer Controls */}
+        <div className="pt-4 border-t border-[#2e1015] space-y-2">
+          <button
+            onClick={() => { window.location.hash = '#landing'; }}
+            className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-[#180608] hover:bg-[#220a0e] text-zinc-300 text-xs font-bold border border-[#2e1015] transition cursor-pointer"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 text-[#d31d38]" /> Landing Page
+          </button>
+          {user.role === 'admin' && (
+            <button
+              onClick={() => { window.location.hash = '#admin'; }}
+              className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-[#d31d38]/15 hover:bg-[#d31d38]/25 text-[#ff4d64] text-xs font-bold border border-[#d31d38]/30 transition cursor-pointer"
+            >
+              <ShieldAlert className="w-3.5 h-3.5" /> Admin Control Suite
+            </button>
+          )}
+          <button
+            onClick={onLogout}
+            className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-[#180608] hover:bg-rose-950/40 text-rose-300 text-xs font-bold border border-[#2e1015] transition cursor-pointer"
+          >
+            <LogOut className="w-3.5 h-3.5 text-[#d31d38]" /> Sign Out
+          </button>
+        </div>
+      </aside>
+
+      {/* MAIN SCREEN CANVAS */}
+      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto w-full pb-24 md:pb-8">
+        
+        {/* Desktop Screen Header Bar */}
+        <div className="hidden md:flex items-center justify-between pb-6 mb-6 border-b border-[#2e1015]">
+          <div>
+            <div className="text-[10px] text-[#ff4d64] font-extrabold uppercase tracking-widest flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#d31d38]"></span>
+              CINODE MEMBER APP / {activeTab.replace('_', ' ').toUpperCase()}
+            </div>
+            <h2 className="text-2xl font-display font-extrabold text-white mt-1 capitalize">
+              {activeTab === 'overview' && 'Streaming Hub & Overview'}
+              {activeTab === 'subscription' && 'Subscription & Payments'}
+              {activeTab === 'direct_debit' && 'Direct Debit Auto-Renewal'}
+              {activeTab === 'requests' && 'Movie & Series Requests'}
+              {activeTab === 'affiliate' && 'Affiliate Program & Commissions'}
+              {activeTab === 'apps' && 'Download Mobile & TV Apps'}
+              {activeTab === 'support' && 'Support & Community Assistance'}
+              {activeTab === 'account' && 'Account Credentials & Sync'}
+            </h2>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {/* Notification Bell */}
+            <div className="relative">
+              <button
+                onClick={() => setShowHeaderNotifs(!showHeaderNotifs)}
+                className="p-2.5 rounded-xl bg-[#120507] border border-[#2e1015] hover:border-[#d31d38]/50 text-zinc-300 hover:text-white transition cursor-pointer flex items-center justify-center relative shadow"
+                title="View Announcements"
+              >
+                <Bell className="w-4 h-4 text-[#d31d38]" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4.5 h-4.5 bg-[#d31d38] text-[9px] font-extrabold text-white rounded-full flex items-center justify-center animate-pulse">
+                    {unreadCount}
+                  </span>
+                )}
+              </button>
+              {showHeaderNotifs && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowHeaderNotifs(false)} />
+                  <div className="absolute right-0 mt-2 w-80 bg-[#120507] border border-[#2e1015] rounded-2xl shadow-2xl z-50 overflow-hidden text-left py-2">
+                    <div className="px-4 py-2.5 border-b border-[#2e1015] flex items-center justify-between bg-[#0a0304]">
+                      <span className="font-extrabold text-xs text-white uppercase tracking-wider font-display">Notifications</span>
+                      <span className="text-[10px] bg-[#d31d38]/15 text-[#ff4d64] px-2 py-0.5 rounded-full font-bold">{unreadCount} unread</span>
+                    </div>
+                    <div className="max-h-64 overflow-y-auto divide-y divide-[#2e1015]/60">
+                      {notifications.map((notif, idx) => (
+                        <button
+                          key={notif.id}
+                          type="button"
+                          onClick={() => {
+                            handleOpenNotification(notif);
+                            setShowHeaderNotifs(false);
+                          }}
+                          className="w-full px-4 py-3 text-left hover:bg-[#1c080b] transition block cursor-pointer"
+                        >
+                          <div className="text-[9px] text-[#ff4d64] font-extrabold uppercase">Notification {idx + 1}</div>
+                          <div className="font-bold text-xs text-white truncate">{notif.title}</div>
+                          <div className="text-[10px] text-zinc-400 truncate mt-0.5">{notif.message}</div>
+                        </button>
+                      ))}
+                      {notifications.length === 0 && (
+                        <div className="py-6 text-center text-xs text-zinc-500">No notifications</div>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <button
+              onClick={onReloadUser}
+              className="bg-[#120507] hover:bg-[#1c080b] border border-[#2e1015] hover:border-[#d31d38]/50 text-zinc-300 text-xs font-bold py-2.5 px-4 rounded-xl transition flex items-center gap-2 cursor-pointer shadow"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-[#d31d38]" /> Refresh
+            </button>
+          </div>
+        </div>
+
+        {/* Global Notifications / Alerts */}
+        {error && (
+          <div className="p-4 bg-[#d31d38]/10 border border-[#d31d38]/25 text-[#ff8093] text-xs font-bold rounded-2xl flex justify-between items-center mb-6 shadow-lg">
+            <span>{error}</span>
+            <button onClick={() => setError(null)} className="text-[#ff4d64] hover:text-white font-bold text-sm cursor-pointer">×</button>
+          </div>
+        )}
+        {success && (
+          <div className="p-4 bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 text-xs font-bold rounded-2xl flex justify-between items-center mb-6 shadow-lg">
+            <span>{success}</span>
+            <button onClick={() => setSuccess(null)} className="text-emerald-400 hover:text-white font-bold text-sm cursor-pointer">×</button>
+          </div>
+        )}
+
+        {/* ================= TAB 1: OVERVIEW & STREAM ================= */}
+        {activeTab === 'overview' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+            {/* Email Verification Banner */}
         {user.emailVerified === 0 && (
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-5 mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-lg">
             <div className="flex items-start gap-3">
@@ -1547,7 +1981,7 @@ Note: My payment receipt has been uploaded to the portal.`;
               </div>
               <div>
                 <h4 className="text-sm font-bold text-amber-300">Email Verification Required</h4>
-                <p className="text-xs text-slate-300 mt-0.5">
+                <p className="text-xs text-zinc-300 mt-0.5">
                   Please verify your email address <strong className="text-white">({user.email || user.username})</strong> to secure your account. Check your inbox for the confirmation link.
                 </p>
                 {emailMsg && (
@@ -1574,7 +2008,7 @@ Note: My payment receipt has been uploaded to the portal.`;
               </button>
               <button
                 onClick={onReloadUser}
-                className="bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs font-bold py-2 px-3 rounded-xl transition cursor-pointer"
+                className="bg-[#180608] hover:bg-[#1c080b] text-zinc-300 border border-[#2e1015] text-xs font-bold py-2 px-3 rounded-xl transition cursor-pointer"
                 title="Refresh Status"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
@@ -1582,32 +2016,31 @@ Note: My payment receipt has been uploaded to the portal.`;
             </div>
           </div>
         )}
-
-        {/* Welcome Header */}
-        <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 mb-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 relative overflow-hidden shadow-xl">
-          <div className="absolute top-0 left-0 right-0 h-[4px] bg-gradient-to-r from-rose-500 to-amber-500"></div>
+            {/* Welcome Header */}
+        <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 mb-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 relative overflow-hidden shadow-xl shadow-black/60">
+          <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-[#d31d38] via-[#ff3b53] to-[#d31d38]"></div>
           
           <div>
-            <span className="text-xs text-rose-400 font-semibold uppercase tracking-wider">Member Dashboard</span>
+            <span className="text-xs text-[#ff4d64] font-semibold uppercase tracking-wider">Member Dashboard</span>
             <h1 className="text-3xl font-display font-extrabold text-white tracking-tight mt-1">Hello, {user.fullName}!</h1>
-            <p className="text-slate-400 text-sm mt-1">Ready to explore? Instantly access your personal film stream.</p>
+            <p className="text-zinc-400 text-sm mt-1">Ready to explore? Instantly access your personal film stream.</p>
           </div>
 
           <div className="flex items-center gap-2.5">
             {isActive ? (
-              <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 py-2 px-5 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-2">
+              <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 py-2 px-5 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-2 shadow-[0_0_15px_rgba(16,185,129,0.15)]">
                 <CheckCircle className="w-4 h-4 text-emerald-400" /> Account Active
               </span>
             ) : (
-              <span className="bg-amber-500/10 text-amber-400 border border-amber-500/20 py-2 px-5 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-2 animate-pulse">
-                <AlertTriangle className="w-4 h-4 text-amber-400" /> {hasPaidBefore ? 'Plan Expired' : 'Payment Required'}
+              <span className="bg-[#d31d38]/15 text-[#ff4d64] border border-[#d31d38]/30 py-2 px-5 rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-2 animate-pulse shadow-[0_0_15px_rgba(211,29,56,0.2)]">
+                <AlertTriangle className="w-4 h-4 text-[#ff4d64]" /> {hasPaidBefore ? 'Plan Expired' : 'Payment Required'}
               </span>
             )}
           </div>
         </div>
 
         {error && (
-          <div className="mb-6 p-4 bg-rose-500/10 border border-rose-500/20 text-rose-200 text-xs rounded-xl">
+          <div className="mb-6 p-4 bg-[#d31d38]/10 border border-[#d31d38]/30 text-[#ff8093] text-xs rounded-xl">
             {error}
           </div>
         )}
@@ -1617,86 +2050,313 @@ Note: My payment receipt has been uploaded to the portal.`;
             {success}
           </div>
         )}
+            
+            {/* Quick Action Bento Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <button
+                onClick={() => setActiveTab('subscription')}
+                className="bg-[#120507] hover:bg-[#1c080b] border border-[#2e1015] hover:border-[#d31d38]/50 p-4 rounded-2xl text-left transition cursor-pointer group shadow-lg"
+              >
+                <div className="w-8 h-8 rounded-xl bg-[#d31d38]/15 border border-[#d31d38]/30 flex items-center justify-center text-[#ff4d64] mb-3 group-hover:scale-110 transition">
+                  <CreditCard className="w-4 h-4" />
+                </div>
+                <div className="text-xs font-extrabold text-white">Renew / Pay</div>
+                <div className="text-[10px] text-zinc-500 mt-0.5">₦600 Unlimited Pass</div>
+              </button>
 
-        {/* Dynamic Card Area */}
+              <button
+                onClick={() => setActiveTab('direct_debit')}
+                className="bg-[#120507] hover:bg-[#1c080b] border border-[#2e1015] hover:border-[#d31d38]/50 p-4 rounded-2xl text-left transition cursor-pointer group shadow-lg"
+              >
+                <div className="w-8 h-8 rounded-xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sky-400 mb-3 group-hover:scale-110 transition">
+                  <Landmark className="w-4 h-4" />
+                </div>
+                <div className="text-xs font-extrabold text-white">Direct Debit</div>
+                <div className="text-[10px] text-zinc-500 mt-0.5">Auto-Renew Monthly</div>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('requests')}
+                className="bg-[#120507] hover:bg-[#1c080b] border border-[#2e1015] hover:border-[#d31d38]/50 p-4 rounded-2xl text-left transition cursor-pointer group shadow-lg"
+              >
+                <div className="w-8 h-8 rounded-xl bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-purple-400 mb-3 group-hover:scale-110 transition">
+                  <Film className="w-4 h-4" />
+                </div>
+                <div className="text-xs font-extrabold text-white">Request Movie</div>
+                <div className="text-[10px] text-zinc-500 mt-0.5">Add to Cinode Server</div>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('apps')}
+                className="bg-[#120507] hover:bg-[#1c080b] border border-[#2e1015] hover:border-[#d31d38]/50 p-4 rounded-2xl text-left transition cursor-pointer group shadow-lg"
+              >
+                <div className="w-8 h-8 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 mb-3 group-hover:scale-110 transition">
+                  <Download className="w-4 h-4" />
+                </div>
+                <div className="text-xs font-extrabold text-white">Mobile APK</div>
+                <div className="text-[10px] text-zinc-500 mt-0.5">Android & TV Guide</div>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Player Launch Card */}
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-8 md:col-span-2 flex flex-col justify-between shadow-xl relative">
+              <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-[#d31d38]/60 via-transparent to-transparent"></div>
+              
+              <div>
+                <div className="w-11 h-11 flex items-center justify-center bg-[#d31d38]/15 text-[#ff4d64] border border-[#d31d38]/30 rounded-xl mb-5 shadow-[0_0_15px_rgba(211,29,56,0.3)]">
+                  <Play className="w-5 h-5 fill-current" />
+                </div>
+                <h3 className="text-2xl font-display font-extrabold text-white">Stream Player Terminal</h3>
+                <p className="text-zinc-400 text-sm mt-3 leading-relaxed">
+                  Your private connection is healthy and ready. Launch the player to open our elegant film interface with automatic secure single sign-on!
+                </p>
+              </div>
+
+              <div className="mt-8 flex flex-col sm:flex-row gap-4">
+                <button
+                  onClick={() => {
+                    setDeviceNotice(null);
+                    setShowDeviceModal(true);
+                  }}
+                  className="bg-[#d31d38] hover:bg-[#b0162c] text-white font-bold py-4 px-8 rounded-xl flex items-center justify-center gap-2 transition shadow-xl shadow-[#d31d38]/30 cursor-pointer text-sm"
+                  id="launch-jellyfin-button"
+                >
+                  Open Stream Player <ExternalLink className="w-4 h-4" />
+                </button>
+                
+                <button
+                  onClick={() => { setShowSyncModal(true); }}
+                  className="bg-[#080203] hover:bg-[#180608] border border-[#2e1015] text-zinc-300 font-bold py-4 px-6 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer hover:border-[#d31d38]/50"
+                >
+                  <RefreshCw className="w-4 h-4 text-[#d31d38]" /> Re-Sync Session
+                </button>
+              </div>
+            </div>
+                          {/* Side Membership Details Card */}
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-8 flex flex-col justify-between shadow-xl">
+              <div>
+                <div className="flex items-center gap-2 text-[#ff4d64] border-b border-[#2e1015] pb-3 mb-5">
+                  <UserCheck className="w-4 h-4" />
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-300">Account Details</h4>
+                </div>
+                
+                <div className="space-y-4 text-xs">
+                  <div>
+                    <span className="block text-zinc-500 font-medium mb-0.5">USERNAME</span>
+                    <span className="text-white font-bold">@{user.username}</span>
+                  </div>
+                  <div>
+                    <span className="block text-zinc-500 font-medium mb-0.5">EMAIL</span>
+                    <span className="text-white font-medium truncate block">{user.email}</span>
+                  </div>
+                  {user.subscriptionExpiryDate && (
+                    <div>
+                      <span className="block text-zinc-500 font-medium mb-0.5">RENEWAL DATE</span>
+                      <span className="text-[#ff4d64] font-bold flex items-center gap-1">
+                        <Calendar className="w-3.5 h-3.5 inline" /> {new Date(user.subscriptionExpiryDate).toLocaleDateString()}
+                      </span>
+                    </div>
+                  )}
+                  <div>
+                    <span className="block text-zinc-500 font-medium mb-0.5">ACCOUNT ID</span>
+                    <span className="text-zinc-400 block truncate font-mono text-[11px] bg-[#080203] p-2 rounded-lg mt-1 border border-[#2e1015]">{user.jellyfinUserId || 'Direct Connection'}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6 pt-4 border-t border-[#2e1015] flex items-center justify-between text-[11px] text-zinc-400 font-semibold uppercase tracking-wider">
+                <span>Secure Server Connection</span>
+                <span className="text-emerald-400 font-bold flex items-center gap-1">Online</span>
+              </div>
+            </div>
+            </div>
+
+            {/* Broadcast feed widget */}
+            {/* Targeted Broadcast Notifications Feed */}
+          <div className="lg:col-span-2 bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 shadow-xl relative">
+            <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-[#d31d38]/40 via-transparent to-transparent"></div>
+            
+            <div className="flex items-center justify-between border-b border-[#2e1015] pb-4 mb-5">
+              <div className="flex items-center gap-2">
+                <MessageSquare className="w-5 h-5 text-[#ff4d64]" />
+                <h3 className="text-lg font-display font-extrabold text-white">Broadcast Announcements</h3>
+              </div>
+              <button
+                onClick={fetchNotifications}
+                disabled={loadingNotifs}
+                className="text-zinc-500 hover:text-zinc-300 transition text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 cursor-pointer"
+              >
+                <RefreshCw className={`w-3 h-3 ${loadingNotifs ? 'animate-spin' : ''}`} /> Refresh
+              </button>
+            </div>
+
+            {loadingNotifs && notifications.length === 0 ? (
+              <div className="py-12 text-center text-zinc-500">
+                <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-[#ff4d64]" />
+                <span className="text-xs">Checking for announcements...</span>
+              </div>
+            ) : notifications.length === 0 ? (
+              <div className="text-center py-12 bg-[#080203] rounded-2xl border border-[#2e1015]">
+                <Info className="w-10 h-10 text-zinc-700 mx-auto mb-2" />
+                <h4 className="text-zinc-300 font-semibold text-xs">No active broadcasts</h4>
+                <p className="text-zinc-500 text-[10px] mt-1">Announcements or system updates will appear here when pushed by administrators.</p>
+              </div>
+            ) : (
+              <div className="space-y-4 max-h-[500px] overflow-y-auto pr-1">
+                {notifications.map((notif) => {
+                  const isVideo = notif.imageUrl && (
+                    notif.imageUrl.endsWith('.mp4') || 
+                    notif.imageUrl.endsWith('.webm') || 
+                    notif.imageUrl.endsWith('.ogg') || 
+                    notif.imageUrl.endsWith('.mov') ||
+                    notif.imageUrl.includes('/video/')
+                  );
+
+                  const isUnread = !readNotifIds.includes(notif.id);
+
+                  return (
+                    <div 
+                      key={notif.id} 
+                      onClick={() => handleOpenNotification(notif)}
+                      className={`border rounded-xl p-5 hover:border-[#d31d38]/50 transition text-left cursor-pointer hover:bg-[#180608] group relative ${isUnread ? 'bg-[#d31d38]/10 border-[#d31d38]/40' : 'bg-[#080203] border-[#2e1015]'}`}
+                    >
+                      <div className="flex justify-between items-start gap-4 mb-2">
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-white font-bold text-sm group-hover:text-[#ff4d64] transition">{notif.title}</h4>
+                          {isUnread && (
+                            <span className="bg-[#d31d38] text-white text-[8px] font-extrabold px-1.5 py-0.5 rounded uppercase tracking-wider">New</span>
+                          )}
+                        </div>
+                        <span className="text-[9px] text-zinc-500 font-mono shrink-0">{new Date(notif.createdAt).toLocaleDateString()}</span>
+                      </div>
+                      <p className="text-zinc-300 text-xs leading-relaxed whitespace-pre-wrap">{notif.message}</p>
+                      
+                      {notif.imageUrl && (
+                        <div className="mt-3.5 rounded-lg overflow-hidden border border-[#2e1015] bg-[#050102] w-fit max-w-full">
+                          {isVideo ? (
+                            <video 
+                              src={notif.imageUrl} 
+                              controls 
+                              onClick={(e) => e.stopPropagation()} // don't open modal when clicking video controls
+                              className="max-w-full h-auto rounded-lg block" 
+                            />
+                          ) : (
+                            <img 
+                              src={notif.imageUrl} 
+                              alt={notif.title} 
+                              referrerPolicy="no-referrer" 
+                              className="max-w-full h-auto rounded-lg block" 
+                            />
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          </div>
+        )}
+
+        {/* ================= TAB 2: SUBSCRIPTION & PAY ================= */}
+        {activeTab === 'subscription' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl relative overflow-hidden">
+              <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-[#d31d38] via-[#ff3b53] to-[#d31d38]"></div>
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div>
+                  <span className="text-[10px] text-[#ff4d64] font-extrabold uppercase tracking-wider">Unlimited Streaming Pass</span>
+                  <h3 className="text-xl font-display font-extrabold text-white mt-0.5">Subscription Plan Details</h3>
+                  <p className="text-xs text-zinc-400 mt-1">Get 30 days unthrottled access to 4K streams, movies, series, and anime with zero ads.</p>
+                </div>
+                <div className="text-right sm:text-right">
+                  <div className="text-2xl font-black font-display text-white">₦600 <span className="text-xs text-zinc-400 font-normal">/ 30 days</span></div>
+                  <span className="text-[10px] bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full font-bold border border-emerald-500/20">All-Inclusive Pass</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Dynamic Card Area */}
         {!isActive ? (
           user.paymentStatus === 'Pending Verification' ? (
             /* Pending Verification Panel */
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-8 text-center max-w-xl mx-auto shadow-2xl relative">
-              <div className="absolute top-0 right-0 bg-amber-500 text-slate-950 font-extrabold text-[10px] uppercase tracking-wider py-1.5 px-4 rounded-bl-xl">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-8 text-center max-w-xl mx-auto shadow-2xl relative">
+              <div className="absolute top-0 right-0 bg-amber-500 text-black font-extrabold text-[10px] uppercase tracking-wider py-1.5 px-4 rounded-bl-xl">
                 Pending Verification
               </div>
               
               <Clock className="w-12 h-12 text-amber-500 mx-auto mb-4 animate-pulse" />
               
               <h3 className="text-xl font-display font-extrabold text-white">Payment Awaiting Verification</h3>
-              <p className="text-slate-400 text-sm mt-2 leading-relaxed">
+              <p className="text-zinc-400 text-sm mt-2 leading-relaxed">
                 Thank you! We have received your payment submission. An administrator has been notified to verify your bank transfer. Once confirmed, your full streaming access will be unlocked instantly.
               </p>
 
-              <div className="bg-[#07080c] border border-slate-800/60 rounded-xl p-5 my-6 text-left text-xs space-y-3 max-w-sm mx-auto text-slate-300">
+              <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-5 my-6 text-left text-xs space-y-3 max-w-sm mx-auto text-zinc-300">
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Monthly Plan Subscription:</span>
+                  <span className="text-zinc-400">Monthly Plan Subscription:</span>
                   <span className="text-white font-bold">₦600.00 NGN</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Payment Status:</span>
+                  <span className="text-zinc-400">Payment Status:</span>
                   <span className="text-amber-400 font-bold flex items-center gap-1">
                     <Loader2 className="w-3 h-3 animate-spin" /> Pending Approval
                   </span>
                 </div>
-                <div className="flex justify-between border-t border-slate-800/80 pt-3">
-                  <span className="text-slate-400">Media Platform:</span>
-                  <span className="text-rose-400 font-bold">Cinode Private Server</span>
+                <div className="flex justify-between border-t border-[#2e1015] pt-3">
+                  <span className="text-zinc-400">Media Platform:</span>
+                  <span className="text-[#ff4d64] font-bold">Cinode Private Server</span>
                 </div>
               </div>
 
               <button
                 onClick={onReloadUser}
                 disabled={loading}
-                className="w-full bg-[#1b1e2e] hover:bg-[#252a41] text-white border border-slate-700 font-bold py-3.5 px-6 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer text-sm"
+                className="w-full bg-[#1c080b] hover:bg-[#2e1015] text-white border border-[#2e1015] font-bold py-3.5 px-6 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer text-sm"
                 id="refresh-verification-button"
               >
                 <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Check Verification Status
               </button>
               
-              <p className="text-[11px] text-slate-500 mt-4 leading-relaxed">
+              <p className="text-[11px] text-zinc-500 mt-4 leading-relaxed">
                 If your payment isn't verified within 15 minutes, please contact support.
               </p>
             </div>
-          ) : showManualPay ? (
+          ) : (showManualPay && (bankInfo?.manualPaymentEnabled !== false && bankInfo?.manualPaymentEnabled !== 0)) ? (
             /* Manual Bank Transfer Instructions Panel */
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 text-left max-w-xl mx-auto shadow-2xl relative">
-              <div className="absolute top-0 right-0 bg-rose-600 text-white font-extrabold text-[10px] uppercase tracking-wider py-1.5 px-4 rounded-bl-xl">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 text-left max-w-xl mx-auto shadow-2xl relative">
+              <div className="absolute top-0 right-0 bg-[#d31d38] text-white font-extrabold text-[10px] uppercase tracking-wider py-1.5 px-4 rounded-bl-xl">
                 Manual Transfer & Upload
               </div>
 
               <h3 className="text-xl font-display font-extrabold text-white mb-2 text-center">Bank Payment Instructions</h3>
-              <p className="text-slate-400 text-xs text-center mb-6 leading-relaxed">
-                Please transfer exactly <strong className="text-rose-400 font-bold text-sm">₦600.00 NGN</strong> to the bank details below. Once completed, fill the form, upload your receipt screenshot, and click "I've Paid".
+              <p className="text-zinc-400 text-xs text-center mb-6 leading-relaxed">
+                Please transfer exactly <strong className="text-[#ff4d64] font-bold text-sm">₦600.00 NGN</strong> to the bank details below. Once completed, fill the form, upload your receipt screenshot, and click "I've Paid".
               </p>
 
-              <div className="bg-[#07080c] border border-slate-800/80 rounded-xl p-4 mb-6 space-y-3.5 text-xs">
+              <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4 mb-6 space-y-3.5 text-xs">
                 <div className="flex justify-between items-center">
                   <div>
-                    <span className="text-[10px] font-bold text-slate-500 uppercase block tracking-wider">Bank Name</span>
+                    <span className="text-[10px] font-bold text-zinc-500 uppercase block tracking-wider">Bank Name</span>
                     <span className="text-white text-sm font-extrabold">{bankInfo?.bankName || 'Not Set (Contact Admin)'}</span>
                   </div>
                   <div className="text-right">
-                    <span className="text-[10px] font-bold text-slate-500 uppercase block tracking-wider">Beneficiary Name</span>
+                    <span className="text-[10px] font-bold text-zinc-500 uppercase block tracking-wider">Beneficiary Name</span>
                     <span className="text-white text-sm font-extrabold">{bankInfo?.bankBeneficiary || 'Not Set (Contact Admin)'}</span>
                   </div>
                 </div>
                 <div>
-                  <span className="text-[10px] font-bold text-slate-500 uppercase block tracking-wider">Account Number</span>
-                  <span className="text-rose-500 text-base font-mono font-black tracking-widest block py-2 bg-slate-950 px-3 rounded mt-1 select-all border border-slate-800 text-center">
+                  <span className="text-[10px] font-bold text-zinc-500 uppercase block tracking-wider">Account Number</span>
+                  <span className="text-[#ff4d64] text-base font-mono font-black tracking-widest block py-2 bg-[#050102] px-3 rounded mt-1 select-all border border-[#2e1015] text-center">
                     {bankInfo?.bankAccountNo || 'Not Set (Contact Admin)'}
                   </span>
                 </div>
                 {bankInfo?.bankInstructions && (
-                  <div className="border-t border-slate-800/80 pt-2.5">
-                    <span className="text-[10px] font-bold text-slate-500 uppercase block tracking-wider mb-1">Additional Instructions</span>
-                    <p className="text-slate-300 leading-relaxed whitespace-pre-wrap">{bankInfo.bankInstructions}</p>
+                  <div className="border-t border-[#2e1015] pt-2.5">
+                    <span className="text-[10px] font-bold text-zinc-500 uppercase block tracking-wider mb-1">Additional Instructions</span>
+                    <p className="text-zinc-300 leading-relaxed whitespace-pre-wrap">{bankInfo.bankInstructions}</p>
                   </div>
                 )}
               </div>
@@ -1704,8 +2364,8 @@ Note: My payment receipt has been uploaded to the portal.`;
               {/* Form inputs for verification */}
               <div className="space-y-4 mb-6">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                    Your Phone Number <span className="text-rose-500">*</span>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                    Your Phone Number <span className="text-[#d31d38]">*</span>
                   </label>
                   <input
                     type="tel"
@@ -1713,27 +2373,27 @@ Note: My payment receipt has been uploaded to the portal.`;
                     placeholder="Enter your phone number (e.g., 08031234567)"
                     value={userPhone}
                     onChange={(e) => setUserPhone(e.target.value)}
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-xs transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-4 text-white placeholder-zinc-600 focus:outline-none focus:border-[#d31d38] focus:ring-1 focus:ring-[#d31d38] text-xs transition"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                    Transaction Reference / Session ID <span className="text-slate-600">(Optional)</span>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                    Transaction Reference / Session ID <span className="text-zinc-600">(Optional)</span>
                   </label>
                   <input
                     type="text"
                     placeholder="Enter transaction reference or session ID"
                     value={transactionRef}
                     onChange={(e) => setTransactionRef(e.target.value)}
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500 text-xs transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-4 text-white placeholder-zinc-600 focus:outline-none focus:border-[#d31d38] focus:ring-1 focus:ring-[#d31d38] text-xs transition"
                   />
                 </div>
 
                 {/* File upload drag and drop area */}
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                    Upload Payment Receipt Screenshot <span className="text-rose-500">*</span>
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                    Upload Payment Receipt Screenshot <span className="text-[#d31d38]">*</span>
                   </label>
                   
                   <div
@@ -1744,10 +2404,10 @@ Note: My payment receipt has been uploaded to the portal.`;
                     onClick={() => document.getElementById('receipt-file-input')?.click()}
                     className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition ${
                       dragActive 
-                        ? 'border-rose-500 bg-rose-500/5' 
+                        ? 'border-[#d31d38] bg-[#d31d38]/10' 
                         : receiptBase64 
                           ? 'border-emerald-500/50 bg-emerald-500/5' 
-                          : 'border-slate-800 hover:border-slate-700 bg-[#07080c]'
+                          : 'border-[#2e1015] hover:border-[#d31d38]/60 bg-[#080203]'
                     }`}
                   >
                     <input
@@ -1765,22 +2425,22 @@ Note: My payment receipt has been uploaded to the portal.`;
                         </div>
                         <div className="text-xs">
                           <span className="text-emerald-400 font-bold block">Receipt Selected!</span>
-                          <span className="text-slate-500 text-[10px] block truncate max-w-xs mx-auto">{receiptFileName}</span>
+                          <span className="text-zinc-500 text-[10px] block truncate max-w-xs mx-auto">{receiptFileName}</span>
                         </div>
-                        <span className="inline-block text-[10px] bg-slate-800 text-slate-300 py-1 px-3 rounded-lg hover:bg-slate-700">
+                        <span className="inline-block text-[10px] bg-[#180608] text-zinc-300 py-1 px-3 rounded-lg hover:bg-[#220a0e] border border-[#2e1015]">
                           Change screenshot
                         </span>
                       </div>
                     ) : (
                       <div className="space-y-2">
-                        <div className="w-10 h-10 bg-slate-900 border border-slate-800 rounded-lg flex items-center justify-center mx-auto text-slate-400">
+                        <div className="w-10 h-10 bg-[#120507] border border-[#2e1015] rounded-lg flex items-center justify-center mx-auto text-zinc-400">
                           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 002-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                           </svg>
                         </div>
                         <div className="text-xs">
-                          <span className="text-slate-300 font-medium">Drag & drop receipt screenshot here</span>
-                          <span className="text-slate-500 block text-[10px] mt-1">or click to choose image file</span>
+                          <span className="text-zinc-300 font-medium">Drag & drop receipt screenshot here</span>
+                          <span className="text-zinc-500 block text-[10px] mt-1">or click to choose image file</span>
                         </div>
                       </div>
                     )}
@@ -1792,7 +2452,7 @@ Note: My payment receipt has been uploaded to the portal.`;
                 <button
                   type="button"
                   onClick={() => setShowManualPay(false)}
-                  className="flex-1 bg-[#0c0d14] hover:bg-[#141622] border border-slate-800 text-slate-400 font-bold py-3 px-4 rounded-xl text-xs transition cursor-pointer"
+                  className="flex-1 bg-[#0f0406] hover:bg-[#1c080b] border border-[#2e1015] text-zinc-400 font-bold py-3 px-4 rounded-xl text-xs transition cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -1800,7 +2460,7 @@ Note: My payment receipt has been uploaded to the portal.`;
                   type="button"
                   onClick={handleNotifyAdmin}
                   disabled={loading}
-                  className="flex-[2] bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white font-bold py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 text-xs shadow-lg shadow-rose-950/20"
+                  className="flex-[2] bg-[#d31d38] hover:bg-[#b0162c] text-white font-bold py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 text-xs shadow-lg shadow-[#d31d38]/30"
                   id="notify-admin-button"
                 >
                   {loading ? (
@@ -1817,16 +2477,16 @@ Note: My payment receipt has been uploaded to the portal.`;
             </div>
           ) : showMonnifyModal ? (
             /* Monnify Interactive Payment Form Modal */
-            <div className="bg-[#11131e] border border-sky-500/30 rounded-2xl p-6 sm:p-8 text-left max-w-xl mx-auto shadow-2xl relative animate-in fade-in zoom-in-95 duration-150">
+            <div className="bg-[#120507] border border-sky-500/30 rounded-2xl p-6 sm:p-8 text-left max-w-xl mx-auto shadow-2xl relative animate-in fade-in zoom-in-95 duration-150">
               <button
                 onClick={() => setShowMonnifyModal(false)}
-                className="absolute top-4 right-4 text-slate-400 hover:text-white bg-slate-800/50 hover:bg-slate-800 p-2 rounded-xl transition cursor-pointer"
+                className="absolute top-4 right-4 text-zinc-400 hover:text-white bg-[#180608] hover:bg-[#220a0e] p-2 rounded-xl transition cursor-pointer border border-[#2e1015]"
               >
                 <X className="w-5 h-5" />
               </button>
 
               <div className="flex items-center gap-3 mb-6">
-                <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-sky-500/20 to-blue-500/20 border border-sky-500/30 flex items-center justify-center text-sky-400">
+                <div className="w-12 h-12 rounded-2xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sky-400">
                   <CreditCard className="w-6 h-6" />
                 </div>
                 <div>
@@ -1835,20 +2495,20 @@ Note: My payment receipt has been uploaded to the portal.`;
                 </div>
               </div>
 
-              <div className="bg-[#07080c] border border-slate-800 rounded-xl p-4 mb-6 space-y-2 text-xs text-slate-300">
+              <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4 mb-6 space-y-2 text-xs text-zinc-300">
                 <div className="flex justify-between items-center">
-                  <span className="text-slate-400">Subscription Plan:</span>
+                  <span className="text-zinc-400">Subscription Plan:</span>
                   <span className="font-bold text-white">30-Day Streaming Access</span>
                 </div>
-                <div className="flex justify-between items-center border-t border-slate-800/80 pt-2">
-                  <span className="text-slate-400">Amount Due:</span>
+                <div className="flex justify-between items-center border-t border-[#2e1015] pt-2">
+                  <span className="text-zinc-400">Amount Due:</span>
                   <span className="font-extrabold text-sky-400 text-sm">₦{bankInfo?.subscriptionAmount || 600}.00 NGN</span>
                 </div>
               </div>
 
               <form onSubmit={handleExecuteMonnifyPayment} className="space-y-4">
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
                     Full Name <span className="text-sky-400">*</span>
                   </label>
                   <input
@@ -1857,12 +2517,12 @@ Note: My payment receipt has been uploaded to the portal.`;
                     value={monnifyFullName}
                     onChange={(e) => setMonnifyFullName(e.target.value)}
                     placeholder="e.g. John Doe"
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 text-xs transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-4 text-white placeholder-zinc-600 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 text-xs transition"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
                     Email Address <span className="text-sky-400">*</span>
                   </label>
                   <input
@@ -1871,25 +2531,25 @@ Note: My payment receipt has been uploaded to the portal.`;
                     value={monnifyEmail}
                     onChange={(e) => setMonnifyEmail(e.target.value)}
                     placeholder="e.g. john@example.com"
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 text-xs transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-4 text-white placeholder-zinc-600 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 text-xs transition"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                    Phone Number <span className="text-slate-500">(Optional)</span>
+                  <label className="block text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                    Phone Number <span className="text-zinc-500">(Optional)</span>
                   </label>
                   <input
                     type="tel"
                     value={monnifyPhone}
                     onChange={(e) => setMonnifyPhone(e.target.value)}
                     placeholder="e.g. 08012345678"
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 text-xs transition"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-4 text-white placeholder-zinc-600 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 text-xs transition"
                   />
                 </div>
 
                 {error && (
-                  <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-400 text-xs flex items-center gap-2">
+                  <div className="p-3 bg-[#d31d38]/10 border border-[#d31d38]/30 rounded-xl text-[#ff8093] text-xs flex items-center gap-2">
                     <AlertTriangle className="w-4 h-4 shrink-0" />
                     <span>{error}</span>
                   </div>
@@ -1899,7 +2559,7 @@ Note: My payment receipt has been uploaded to the portal.`;
                   <button
                     type="button"
                     onClick={() => setShowMonnifyModal(false)}
-                    className="flex-1 bg-[#0c0d14] hover:bg-[#141622] border border-slate-800 text-slate-400 font-bold py-3.5 px-4 rounded-xl text-xs transition cursor-pointer"
+                    className="flex-1 bg-[#0f0406] hover:bg-[#1c080b] border border-[#2e1015] text-zinc-400 font-bold py-3.5 px-4 rounded-xl text-xs transition cursor-pointer"
                   >
                     Cancel
                   </button>
@@ -1924,38 +2584,38 @@ Note: My payment receipt has been uploaded to the portal.`;
             </div>
           ) : (
             /* Billing Options Selector Panel */
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-8 text-center max-w-xl mx-auto shadow-2xl relative">
-              <div className="absolute top-0 right-0 bg-rose-600 text-white font-extrabold text-[10px] uppercase tracking-wider py-1.5 px-4 rounded-bl-xl">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-8 text-center max-w-xl mx-auto shadow-2xl relative">
+              <div className="absolute top-0 right-0 bg-[#d31d38] text-white font-extrabold text-[10px] uppercase tracking-wider py-1.5 px-4 rounded-bl-xl shadow-md">
                 {hasPaidBefore ? 'Access Suspended' : 'Payment Required'}
               </div>
               
               {hasPaidBefore ? (
-                <ShieldAlert className="w-12 h-12 text-rose-500 mx-auto mb-4" />
+                <ShieldAlert className="w-12 h-12 text-[#ff4d64] mx-auto mb-4" />
               ) : (
-                <CreditCard className="w-12 h-12 text-amber-400 mx-auto mb-4 animate-bounce" />
+                <CreditCard className="w-12 h-12 text-[#ff4d64] mx-auto mb-4 animate-bounce" />
               )}
               
               <h3 className="text-xl sm:text-2xl font-display font-extrabold text-white">
                 {hasPaidBefore ? 'Streaming Access Paused' : 'Pay ₦600 to Start Enjoying'}
               </h3>
-              <p className="text-slate-400 text-sm mt-2 leading-relaxed">
+              <p className="text-zinc-400 text-sm mt-2 leading-relaxed">
                 {hasPaidBefore 
                   ? 'Your ₦600 monthly plan is expired. Please renew your access to continue watching unlimited premium movies instantly.'
                   : 'Subscribe now for ₦600 NGN to unlock instant 30-day access to our complete library of 4K movies, TV series, and live streaming.'}
               </p>
 
-              <div className="bg-[#07080c] border border-slate-800/60 rounded-xl p-5 my-6 text-left text-xs space-y-3 max-w-sm mx-auto text-slate-300">
+              <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-5 my-6 text-left text-xs space-y-3 max-w-sm mx-auto text-zinc-300">
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Monthly Plan Subscription:</span>
+                  <span className="text-zinc-400">Monthly Plan Subscription:</span>
                   <span className="text-white font-bold">₦600.00 NGN</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Duration:</span>
+                  <span className="text-zinc-400">Duration:</span>
                   <span className="text-white font-bold">30 Days Unlimited Access</span>
                 </div>
-                <div className="flex justify-between border-t border-slate-800/80 pt-3">
-                  <span className="text-slate-400">Media Platform:</span>
-                  <span className="text-rose-400 font-bold">Cinode Private Server</span>
+                <div className="flex justify-between border-t border-[#2e1015] pt-3">
+                  <span className="text-zinc-400">Media Platform:</span>
+                  <span className="text-[#ff4d64] font-bold">Cinode Private Server</span>
                 </div>
               </div>
 
@@ -2045,7 +2705,7 @@ Note: My payment receipt has been uploaded to the portal.`;
                     }}
                     className={`w-full font-bold py-3.5 px-6 rounded-xl flex items-center justify-center gap-2.5 transition cursor-pointer text-sm ${
                       bankInfo?.paystackEnabled
-                        ? 'bg-[#11131e] hover:bg-[#1a1c2e] text-emerald-300 border border-emerald-500/30'
+                        ? 'bg-[#180608] hover:bg-[#220a0e] text-emerald-300 border border-emerald-500/30'
                         : 'bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-500 hover:to-teal-500 text-white shadow-xl shadow-emerald-950/30 border border-emerald-400/30 font-extrabold'
                     }`}
                     id="pay-custom-link-button"
@@ -2055,389 +2715,191 @@ Note: My payment receipt has been uploaded to the portal.`;
                   </button>
                 )}
 
-                <button
-                  onClick={() => setShowManualPay(true)}
-                  className={`w-full font-bold py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer text-xs ${
-                    bankInfo?.squadEnabled || bankInfo?.monnifyEnabled || bankInfo?.paystackEnabled || bankInfo?.customPaymentEnabled
-                      ? 'bg-[#0f111a] hover:bg-[#181a28] text-slate-300 border border-slate-800'
-                      : 'bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white shadow-lg shadow-rose-950/20 py-3.5 text-sm'
-                  }`}
-                  id="pay-manually-button"
-                >
-                  <Building2 className="w-4 h-4 text-slate-400" /> 
-                  {bankInfo?.squadEnabled || bankInfo?.monnifyEnabled || bankInfo?.paystackEnabled || bankInfo?.customPaymentEnabled ? 'Alternative: Manual Bank Transfer' : (hasPaidBefore ? 'Renew Subscription' : 'Pay ₦600 to Start Enjoying')}
-                </button>
+                {/* Manual Bank Transfer Payment Option */}
+                {(bankInfo?.manualPaymentEnabled !== false && bankInfo?.manualPaymentEnabled !== 0) && (
+                  <button
+                    onClick={() => setShowManualPay(true)}
+                    className={`w-full font-bold py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition cursor-pointer text-xs ${
+                      bankInfo?.squadEnabled || bankInfo?.monnifyEnabled || bankInfo?.paystackEnabled || bankInfo?.customPaymentEnabled
+                        ? 'bg-[#0f0406] hover:bg-[#1c080b] text-zinc-300 border border-[#2e1015]'
+                        : 'bg-[#d31d38] hover:bg-[#b0162c] text-white shadow-lg shadow-[#d31d38]/30 py-3.5 text-sm font-extrabold'
+                    }`}
+                    id="pay-manually-button"
+                  >
+                    <Building2 className="w-4 h-4 text-zinc-400" /> 
+                    {bankInfo?.squadEnabled || bankInfo?.monnifyEnabled || bankInfo?.paystackEnabled || bankInfo?.customPaymentEnabled ? 'Alternative: Manual Bank Transfer' : (hasPaidBefore ? 'Renew Subscription' : 'Pay ₦600 to Start Enjoying')}
+                  </button>
+                )}
+
+                {/* Notice if all payment gateways including manual bank transfer are disabled */}
+                {!(bankInfo?.squadEnabled || bankInfo?.monnifyEnabled || bankInfo?.paystackEnabled || bankInfo?.customPaymentEnabled) && (bankInfo?.manualPaymentEnabled === false || bankInfo?.manualPaymentEnabled === 0) && (
+                  <div className="bg-[#180608] border border-amber-500/30 rounded-xl p-4 text-amber-200/90 text-xs text-center space-y-2">
+                    <p className="font-bold text-amber-300">Payment Channels Temporarily Offline</p>
+                    <p className="text-[11px] text-zinc-400">Payment channels are temporarily paused or undergoing maintenance. Please reach out to customer support to activate or renew your subscription.</p>
+                  </div>
+                )}
               </div>
               
-              <p className="text-[11px] text-slate-500 mt-4 leading-relaxed">
+              <p className="text-[11px] text-zinc-500 mt-4 leading-relaxed">
                 {bankInfo?.squadEnabled || bankInfo?.monnifyEnabled || bankInfo?.paystackEnabled || bankInfo?.customPaymentEnabled
                   ? 'Select your preferred payment option above to complete your subscription renewal.' 
-                  : 'Unlock instant access via manual bank transfer securely. Cancel any time.'}
+                  : (bankInfo?.manualPaymentEnabled !== false && bankInfo?.manualPaymentEnabled !== 0)
+                    ? 'Unlock instant access via manual bank transfer securely. Cancel any time.'
+                    : 'Payment channels are currently paused. Please contact customer support.'}
               </p>
             </div>
           )
         ) : (
           /* Active Streaming Player Controls */
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            
-            {/* Player Launch Card */}
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-8 md:col-span-2 flex flex-col justify-between shadow-xl relative">
-              <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-rose-500/20 via-transparent to-transparent"></div>
-              
-              <div>
-                <div className="w-11 h-11 flex items-center justify-center bg-rose-500/10 text-rose-500 border border-rose-500/20 rounded-xl mb-5">
-                  <Play className="w-5 h-5 fill-current" />
-                </div>
-                <h3 className="text-2xl font-display font-extrabold text-white">Stream Player Terminal</h3>
-                <p className="text-slate-400 text-sm mt-3 leading-relaxed">
-                  Your private connection is healthy and ready. Launch the player to open our elegant film interface with automatic secure single sign-on!
-                </p>
-              </div>
-
-              <div className="mt-8 flex flex-col sm:flex-row gap-4">
-                <button
-                  onClick={() => {
-                    setDeviceNotice(null);
-                    setShowDeviceModal(true);
-                  }}
-                  className="bg-rose-600 hover:bg-rose-700 text-white font-bold py-4 px-8 rounded-xl flex items-center justify-center gap-2 transition shadow-xl shadow-rose-950/40 cursor-pointer text-sm"
-                  id="launch-jellyfin-button"
-                >
-                  Open Stream Player <ExternalLink className="w-4 h-4" />
-                </button>
-                
-                <button
-                  onClick={() => { setShowSyncModal(true); }}
-                  className="bg-[#07080c] hover:bg-[#121422] border border-slate-800 text-slate-300 font-bold py-4 px-6 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <RefreshCw className="w-4 h-4 text-rose-500" /> Re-Sync Session
-                </button>
-              </div>
-            </div>
-
-            {/* Side Membership Details Card */}
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-8 flex flex-col justify-between shadow-xl">
-              <div>
-                <div className="flex items-center gap-2 text-rose-400 border-b border-slate-800/60 pb-3 mb-5">
-                  <UserCheck className="w-4 h-4" />
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300">Account Details</h4>
-                </div>
-                
-                <div className="space-y-4 text-xs">
-                  <div>
-                    <span className="block text-slate-500 font-medium mb-0.5">USERNAME</span>
-                    <span className="text-white font-bold">@{user.username}</span>
-                  </div>
-                  <div>
-                    <span className="block text-slate-500 font-medium mb-0.5">EMAIL</span>
-                    <span className="text-white font-medium truncate block">{user.email}</span>
-                  </div>
-                  {user.subscriptionExpiryDate && (
-                    <div>
-                      <span className="block text-slate-500 font-medium mb-0.5">RENEWAL DATE</span>
-                      <span className="text-rose-400 font-bold flex items-center gap-1">
-                        <Calendar className="w-3.5 h-3.5 inline" /> {new Date(user.subscriptionExpiryDate).toLocaleDateString()}
-                      </span>
-                    </div>
-                  )}
-                  <div>
-                    <span className="block text-slate-500 font-medium mb-0.5">ACCOUNT ID</span>
-                    <span className="text-slate-400 block truncate font-mono text-[11px] bg-[#07080c] p-2 rounded-lg mt-1 border border-slate-800/40">{user.jellyfinUserId || 'Direct Connection'}</span>
-                  </div>
-
-                  {/* Direct Debit Status Widget */}
-                  <div className="pt-2 border-t border-slate-800/60">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[10px] font-bold text-purple-400 uppercase tracking-wider flex items-center gap-1">
-                        <Landmark className="w-3 h-3 text-purple-400" />
-                        <span>Auto-Renewal</span>
-                      </span>
-                      {userMandate && userMandate.status === 'active' ? (
-                        <span className="text-[9px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-bold">
-                          Active (₦{userMandate.amount}/mo)
-                        </span>
-                      ) : (
-                        <span className="text-[9px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-bold">
-                          Not Enabled
-                        </span>
-                      )}
-                    </div>
-
-                    {userMandate && userMandate.status === 'active' ? (
-                      <div className="bg-[#07080c] p-2.5 rounded-xl border border-purple-500/20 space-y-1.5 text-[11px]">
-                        <div className="flex justify-between text-slate-300">
-                          <span className="text-slate-500">Bank:</span>
-                          <span className="font-semibold">{userMandate.bankName || 'Nigerian Bank'}</span>
-                        </div>
-                        <div className="flex justify-between text-slate-300">
-                          <span className="text-slate-500">Account:</span>
-                          <span className="font-mono text-purple-300">
-                            {userMandate.accountNumber ? `******${userMandate.accountNumber.slice(-4)}` : '••••••••••'}
-                          </span>
-                        </div>
-                        {userMandate.nextDebitDate && (
-                          <div className="flex justify-between text-slate-300">
-                            <span className="text-slate-500">Next Debit:</span>
-                            <span className="text-emerald-400 font-medium">
-                              {new Date(userMandate.nextDebitDate).toLocaleDateString()}
-                            </span>
-                          </div>
-                        )}
-                        <div className="flex gap-2 pt-2 border-t border-slate-800/80">
-                          <button
-                            type="button"
-                            onClick={handleTriggerManualRenewalDebit}
-                            disabled={renewingMandate}
-                            className="flex-1 bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/30 rounded-lg py-1 text-[10px] font-bold transition flex items-center justify-center gap-1 cursor-pointer"
-                          >
-                            {renewingMandate ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                            <span>Debit Now</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleCancelUserMandate}
-                            disabled={cancellingMandate}
-                            className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-lg py-1 px-2 text-[10px] font-bold transition flex items-center justify-center gap-1 cursor-pointer"
-                          >
-                            {cancellingMandate ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
-                            <span>Cancel</span>
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      bankInfo?.squadEnabled && (
-                        <button
-                          type="button"
-                          onClick={handleOpenDirectDebitModal}
-                          className="w-full bg-purple-950/40 hover:bg-purple-900/50 text-purple-300 border border-purple-500/30 text-[10px] font-bold py-1.5 px-2.5 rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer"
-                        >
-                          <Landmark className="w-3 h-3 text-purple-400" />
-                          <span>Enable Auto-Renew (Direct Debit)</span>
-                        </button>
-                      )
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-6 pt-4 border-t border-slate-800/60 flex items-center justify-between text-[11px] text-slate-400 font-semibold uppercase tracking-wider">
-                <span>Secure Server Connection</span>
-                <span className="text-emerald-400 font-bold flex items-center gap-1">Online</span>
-              </div>
-            </div>
-
+          </div>
+        )}
           </div>
         )}
 
-        {/* Mobile App Download Advertisement Banner */}
-        <div className="bg-gradient-to-r from-[#11131e] via-[#1a1325] to-[#11131e] border border-slate-800/80 rounded-2xl p-6 shadow-xl relative overflow-hidden mb-8">
-          <div className="absolute top-0 left-0 w-[4px] h-full bg-rose-500"></div>
-          <div className="flex flex-col md:flex-row items-center justify-between gap-6 relative z-10">
-            <div className="space-y-2 text-center md:text-left">
-              <span className="inline-flex items-center gap-1 bg-rose-500/10 text-rose-400 font-bold text-[9px] uppercase tracking-wider px-2.5 py-1 rounded-full border border-rose-500/20">
-                <Smartphone className="w-3 h-3" /> Offline watch available
-              </span>
-              <h3 className="text-lg font-display font-black text-white">Stream & Save Content Directly on Mobile Clients</h3>
-              <p className="text-slate-400 text-xs max-w-xl leading-relaxed">
-                Watch seamlessly on the move without buffering or using mobile data! Download our dedicated client apps for your iPhone, iPad, or Android smartphone/tablet.
-              </p>
+        {/* ================= TAB 3: DIRECT DEBIT ================= */}
+        {activeTab === 'direct_debit' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+                        <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 shadow-xl relative overflow-hidden">
+              <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-purple-500 via-pink-500 to-purple-500"></div>
               
-              <div className="bg-[#07080c] border border-rose-500/30 rounded-xl p-3 max-w-xl space-y-1 text-left">
-                <span className="text-rose-400 font-bold text-[11px] uppercase tracking-wider block">
-                  📱 Mobile App Connection Setup
-                </span>
-                <p className="text-slate-300 text-xs">
-                  When opening the mobile app for the first time, in the field requiring you to enter the <strong>Server URL</strong>, enter:
-                </p>
-                <div className="bg-[#111320] border border-slate-800 rounded-lg px-2.5 py-1.5 text-rose-300 font-mono text-xs flex items-center justify-between font-bold select-all">
-                  <span>https://cinode.zerolord.com</span>
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-[#2e1015] pb-6 mb-6">
+                <div>
+                  <span className="text-[10px] text-purple-400 font-extrabold uppercase tracking-wider flex items-center gap-1.5">
+                    <Landmark className="w-3.5 h-3.5" /> Automated Recurring Renewal
+                  </span>
+                  <h3 className="text-xl font-display font-extrabold text-white mt-1">Squad Direct Debit Mandate</h3>
+                  <p className="text-xs text-zinc-400 mt-1 max-w-xl">
+                    Never lose access to your streams. Set up an automated monthly ₦600 bank debit with your Nigerian bank account.
+                  </p>
+                </div>
+                <div>
+                  {userMandate && userMandate.status === 'active' ? (
+                    <span className="bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 text-xs font-bold px-3 py-1.5 rounded-xl flex items-center gap-2">
+                      <CheckCircle className="w-4 h-4" /> Active Mandate
+                    </span>
+                  ) : (
+                    <span className="bg-[#180608] text-zinc-400 border border-[#2e1015] text-xs font-bold px-3 py-1.5 rounded-xl">
+                      No Active Mandate
+                    </span>
+                  )}
                 </div>
               </div>
-            </div>
-            
-            <div className="flex flex-wrap items-center gap-3 justify-center shrink-0">
-              {systemStatus?.iosDownloadUrl ? (
-                <a 
-                  href={systemStatus.iosDownloadUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="bg-slate-950 hover:bg-slate-900 text-white font-bold py-2.5 px-4 rounded-xl text-xs flex items-center gap-2 border border-slate-800 hover:border-slate-700 transition cursor-pointer"
-                >
-                  <svg className="w-4 h-4 fill-white" viewBox="0 0 24 24">
-                    <path d="M18.71,19.5C17.88,20.74 17,21.95 15.66,21.97C14.32,22 13.89,21.18 12.37,21.18C10.84,21.18 10.37,21.95 9.1,22C7.79,22.05 6.8,20.68 5.96,19.47C4.25,17 2.94,12.45 4.7,9.39C5.57,7.87 7.13,6.91 8.82,6.88C10.1,6.86 11.32,7.75 12.11,7.75C12.89,7.75 14.37,6.68 15.92,6.84C16.57,6.87 18.39,7.1 19.56,8.82C19.47,8.88 17.39,10.1 17.41,12.63C17.44,15.65 20.06,16.66 20.1,16.67C20.08,16.74 19.67,18.11 18.71,19.5M15.97,4.17C16.63,3.37 17.07,2.28 16.95,1C16,1.04 14.9,1.6 14.24,2.38C13.68,3.04 13.19,4.14 13.34,5.39C14.39,5.47 15.4,4.88 15.97,4.17Z" />
-                  </svg>
-                  <span>Download iOS App</span>
-                </a>
-              ) : (
-                <button 
-                  onClick={() => alert("iOS app download URL is currently being set up by our admins. Check back soon!")}
-                  className="bg-slate-950/40 text-slate-500 font-bold py-2.5 px-4 rounded-xl text-xs flex items-center gap-2 border border-slate-900 transition cursor-not-allowed"
-                >
-                  <svg className="w-4 h-4 fill-slate-500" viewBox="0 0 24 24">
-                    <path d="M18.71,19.5C17.88,20.74 17,21.95 15.66,21.97C14.32,22 13.89,21.18 12.37,21.18C10.84,21.18 10.37,21.95 9.1,22C7.79,22.05 6.8,20.68 5.96,19.47C4.25,17 2.94,12.45 4.7,9.39C5.57,7.87 7.13,6.91 8.82,6.88C10.1,6.86 11.32,7.75 12.11,7.75C12.89,7.75 14.37,6.68 15.92,6.84C16.57,6.87 18.39,7.1 19.56,8.82C19.47,8.88 17.39,10.1 17.41,12.63C17.44,15.65 20.06,16.66 20.1,16.67C20.08,16.74 19.67,18.11 18.71,19.5M15.97,4.17C16.63,3.37 17.07,2.28 16.95,1C16,1.04 14.9,1.6 14.24,2.38C13.68,3.04 13.19,4.14 13.34,5.39C14.39,5.47 15.4,4.88 15.97,4.17Z" />
-                  </svg>
-                  <span>iOS App (Pending)</span>
-                </button>
-              )}
 
-              {systemStatus?.androidDownloadUrl ? (
-                <a 
-                  href={systemStatus.androidDownloadUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="bg-slate-950 hover:bg-slate-900 text-white font-bold py-2.5 px-4 rounded-xl text-xs flex items-center gap-2 border border-slate-800 hover:border-slate-700 transition cursor-pointer"
-                >
-                  <svg className="w-4 h-4 fill-white" viewBox="0 0 24 24">
-                    <path d="M3,5.27V18.73L16.55,12L3,5.27M17.87,11.33L19.43,12.11L17.87,12.89L16.67,12L17.87,11.33M3,3.41L15.67,9.7L18.11,8.47L3,3.41M3,20.59L18.11,15.53L15.67,14.3L3,20.59Z" />
-                  </svg>
-                  <span>Download Android App</span>
-                </a>
-              ) : (
-                <button 
-                  onClick={() => alert("Android app download URL is currently being set up by our admins. Check back soon!")}
-                  className="bg-slate-950/40 text-slate-500 font-bold py-2.5 px-4 rounded-xl text-xs flex items-center gap-2 border border-slate-900 transition cursor-not-allowed"
-                >
-                  <svg className="w-4 h-4 fill-slate-500" viewBox="0 0 24 24">
-                    <path d="M3,5.27V18.73L16.55,12L3,5.27M17.87,11.33L19.43,12.11L17.87,12.89L16.67,12L17.87,11.33M3,3.41L15.67,9.7L18.11,8.47L3,3.41M3,20.59L18.11,15.53L15.67,14.3L3,20.59Z" />
-                  </svg>
-                  <span>Android App (Pending)</span>
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Community Announcements Feed & Media Requests Section */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-8">
-          
-          {/* Targeted Broadcast Notifications Feed */}
-          <div className="lg:col-span-2 bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 shadow-xl relative">
-            <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-sky-500/20 via-transparent to-transparent"></div>
-            
-            <div className="flex items-center justify-between border-b border-slate-800/60 pb-4 mb-5">
-              <div className="flex items-center gap-2">
-                <MessageSquare className="w-5 h-5 text-sky-400" />
-                <h3 className="text-lg font-display font-extrabold text-white">Broadcast Announcements</h3>
-              </div>
-              <button
-                onClick={fetchNotifications}
-                disabled={loadingNotifs}
-                className="text-slate-500 hover:text-slate-300 transition text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5"
-              >
-                <RefreshCw className={`w-3 h-3 ${loadingNotifs ? 'animate-spin' : ''}`} /> Refresh
-              </button>
-            </div>
-
-            {loadingNotifs && notifications.length === 0 ? (
-              <div className="py-12 text-center text-slate-500">
-                <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-sky-400" />
-                <span className="text-xs">Checking for announcements...</span>
-              </div>
-            ) : notifications.length === 0 ? (
-              <div className="text-center py-12 bg-[#07080c] rounded-2xl border border-slate-800/40">
-                <Info className="w-10 h-10 text-slate-700 mx-auto mb-2" />
-                <h4 className="text-slate-300 font-semibold text-xs">No active broadcasts</h4>
-                <p className="text-slate-500 text-[10px] mt-1">Announcements or system updates will appear here when pushed by administrators.</p>
-              </div>
-            ) : (
-              <div className="space-y-4 max-h-[500px] overflow-y-auto pr-1">
-                {notifications.map((notif) => {
-                  const isVideo = notif.imageUrl && (
-                    notif.imageUrl.endsWith('.mp4') || 
-                    notif.imageUrl.endsWith('.webm') || 
-                    notif.imageUrl.endsWith('.ogg') || 
-                    notif.imageUrl.endsWith('.mov') ||
-                    notif.imageUrl.includes('/video/')
-                  );
-
-                  const isUnread = !readNotifIds.includes(notif.id);
-
-                  return (
-                    <div 
-                      key={notif.id} 
-                      onClick={() => handleOpenNotification(notif)}
-                      className={`border rounded-xl p-5 hover:border-sky-500/40 transition text-left cursor-pointer hover:bg-slate-900/10 group relative ${isUnread ? 'bg-rose-500/5 border-rose-500/30' : 'bg-[#07080c] border-slate-800/80'}`}
-                    >
-                      <div className="flex justify-between items-start gap-4 mb-2">
-                        <div className="flex items-center gap-2">
-                          <h4 className="text-white font-bold text-sm group-hover:text-sky-400 transition">{notif.title}</h4>
-                          {isUnread && (
-                            <span className="bg-rose-600 text-white text-[8px] font-extrabold px-1.5 py-0.5 rounded uppercase tracking-wider">New</span>
-                          )}
-                        </div>
-                        <span className="text-[9px] text-slate-500 font-mono shrink-0">{new Date(notif.createdAt).toLocaleDateString()}</span>
-                      </div>
-                      <p className="text-slate-300 text-xs leading-relaxed whitespace-pre-wrap">{notif.message}</p>
-                      
-                      {notif.imageUrl && (
-                        <div className="mt-3.5 rounded-lg overflow-hidden border border-slate-800 bg-slate-950/40 w-fit max-w-full">
-                          {isVideo ? (
-                            <video 
-                              src={notif.imageUrl} 
-                              controls 
-                              onClick={(e) => e.stopPropagation()} // don't open modal when clicking video controls
-                              className="max-w-full h-auto rounded-lg block" 
-                            />
-                          ) : (
-                            <img 
-                              src={notif.imageUrl} 
-                              alt={notif.title} 
-                              referrerPolicy="no-referrer" 
-                              className="max-w-full h-auto rounded-lg block" 
-                            />
-                          )}
-                        </div>
-                      )}
+              {userMandate && userMandate.status === 'active' ? (
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="bg-[#180608] border border-purple-500/20 p-4 rounded-xl">
+                      <div className="text-[10px] text-zinc-500 font-bold uppercase">Authorized Bank</div>
+                      <div className="text-sm font-bold text-white mt-1">{userMandate.bankName || 'Nigerian Bank'}</div>
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+                    <div className="bg-[#180608] border border-purple-500/20 p-4 rounded-xl">
+                      <div className="text-[10px] text-zinc-500 font-bold uppercase">Debit Account</div>
+                      <div className="text-sm font-mono text-purple-300 mt-1">
+                        {userMandate.accountNumber ? `******${userMandate.accountNumber.slice(-4)}` : '••••••••••'}
+                      </div>
+                    </div>
+                    <div className="bg-[#180608] border border-purple-500/20 p-4 rounded-xl">
+                      <div className="text-[10px] text-zinc-500 font-bold uppercase">Next Renewal Date</div>
+                      <div className="text-sm font-bold text-emerald-400 mt-1">
+                        {userMandate.nextDebitDate ? new Date(userMandate.nextDebitDate).toLocaleDateString() : 'Active Renewal'}
+                      </div>
+                    </div>
+                  </div>
 
-          {/* User Movie/Show Request Console */}
-          <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 shadow-xl relative">
-            <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-cyan-500/20 via-transparent to-transparent"></div>
+                  <div className="flex flex-wrap items-center gap-3 pt-4 border-t border-[#2e1015]">
+                    <button
+                      type="button"
+                      onClick={handleTriggerManualRenewalDebit}
+                      disabled={renewingMandate}
+                      className="bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs py-2.5 px-5 rounded-xl transition flex items-center gap-2 cursor-pointer shadow-lg shadow-purple-600/30"
+                    >
+                      {renewingMandate ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                      <span>Trigger Renewal Debit Now (₦{userMandate.amount || '600'})</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCancelUserMandate}
+                      disabled={cancellingMandate}
+                      className="bg-[#180608] hover:bg-rose-950/40 text-rose-300 border border-rose-500/30 font-bold text-xs py-2.5 px-4 rounded-xl transition flex items-center gap-2 cursor-pointer"
+                    >
+                      {cancellingMandate ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
+                      <span>Cancel Mandate</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  <div className="bg-[#180608] border border-[#2e1015] p-5 rounded-xl text-xs text-zinc-300 space-y-2">
+                    <div className="font-bold text-white text-sm mb-1">Why enable Automated Direct Debit?</div>
+                    <p>• Seamless unthrottled streaming without manual bank transfers or monthly logins.</p>
+                    <p>• Instant renewal verification and immediate Jellyfin account validity extension.</p>
+                    <p>• Fully secure and regulated by the Central Bank of Nigeria via Squad / HabariPay.</p>
+                    <p>• Cancel anytime in 1-click directly from this portal.</p>
+                  </div>
+
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={handleOpenDirectDebitModal}
+                      className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-bold text-xs py-3 px-6 rounded-xl transition flex items-center gap-2 cursor-pointer shadow-lg shadow-purple-600/30"
+                    >
+                      <Landmark className="w-4 h-4" />
+                      <span>Set Up Monthly Direct Debit (₦600/mo)</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ================= TAB 4: MEDIA REQUESTS ================= */}
+        {activeTab === 'requests' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+            {/* User Movie/Show Request Console */}
+          <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 shadow-xl relative">
+            <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-[#d31d38]/40 via-transparent to-transparent"></div>
             
-            <div className="flex items-center justify-between border-b border-slate-800/60 pb-4 mb-5">
+            <div className="flex items-center justify-between border-b border-[#2e1015] pb-4 mb-5">
               <div className="flex items-center gap-2">
-                <Tv className="w-5 h-5 text-cyan-400" />
+                <Tv className="w-5 h-5 text-[#ff4d64]" />
                 <h3 className="text-lg font-display font-extrabold text-white">Movie/Show Request</h3>
               </div>
             </div>
 
-            <p className="text-slate-400 text-xs mb-5 leading-relaxed text-left">
+            <p className="text-zinc-400 text-xs mb-5 leading-relaxed text-left">
               Can't find your favorite movie or TV show? Submit a request and our admin team will source and add it to our server!
             </p>
 
             <button
               onClick={() => setShowRequestModal(true)}
-              className="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-3 px-4 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shadow-lg shadow-cyan-950/20 mb-6"
+              className="w-full bg-[#d31d38] hover:bg-[#b0162c] text-white font-bold py-3 px-4 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shadow-lg shadow-[#d31d38]/20 mb-6"
             >
               <PlusCircle className="w-4 h-4" /> Request Movie or Show
             </button>
 
             {/* List User's own previous requests */}
             <div className="space-y-3 text-left">
-              <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Your Request History ({userRequests.length})</h4>
+              <h4 className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Your Request History ({userRequests.length})</h4>
               
               {loadingUserRequests && userRequests.length === 0 ? (
-                <div className="py-4 text-center text-slate-600">
-                  <Loader2 className="w-4 h-4 animate-spin mx-auto text-cyan-400" />
+                <div className="py-4 text-center text-zinc-600">
+                  <Loader2 className="w-4 h-4 animate-spin mx-auto text-[#ff4d64]" />
                 </div>
               ) : userRequests.length === 0 ? (
-                <p className="text-slate-600 text-[11px] italic">You have not requested any content yet.</p>
+                <p className="text-zinc-600 text-[11px] italic">You have not requested any content yet.</p>
               ) : (
                 <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
                   {userRequests.map((req) => (
-                    <div key={req.id} className="bg-[#07080c] border border-slate-800 p-3 rounded-xl flex items-center justify-between gap-3 text-xs">
+                    <div key={req.id} className="bg-[#080203] border border-[#2e1015] p-3 rounded-xl flex items-center justify-between gap-3 text-xs">
                       <div className="min-w-0">
                         <span className="font-semibold text-white truncate block">{req.title}</span>
-                        <span className="text-[10px] text-slate-500 block">
+                        <span className="text-[10px] text-zinc-500 block">
                           {req.type === 'movie' ? `Movie (${req.releaseYear || 'N/A'})` : `Show (S:${req.season || 'All'} E:${req.episode || 'All'})`}
                         </span>
                       </div>
-                      <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${req.status === 'Approved' ? 'bg-emerald-500/10 text-emerald-400' : req.status === 'Declined' ? 'bg-rose-500/10 text-rose-400' : 'bg-cyan-500/10 text-cyan-400'}`}>
+                      <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${req.status === 'Approved' ? 'bg-emerald-500/10 text-emerald-400' : req.status === 'Declined' ? 'bg-rose-500/10 text-rose-400' : 'bg-[#d31d38]/15 text-[#ff4d64]'}`}>
                         {req.status}
                       </span>
                     </div>
@@ -2446,153 +2908,27 @@ Note: My payment receipt has been uploaded to the portal.`;
               )}
             </div>
           </div>
-
-        </div>
-
-        {/* Custom Movie/Show Request Modal Form */}
-        {showRequestModal && (
-          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-            <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl w-full max-w-md p-6 sm:p-8 shadow-2xl relative">
-              <button
-                onClick={() => setShowRequestModal(false)}
-                className="absolute top-4 right-4 text-slate-400 hover:text-white transition cursor-pointer bg-transparent border-0"
-              >
-                <X className="w-5 h-5" />
-              </button>
-
-              <div className="mb-6 text-left">
-                <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
-                  <PlusCircle className="w-5 h-5 text-cyan-400" />
-                  <span>Request Content</span>
-                </h3>
-                <p className="text-slate-400 text-xs mt-1">Submit the movie or TV show you want to watch on Cinode.</p>
-              </div>
-
-              <form onSubmit={handleMediaRequestSubmit} className="space-y-4 text-left">
-                <div className="space-y-1">
-                  <label className="block text-xs font-bold text-slate-300">Content Type</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setRequestType('movie')}
-                      className={`py-2 px-4 rounded-xl text-xs font-bold border transition cursor-pointer ${requestType === 'movie' ? 'bg-cyan-500/10 border-cyan-500 text-cyan-400' : 'bg-[#07080c] border-slate-800 text-slate-400 hover:border-slate-700'}`}
-                    >
-                      Movie
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRequestType('show')}
-                      className={`py-2 px-4 rounded-xl text-xs font-bold border transition cursor-pointer ${requestType === 'show' ? 'bg-cyan-500/10 border-cyan-500 text-cyan-400' : 'bg-[#07080c] border-slate-800 text-slate-400 hover:border-slate-700'}`}
-                    >
-                      TV Show
-                    </button>
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="block text-xs font-bold text-slate-300">Title</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Enter full title of movie or show"
-                    className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-cyan-500 transition"
-                    value={requestTitle}
-                    onChange={(e) => setRequestTitle(e.target.value)}
-                  />
-                </div>
-
-                {requestType === 'movie' ? (
-                  <div className="space-y-1">
-                    <label className="block text-xs font-bold text-slate-300">Release Year (Optional)</label>
-                    <input
-                      type="number"
-                      placeholder="e.g. 2026"
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-cyan-500 transition"
-                      value={requestYear}
-                      onChange={(e) => setRequestYear(e.target.value)}
-                    />
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-2 py-1">
-                      <input
-                        type="checkbox"
-                        id="fullSeasonCheckbox"
-                        className="rounded border-slate-800 text-cyan-500 focus:ring-cyan-500"
-                        checked={requestIsFullSeason}
-                        onChange={(e) => setRequestIsFullSeason(e.target.checked)}
-                      />
-                      <label htmlFor="fullSeasonCheckbox" className="text-xs text-slate-300 font-semibold cursor-pointer select-none">
-                        Complete Season (All Episodes)
-                      </label>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <label className="block text-[10px] font-bold text-slate-400 uppercase">Season Number</label>
-                        <input
-                          type="text"
-                          required
-                          placeholder="e.g. 1"
-                          className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-cyan-500 transition"
-                          value={requestSeason}
-                          onChange={(e) => setRequestSeason(e.target.value)}
-                        />
-                      </div>
-                      {!requestIsFullSeason && (
-                        <div className="space-y-1">
-                          <label className="block text-[10px] font-bold text-slate-400 uppercase">Episode Number</label>
-                          <input
-                            type="text"
-                            required
-                            placeholder="e.g. 4"
-                            className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-cyan-500 transition"
-                            value={requestEpisode}
-                            onChange={(e) => setRequestEpisode(e.target.value)}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex justify-end gap-3 pt-3">
-                  <button
-                    type="button"
-                    onClick={() => setShowRequestModal(false)}
-                    className="bg-[#07080c] border border-slate-800 text-slate-400 font-bold py-2.5 px-4 rounded-xl text-xs hover:text-white transition cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={submittingRequest}
-                    className="bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2.5 px-6 rounded-xl text-xs transition cursor-pointer flex items-center gap-2"
-                  >
-                    {submittingRequest ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                    Submit Request
-                  </button>
-                </div>
-              </form>
-            </div>
           </div>
         )}
 
-        {/* Affiliate Referral Program Section */}
+        {/* ================= TAB 5: AFFILIATE & EARNINGS ================= */}
+        {activeTab === 'affiliate' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+            {/* Affiliate Referral Program Section */}
         {user.isAffiliate && (
-          <div className="bg-[#11131e] border border-slate-800/80 rounded-2xl p-6 sm:p-8 mt-8 shadow-xl relative" id="affiliate-dashboard-section">
-            <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-emerald-500/20 via-transparent to-transparent"></div>
+          <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 mt-8 shadow-xl relative" id="affiliate-dashboard-section">
+            <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-emerald-500/30 via-transparent to-transparent"></div>
             
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-800/60 pb-6 mb-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-[#2e1015] pb-6 mb-6">
               <div>
                 <span className="text-xs text-emerald-400 font-semibold uppercase tracking-wider">Affiliate Program</span>
                 <h3 className="text-2xl font-display font-extrabold text-white tracking-tight mt-1">Your Referral Partner Dashboard</h3>
-                <p className="text-slate-400 text-sm mt-1">Invite friends and earn commissions on active subscriptions!</p>
+                <p className="text-zinc-400 text-sm mt-1">Invite friends and earn commissions on active subscriptions!</p>
               </div>
               <button
                 onClick={fetchAffiliateStats}
                 disabled={loadingStats}
-                className="bg-[#07080c] hover:bg-[#121422] border border-slate-800 text-xs text-slate-300 font-bold py-2 px-4 rounded-xl flex items-center gap-2 transition cursor-pointer"
+                className="bg-[#080203] hover:bg-[#180608] border border-[#2e1015] text-xs text-zinc-300 font-bold py-2 px-4 rounded-xl flex items-center gap-2 transition cursor-pointer"
               >
                 <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${loadingStats ? 'animate-spin' : ''}`} /> Refresh Stats
               </button>
@@ -2601,27 +2937,27 @@ Note: My payment receipt has been uploaded to the portal.`;
             {loadingStats && !affiliateStats ? (
               <div className="flex flex-col items-center justify-center py-12">
                 <Loader2 className="w-8 h-8 text-emerald-400 animate-spin mb-2" />
-                <span className="text-sm text-slate-400">Loading your referral details...</span>
+                <span className="text-sm text-zinc-400">Loading your referral details...</span>
               </div>
             ) : (
               <div className="space-y-6">
                 
                 {/* Promo link / Referral Code card */}
-                <div className="bg-[#07080c] border border-slate-800 rounded-xl p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                   <div>
-                    <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Your Unique Code</span>
+                    <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-bold">Your Unique Code</span>
                     <div className="text-xl font-mono font-black text-white mt-1">
                       {affiliateStats?.affiliateCode || user.affiliateCode || 'PENDING'}
                     </div>
                   </div>
                   <div className="flex-1 w-full md:max-w-md">
-                    <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Referral Partner Link</span>
+                    <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-bold">Referral Partner Link</span>
                     <div className="flex mt-1">
                       <input
                         type="text"
                         readOnly
                         value={`${window.location.origin}?ref=${affiliateStats?.affiliateCode || user.affiliateCode}`}
-                        className="w-full bg-[#11131e] border border-slate-800 border-r-0 rounded-l-xl py-2 px-3 text-xs text-slate-300 font-mono focus:outline-none"
+                        className="w-full bg-[#120507] border border-[#2e1015] border-r-0 rounded-l-xl py-2 px-3 text-xs text-zinc-300 font-mono focus:outline-none"
                       />
                       <button
                         onClick={copyReferralLink}
@@ -2642,93 +2978,204 @@ Note: My payment receipt has been uploaded to the portal.`;
                 </div>
 
                 {/* Key Metrics Grid */}
-                <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-                  <div className="bg-[#090a0f] border border-slate-800/80 rounded-xl p-4.5">
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4.5">
                     <div className="flex justify-between items-start mb-2">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Total Referrals</span>
-                      <Users className="w-4 h-4 text-emerald-400" />
+                      <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Total Earnings</span>
+                      <DollarSign className="w-4 h-4 text-zinc-400" />
                     </div>
-                    <span className="text-2xl font-black text-white">{affiliateStats?.registeredCount ?? 0}</span>
-                    <span className="block text-[10px] text-slate-500 mt-1">Sign ups via your code</span>
+                    <span className="text-2xl font-black text-white">₦{Number(affiliateStats?.totalEarnings ?? affiliateStats?.totalCommission ?? 0).toFixed(2)}</span>
+                    <span className="block text-[10px] text-zinc-500 mt-1">All commissions earned</span>
                   </div>
 
-                  <div className="bg-[#090a0f] border border-slate-800/80 rounded-xl p-4.5">
+                  <div className="bg-[#080203] border border-emerald-500/30 rounded-xl p-4.5 bg-gradient-to-b from-emerald-950/20 to-transparent">
                     <div className="flex justify-between items-start mb-2">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Paid Subscribers</span>
-                      <UserCheck className="w-4 h-4 text-emerald-400" />
+                      <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">Available to Withdraw</span>
+                      <Wallet className="w-4 h-4 text-emerald-400" />
                     </div>
-                    <span className="text-2xl font-black text-white">{affiliateStats?.paidCount ?? 0}</span>
-                    <span className="block text-[10px] text-slate-500 mt-1">Completed payment (active)</span>
+                    <span className="text-2xl font-black text-emerald-400">₦{Number(affiliateStats?.availableEarnings ?? 0).toFixed(2)}</span>
+                    <span className="block text-[10px] text-emerald-500/80 mt-1 font-medium">Ready for payout</span>
                   </div>
 
-                  <div className="bg-[#090a0f] border border-slate-800/80 rounded-xl p-4.5">
+                  <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4.5">
                     <div className="flex justify-between items-start mb-2">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Commission Rate</span>
-                      <Percent className="w-4 h-4 text-emerald-400" />
-                    </div>
-                    <span className="text-2xl font-black text-white">₦{Number(affiliateStats?.defaultCommission ?? 100.00).toFixed(2)}</span>
-                    <span className="block text-[10px] text-slate-500 mt-1">Per paid sub (Admin set)</span>
-                  </div>
-
-                  <div className="bg-[#090a0f] border border-slate-800/80 rounded-xl p-4.5">
-                    <div className="flex justify-between items-start mb-2">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Awaiting Payout</span>
+                      <span className="text-[10px] font-bold text-amber-500/90 uppercase tracking-wider">In Review (Pending)</span>
                       <Clock className="w-4 h-4 text-amber-400" />
                     </div>
-                    <span className="text-2xl font-black text-amber-400">₦{Number((affiliateStats?.pendingCommission ?? 0) + (affiliateStats?.approvedCommission ?? 0)).toFixed(2)}</span>
-                    <span className="block text-[10px] text-slate-500 mt-1">Unpaid balance (Pending)</span>
+                    <span className="text-2xl font-black text-amber-400">₦{Number(affiliateStats?.pendingWithdrawal ?? 0).toFixed(2)}</span>
+                    <span className="block text-[10px] text-zinc-500 mt-1">Awaiting admin transfer</span>
                   </div>
 
-                  <div className="bg-[#090a0f] border border-slate-800/80 rounded-xl p-4.5 col-span-2 sm:col-span-1">
+                  <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4.5">
                     <div className="flex justify-between items-start mb-2">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Paid Payouts</span>
-                      <DollarSign className="w-4 h-4 text-emerald-400" />
+                      <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Total Paid Out</span>
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                     </div>
-                    <span className="text-2xl font-black text-emerald-400">₦{Number(affiliateStats?.paidCommission ?? 0).toFixed(2)}</span>
-                    <span className="block text-[10px] text-slate-500 mt-1">Total payout settled</span>
+                    <span className="text-2xl font-black text-white">₦{Number(affiliateStats?.totalPaidOut ?? affiliateStats?.paidCommission ?? 0).toFixed(2)}</span>
+                    <span className="block text-[10px] text-zinc-500 mt-1">Settled to your bank</span>
+                  </div>
+                </div>
+
+                {/* Withdrawal Action Banner */}
+                <div className="bg-[#0e0406] border border-[#2e1015] rounded-2xl p-5 sm:p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-5 relative overflow-hidden">
+                  <div className="space-y-1.5 max-w-xl">
+                    <div className="flex items-center gap-2">
+                      <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-extrabold uppercase tracking-wider">
+                        Manual Bank Payout
+                      </span>
+                      {Number(affiliateStats?.availableEarnings ?? 0) > 0 && (
+                        <span className="text-xs text-emerald-400 font-semibold flex items-center gap-1">
+                          <CheckCircle className="w-3.5 h-3.5" /> Balance Available
+                        </span>
+                      )}
+                    </div>
+                    <h4 className="text-lg font-display font-extrabold text-white">
+                      Request Affiliate Payout
+                    </h4>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      You can withdraw your entire available earnings of <strong className="text-emerald-400 font-bold">₦{Number(affiliateStats?.availableEarnings ?? 0).toFixed(2)}</strong>. Our team will manually review and transfer the funds directly to your verified Nigerian bank account.
+                    </p>
+                    {Number(affiliateStats?.pendingWithdrawal ?? 0) > 0 && (
+                      <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-300 text-xs flex items-center gap-2 mt-2">
+                        <Clock className="w-4 h-4 shrink-0 text-amber-400" />
+                        <span>You currently have <strong>₦{Number(affiliateStats?.pendingWithdrawal ?? 0).toFixed(2)}</strong> in review by admin.</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="shrink-0 w-full md:w-auto">
+                    <button
+                      onClick={handleOpenWithdrawModal}
+                      disabled={Number(affiliateStats?.availableEarnings ?? 0) <= 0}
+                      className={`w-full md:w-auto py-3 px-6 rounded-xl font-bold text-xs transition flex items-center justify-center gap-2 cursor-pointer shadow-lg ${
+                        Number(affiliateStats?.availableEarnings ?? 0) > 0
+                          ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-950/40 hover:shadow-emerald-900/60'
+                          : 'bg-zinc-800/60 text-zinc-500 border border-zinc-700/40 cursor-not-allowed opacity-70'
+                      }`}
+                    >
+                      <ArrowUpRight className="w-4 h-4" />
+                      {Number(affiliateStats?.availableEarnings ?? 0) > 0
+                        ? `Withdraw ₦${Number(affiliateStats?.availableEarnings ?? 0).toFixed(2)}`
+                        : 'No Available Balance'}
+                    </button>
                   </div>
                 </div>
 
                 {/* Secondary Rates & Potential Bento row */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
-                  <div className="bg-[#07080c] border border-slate-800/60 rounded-xl p-4 flex justify-between items-center text-xs">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4 flex justify-between items-center text-xs">
                     <div>
-                      <span className="text-slate-500 block">Total Cumulative Earnings</span>
-                      <span className="text-slate-400 font-semibold">Sum of all referral payouts (Paid + Unpaid)</span>
+                      <span className="text-zinc-500 block">Commission Rate</span>
+                      <span className="text-zinc-400 font-semibold">Per active subscriber</span>
                     </div>
-                    <span className="text-lg font-black text-white">₦{Number(affiliateStats?.totalCommission ?? 0).toFixed(2)}</span>
+                    <span className="text-lg font-black text-white">₦{Number(affiliateStats?.defaultCommission ?? 100.00).toFixed(2)}</span>
                   </div>
 
-                  <div className="bg-[#07080c] border border-slate-800/60 rounded-xl p-4 flex justify-between items-center text-xs">
+                  <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4 flex justify-between items-center text-xs">
                     <div>
-                      <span className="text-slate-500 block">Potential Future Earnings</span>
-                      <span className="text-slate-400 font-semibold">From {Math.max(0, (affiliateStats?.registeredCount ?? 0) - (affiliateStats?.paidCount ?? 0))} unpaid signups</span>
+                      <span className="text-zinc-500 block">Active Subscribers</span>
+                      <span className="text-zinc-400 font-semibold">{affiliateStats?.paidCount ?? 0} of {affiliateStats?.registeredCount ?? 0} signed up</span>
+                    </div>
+                    <span className="text-lg font-black text-emerald-400">{affiliateStats?.paidCount ?? 0}</span>
+                  </div>
+
+                  <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-4 flex justify-between items-center text-xs">
+                    <div>
+                      <span className="text-zinc-500 block">Potential Future Earnings</span>
+                      <span className="text-zinc-400 font-semibold">From {Math.max(0, (affiliateStats?.registeredCount ?? 0) - (affiliateStats?.paidCount ?? 0))} unpaid signups</span>
                     </div>
                     <span className="text-lg font-black text-emerald-500">₦{Number(Math.max(0, (affiliateStats?.registeredCount ?? 0) - (affiliateStats?.paidCount ?? 0)) * Number(affiliateStats?.defaultCommission ?? 100.00)).toFixed(2)}</span>
                   </div>
+                </div>
+
+                {/* Withdrawal History Section */}
+                <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-5">
+                  <div className="flex justify-between items-center border-b border-[#2e1015] pb-3 mb-4">
+                    <h4 className="text-xs font-bold text-zinc-300 uppercase tracking-wider flex items-center gap-2">
+                      <Wallet className="w-4 h-4 text-emerald-400" />
+                      Withdrawal Requests History ({affiliateStats?.withdrawals?.length ?? 0})
+                    </h4>
+                    <span className="text-[10px] text-zinc-500">Direct bank transfers</span>
+                  </div>
+
+                  {!affiliateStats?.withdrawals || affiliateStats.withdrawals.length === 0 ? (
+                    <div className="text-center py-8">
+                      <Banknote className="w-8 h-8 text-zinc-700 mx-auto mb-2" />
+                      <p className="text-xs text-zinc-500">No withdrawal requests submitted yet.</p>
+                      <p className="text-[11px] text-zinc-600 mt-0.5">When you request a payout, your transaction status and bank details will appear here.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+                      {affiliateStats.withdrawals.map((w: any) => {
+                        const isPending = w.status === 'pending';
+                        const isPaid = w.status === 'paid';
+                        const isDeclined = w.status === 'declined';
+                        return (
+                          <div key={w.id} className="p-3.5 bg-[#120507] border border-[#2e1015] rounded-xl flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 text-xs">
+                            <div className="space-y-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-extrabold text-white text-sm">₦{parseFloat(w.amount).toFixed(2)}</span>
+                                <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-widest ${
+                                  isPaid ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                                  isDeclined ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' :
+                                  'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                                }`}>
+                                  {isPending ? 'Pending Review' : isPaid ? 'Paid' : 'Declined'}
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-zinc-400 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                <span className="font-semibold text-zinc-300">{w.bank_name}</span>
+                                <span>•</span>
+                                <span className="font-mono text-zinc-400">••••{String(w.account_number).slice(-4)}</span>
+                                <span>•</span>
+                                <span className="text-zinc-400">{w.account_name}</span>
+                              </div>
+                              {isDeclined && w.decline_reason && (
+                                <div className="mt-1.5 p-2 bg-rose-500/10 border border-rose-500/20 rounded-lg text-rose-300 text-[11px] flex items-start gap-1.5">
+                                  <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0 mt-0.5" />
+                                  <span><strong>Decline Reason:</strong> {w.decline_reason} (Funds returned to your available balance)</span>
+                                </div>
+                              )}
+                              {isPaid && w.payment_reference && (
+                                <div className="text-[10px] text-emerald-400 font-mono">
+                                  Ref: {w.payment_reference}
+                                </div>
+                              )}
+                            </div>
+                            <div className="text-left sm:text-right shrink-0">
+                              <span className="block text-[10px] text-zinc-500">Requested: {new Date(w.requested_at || w.created_at).toLocaleDateString()}</span>
+                              {w.processed_at && (
+                                <span className="block text-[10px] text-zinc-500">Processed: {new Date(w.processed_at).toLocaleDateString()}</span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 {/* Referrals & Commissions detailed tables split */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-2">
                   
                   {/* Referred Users List */}
-                  <div className="bg-[#090a0f] border border-slate-800 rounded-xl p-5">
-                    <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider border-b border-slate-800 pb-3 mb-4 flex items-center gap-1.5">
+                  <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-5">
+                    <h4 className="text-xs font-bold text-zinc-300 uppercase tracking-wider border-b border-[#2e1015] pb-3 mb-4 flex items-center gap-1.5">
                       <Users className="w-4 h-4 text-emerald-500" /> Referred Users List
                     </h4>
                     {!affiliateStats?.referredUsers || affiliateStats.referredUsers.length === 0 ? (
-                      <p className="text-xs text-slate-500 text-center py-6">No users have signed up with your code yet.</p>
+                      <p className="text-xs text-zinc-500 text-center py-6">No users have signed up with your code yet.</p>
                     ) : (
                       <div className="space-y-3.5 max-h-60 overflow-y-auto pr-1">
                         {affiliateStats.referredUsers.map((refUser: any) => {
                           const isPaid = refUser.paymentStatus === 'Paid' || refUser.subscriptionStatus === 'Active';
                           return (
-                            <div key={refUser.id} className="flex justify-between items-center text-xs p-2.5 bg-[#11131e]/50 border border-slate-800/40 rounded-lg">
+                            <div key={refUser.id} className="flex justify-between items-center text-xs p-2.5 bg-[#120507] border border-[#2e1015] rounded-lg">
                               <div>
-                                <span className="block font-bold text-slate-300">{refUser.fullName}</span>
-                                <span className="block text-[10px] text-slate-500">Joined {new Date(refUser.registrationDate).toLocaleDateString()}</span>
+                                <span className="block font-bold text-zinc-300">{refUser.fullName}</span>
+                                <span className="block text-[10px] text-zinc-500">Joined {new Date(refUser.registrationDate).toLocaleDateString()}</span>
                               </div>
-                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${isPaid ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-slate-800 text-slate-400'}`}>
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${isPaid ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-[#180608] text-zinc-400'}`}>
                                 {isPaid ? 'Paid Subscriber' : 'Signed Up'}
                               </span>
                             </div>
@@ -2739,19 +3186,19 @@ Note: My payment receipt has been uploaded to the portal.`;
                   </div>
 
                   {/* Commissions History */}
-                  <div className="bg-[#090a0f] border border-slate-800 rounded-xl p-5">
-                    <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider border-b border-slate-800 pb-3 mb-4 flex items-center gap-1.5">
+                  <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-5">
+                    <h4 className="text-xs font-bold text-zinc-300 uppercase tracking-wider border-b border-[#2e1015] pb-3 mb-4 flex items-center gap-1.5">
                       <DollarSign className="w-4 h-4 text-emerald-500" /> Commission Records
                     </h4>
                     {!affiliateStats?.commissions || affiliateStats.commissions.length === 0 ? (
-                      <p className="text-xs text-slate-500 text-center py-6">No commissions have been recorded yet.</p>
+                      <p className="text-xs text-zinc-500 text-center py-6">No commissions have been recorded yet.</p>
                     ) : (
                       <div className="space-y-3.5 max-h-60 overflow-y-auto pr-1">
                         {affiliateStats.commissions.map((c: any) => (
-                          <div key={c.id} className="flex justify-between items-center text-xs p-2.5 bg-[#11131e]/50 border border-slate-800/40 rounded-lg">
+                          <div key={c.id} className="flex justify-between items-center text-xs p-2.5 bg-[#120507] border border-[#2e1015] rounded-lg">
                             <div>
                               <span className="block font-bold text-white">₦{parseFloat(c.amount).toFixed(2)}</span>
-                              <span className="block text-[10px] text-slate-500">Ref ID: {c.id.substring(0, 8)} • {new Date(c.createdAt).toLocaleDateString()}</span>
+                              <span className="block text-[10px] text-zinc-500">Ref ID: {c.id.substring(0, 8)} • {new Date(c.createdAt).toLocaleDateString()}</span>
                             </div>
                             <span className={`px-2 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-widest ${
                               c.status === 'Paid' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
@@ -2772,15 +3219,103 @@ Note: My payment receipt has been uploaded to the portal.`;
             )}
           </div>
         )}
+          </div>
+        )}
 
-        {/* Support & Contact Details Section */}
+        {/* ================= TAB 6: MOBILE & TV APPS ================= */}
+        {activeTab === 'apps' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+            {/* Mobile App Download Advertisement Banner */}
+        <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-xl relative overflow-hidden mb-8">
+          <div className="absolute top-0 left-0 w-[4px] h-full bg-[#d31d38]"></div>
+          <div className="flex flex-col md:flex-row items-center justify-between gap-6 relative z-10">
+            <div className="space-y-2 text-center md:text-left">
+              <span className="inline-flex items-center gap-1 bg-[#d31d38]/15 text-[#ff4d64] font-bold text-[9px] uppercase tracking-wider px-2.5 py-1 rounded-full border border-[#d31d38]/30">
+                <Smartphone className="w-3 h-3" /> Offline watch available
+              </span>
+              <h3 className="text-lg font-display font-black text-white">Stream & Save Content Directly on Mobile Clients</h3>
+              <p className="text-zinc-400 text-xs max-w-xl leading-relaxed">
+                Watch seamlessly on the move without buffering or using mobile data! Download our dedicated client apps for your iPhone, iPad, or Android smartphone/tablet.
+              </p>
+              
+              <div className="bg-[#080203] border border-[#2e1015] rounded-xl p-3 max-w-xl space-y-1 text-left">
+                <span className="text-[#ff4d64] font-bold text-[11px] uppercase tracking-wider block">
+                  📱 Mobile App Connection Setup
+                </span>
+                <p className="text-zinc-300 text-xs">
+                  When opening the mobile app for the first time, in the field requiring you to enter the <strong>Server URL</strong>, enter:
+                </p>
+                <div className="bg-[#180608] border border-[#2e1015] rounded-lg px-2.5 py-1.5 text-[#ff8093] font-mono text-xs flex items-center justify-between font-bold select-all">
+                  <span>https://cinode.zerolord.com</span>
+                </div>
+              </div>
+            </div>
+            
+            <div className="flex flex-wrap items-center gap-3 justify-center shrink-0">
+              {systemStatus?.iosDownloadUrl ? (
+                <a 
+                  href={systemStatus.iosDownloadUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="bg-[#180608] hover:bg-[#220a0e] text-white font-bold py-2.5 px-4 rounded-xl text-xs flex items-center gap-2 border border-[#2e1015] hover:border-[#d31d38]/50 transition cursor-pointer"
+                >
+                  <svg className="w-4 h-4 fill-white" viewBox="0 0 24 24">
+                    <path d="M18.71,19.5C17.88,20.74 17,21.95 15.66,21.97C14.32,22 13.89,21.18 12.37,21.18C10.84,21.18 10.37,21.95 9.1,22C7.79,22.05 6.8,20.68 5.96,19.47C4.25,17 2.94,12.45 4.7,9.39C5.57,7.87 7.13,6.91 8.82,6.88C10.1,6.86 11.32,7.75 12.11,7.75C12.89,7.75 14.37,6.68 15.92,6.84C16.57,6.87 18.39,7.1 19.56,8.82C19.47,8.88 17.39,10.1 17.41,12.63C17.44,15.65 20.06,16.66 20.1,16.67C20.08,16.74 19.67,18.11 18.71,19.5M15.97,4.17C16.63,3.37 17.07,2.28 16.95,1C16,1.04 14.9,1.6 14.24,2.38C13.68,3.04 13.19,4.14 13.34,5.39C14.39,5.47 15.4,4.88 15.97,4.17Z" />
+                  </svg>
+                  <span>Download iOS App</span>
+                </a>
+              ) : (
+                <button 
+                  onClick={() => alert("iOS app download URL is currently being set up by our admins. Check back soon!")}
+                  className="bg-[#120507] text-zinc-600 font-bold py-2.5 px-4 rounded-xl text-xs flex items-center gap-2 border border-[#2e1015] transition cursor-not-allowed"
+                >
+                  <svg className="w-4 h-4 fill-zinc-600" viewBox="0 0 24 24">
+                    <path d="M18.71,19.5C17.88,20.74 17,21.95 15.66,21.97C14.32,22 13.89,21.18 12.37,21.18C10.84,21.18 10.37,21.95 9.1,22C7.79,22.05 6.8,20.68 5.96,19.47C4.25,17 2.94,12.45 4.7,9.39C5.57,7.87 7.13,6.91 8.82,6.88C10.1,6.86 11.32,7.75 12.11,7.75C12.89,7.75 14.37,6.68 15.92,6.84C16.57,6.87 18.39,7.1 19.56,8.82C19.47,8.88 17.39,10.1 17.41,12.63C17.44,15.65 20.06,16.66 20.1,16.67C20.08,16.74 19.67,18.11 18.71,19.5M15.97,4.17C16.63,3.37 17.07,2.28 16.95,1C16,1.04 14.9,1.6 14.24,2.38C13.68,3.04 13.19,4.14 13.34,5.39C14.39,5.47 15.4,4.88 15.97,4.17Z" />
+                  </svg>
+                  <span>iOS App (Pending)</span>
+                </button>
+              )}
+
+              {systemStatus?.androidDownloadUrl ? (
+                <a 
+                  href={systemStatus.androidDownloadUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="bg-[#180608] hover:bg-[#220a0e] text-white font-bold py-2.5 px-4 rounded-xl text-xs flex items-center gap-2 border border-[#2e1015] hover:border-[#d31d38]/50 transition cursor-pointer"
+                >
+                  <svg className="w-4 h-4 fill-white" viewBox="0 0 24 24">
+                    <path d="M3,5.27V18.73L16.55,12L3,5.27M17.87,11.33L19.43,12.11L17.87,12.89L16.67,12L17.87,11.33M3,3.41L15.67,9.7L18.11,8.47L3,3.41M3,20.59L18.11,15.53L15.67,14.3L3,20.59Z" />
+                  </svg>
+                  <span>Download Android App</span>
+                </a>
+              ) : (
+                <button 
+                  onClick={() => alert("Android app download URL is currently being set up by our admins. Check back soon!")}
+                  className="bg-[#120507] text-zinc-600 font-bold py-2.5 px-4 rounded-xl text-xs flex items-center gap-2 border border-[#2e1015] transition cursor-not-allowed"
+                >
+                  <svg className="w-4 h-4 fill-zinc-600" viewBox="0 0 24 24">
+                    <path d="M3,5.27V18.73L16.55,12L3,5.27M17.87,11.33L19.43,12.11L17.87,12.89L16.67,12L17.87,11.33M3,3.41L15.67,9.7L18.11,8.47L3,3.41M3,20.59L18.11,15.53L15.67,14.3L3,20.59Z" />
+                  </svg>
+                  <span>Android App (Pending)</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+          </div>
+        )}
+
+        {/* ================= TAB 7: SUPPORT & HELP ================= */}
+        {activeTab === 'support' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+            {/* Support & Contact Details Section */}
         {bankInfo && (bankInfo.contactEmail || bankInfo.contactPhone || bankInfo.contactWhatsApp || bankInfo.contactOther || bankInfo.chatbotInfo) && (
-          <div className="bg-[#11131e]/50 border border-slate-800/60 rounded-2xl p-6 mt-8 shadow-lg relative" id="support-contact-section">
+          <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 mt-8 shadow-lg relative" id="support-contact-section">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
               <div>
-                <span className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider block">Customer Support & Assistance</span>
+                <span className="text-[10px] text-[#ff4d64] font-bold uppercase tracking-wider block">Customer Support & Assistance</span>
                 <h4 className="text-lg font-display font-extrabold text-white mt-1">Need help or have questions?</h4>
-                <p className="text-slate-400 text-xs mt-0.5 leading-relaxed max-w-xl">
+                <p className="text-zinc-400 text-xs mt-0.5 leading-relaxed max-w-xl">
                   Get in touch with an administrator or utilize our support helper chatbot. We are here to ensure your streaming setup remains fully operational.
                 </p>
               </div>
@@ -2790,7 +3325,7 @@ Note: My payment receipt has been uploaded to the portal.`;
                   href={bankInfo.chatbotInfo.startsWith('http') ? bankInfo.chatbotInfo : `https://t.me/${bankInfo.chatbotInfo.replace('@', '')}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-5 rounded-xl text-xs uppercase tracking-wider transition flex items-center justify-center gap-1.5 self-start md:self-auto shadow-md"
+                  className="bg-[#d31d38] hover:bg-[#b0162c] text-white font-bold py-2.5 px-5 rounded-xl text-xs uppercase tracking-wider transition flex items-center justify-center gap-1.5 self-start md:self-auto shadow-md"
                 >
                   <MessageSquare className="w-3.5 h-3.5" />
                   <span>Support Chatbot</span>
@@ -2800,22 +3335,22 @@ Note: My payment receipt has been uploaded to the portal.`;
 
             {/* Chatbot Instructions */}
             {bankInfo.chatbotInfo && bankInfo.chatbotInstructions && (
-              <div className="bg-[#07080c] border border-indigo-950/20 p-3 rounded-xl mt-4 text-[11px] text-indigo-300/90 flex items-center gap-2">
-                <Info className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              <div className="bg-[#080203] border border-[#2e1015] p-3 rounded-xl mt-4 text-[11px] text-zinc-300 flex items-center gap-2">
+                <Info className="w-3.5 h-3.5 text-[#ff4d64] shrink-0" />
                 <span><strong>Chatbot Instructions:</strong> {bankInfo.chatbotInstructions}</span>
               </div>
             )}
 
             {/* Contact Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 mt-5 pt-5 border-t border-slate-800/40 text-xs text-slate-300">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 mt-5 pt-5 border-t border-[#2e1015] text-xs text-zinc-300">
               {bankInfo.contactEmail && (
                 <div className="flex items-start gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-[#07080c] border border-slate-800/60 flex items-center justify-center text-slate-400 shrink-0">
-                    <Tv className="w-3.5 h-3.5 text-rose-500" />
+                  <div className="w-8 h-8 rounded-lg bg-[#080203] border border-[#2e1015] flex items-center justify-center text-zinc-400 shrink-0">
+                    <Tv className="w-3.5 h-3.5 text-[#d31d38]" />
                   </div>
                   <div>
-                    <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">Email Address</span>
-                    <a href={`mailto:${bankInfo.contactEmail}`} className="text-slate-300 hover:text-rose-400 font-medium transition-colors break-all">
+                    <span className="block text-[9px] font-bold text-zinc-500 uppercase tracking-wider">Email Address</span>
+                    <a href={`mailto:${bankInfo.contactEmail}`} className="text-zinc-300 hover:text-[#ff4d64] font-medium transition-colors break-all">
                       {bankInfo.contactEmail}
                     </a>
                   </div>
@@ -2824,12 +3359,12 @@ Note: My payment receipt has been uploaded to the portal.`;
 
               {bankInfo.contactPhone && (
                 <div className="flex items-start gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-[#07080c] border border-slate-800/60 flex items-center justify-center text-slate-400 shrink-0">
+                  <div className="w-8 h-8 rounded-lg bg-[#080203] border border-[#2e1015] flex items-center justify-center text-zinc-400 shrink-0">
                     <CheckCircle className="w-3.5 h-3.5 text-emerald-500" />
                   </div>
                   <div>
-                    <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">Phone Line</span>
-                    <a href={`tel:${bankInfo.contactPhone}`} className="text-slate-300 hover:text-rose-400 font-medium transition-colors">
+                    <span className="block text-[9px] font-bold text-zinc-500 uppercase tracking-wider">Phone Line</span>
+                    <a href={`tel:${bankInfo.contactPhone}`} className="text-zinc-300 hover:text-[#ff4d64] font-medium transition-colors">
                       {bankInfo.contactPhone}
                     </a>
                   </div>
@@ -2838,16 +3373,16 @@ Note: My payment receipt has been uploaded to the portal.`;
 
               {bankInfo.contactWhatsApp && (
                 <div className="flex items-start gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-[#07080c] border border-slate-800/60 flex items-center justify-center text-slate-400 shrink-0">
+                  <div className="w-8 h-8 rounded-lg bg-[#080203] border border-[#2e1015] flex items-center justify-center text-zinc-400 shrink-0">
                     <ExternalLink className="w-3.5 h-3.5 text-emerald-400" />
                   </div>
                   <div>
-                    <span className="block text-[9px] font-bold text-slate-500 uppercase tracking-wider">WhatsApp</span>
+                    <span className="block text-[9px] font-bold text-zinc-500 uppercase tracking-wider">WhatsApp</span>
                     <a 
                       href={bankInfo.contactWhatsApp.startsWith('http') ? bankInfo.contactWhatsApp : `https://wa.me/${bankInfo.contactWhatsApp.replace(/[^0-9]/g, '')}`} 
                       target="_blank" 
                       rel="noopener noreferrer"
-                      className="text-slate-300 hover:text-emerald-400 font-medium transition-colors truncate block max-w-[200px]"
+                      className="text-zinc-300 hover:text-emerald-400 font-medium transition-colors truncate block max-w-[200px]"
                     >
                       Connect on WhatsApp
                     </a>
@@ -2857,49 +3392,394 @@ Note: My payment receipt has been uploaded to the portal.`;
             </div>
 
             {bankInfo.contactOther && (
-              <div className="mt-4 text-[10px] text-slate-500 font-medium bg-slate-950/20 py-2 px-3 rounded-lg border border-slate-800/30">
+              <div className="mt-4 text-[10px] text-zinc-400 font-medium bg-[#080203] py-2 px-3 rounded-lg border border-[#2e1015]">
                 <strong>Notice:</strong> {bankInfo.contactOther}
               </div>
             )}
           </div>
         )}
+          </div>
+        )}
+
+        {/* ================= TAB 8: ACCOUNT & SECURITY ================= */}
+        {activeTab === 'account' && (
+          <div className="space-y-8 animate-in fade-in duration-200">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-8 shadow-xl relative overflow-hidden">
+              <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-[#d31d38] via-[#ff3b53] to-[#d31d38]"></div>
+              <h3 className="text-xl font-display font-extrabold text-white mb-1">Subscriber Account Profile</h3>
+              <p className="text-xs text-zinc-400 mb-6">Manage your streaming credentials, email verification, and session sync.</p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+                <div className="bg-[#180608] border border-[#2e1015] p-4 rounded-xl">
+                  <div className="text-[10px] text-zinc-500 font-bold uppercase">Full Name</div>
+                  <div className="text-sm font-bold text-white mt-1">{user.fullName}</div>
+                </div>
+                <div className="bg-[#180608] border border-[#2e1015] p-4 rounded-xl">
+                  <div className="text-[10px] text-zinc-500 font-bold uppercase">Username</div>
+                  <div className="text-sm font-bold text-white mt-1">@{user.username}</div>
+                </div>
+                <div className="bg-[#180608] border border-[#2e1015] p-4 rounded-xl">
+                  <div className="text-[10px] text-zinc-500 font-bold uppercase">Registered Email</div>
+                  <div className="text-sm font-bold text-white mt-1">{user.email || 'None'}</div>
+                </div>
+                <div className="bg-[#180608] border border-[#2e1015] p-4 rounded-xl">
+                  <div className="text-[10px] text-zinc-500 font-bold uppercase">Account Status</div>
+                  <div className="text-sm font-bold text-emerald-400 mt-1">{user.accountStatus || 'Active'}</div>
+                </div>
+              </div>
+
+              <div className="pt-6 border-t border-[#2e1015] flex flex-wrap items-center gap-3">
+                <button
+                  onClick={() => setShowSyncModal(true)}
+                  className="bg-[#180608] hover:bg-[#220a0e] text-white border border-[#2e1015] hover:border-[#d31d38]/50 text-xs font-bold py-2.5 px-4 rounded-xl transition flex items-center gap-2 cursor-pointer shadow"
+                >
+                  <Key className="w-4 h-4 text-[#d31d38]" /> Re-Sync Session Password
+                </button>
+                <button
+                  onClick={() => setShowDeviceModal(true)}
+                  className="bg-[#180608] hover:bg-[#220a0e] text-white border border-[#2e1015] hover:border-[#d31d38]/50 text-xs font-bold py-2.5 px-4 rounded-xl transition flex items-center gap-2 cursor-pointer shadow"
+                >
+                  <Smartphone className="w-4 h-4 text-emerald-400" /> Device Setup Guide
+                </button>
+                <button
+                  onClick={onLogout}
+                  className="bg-rose-600/15 hover:bg-rose-600/25 text-rose-300 border border-rose-500/30 text-xs font-bold py-2.5 px-4 rounded-xl transition flex items-center gap-2 cursor-pointer ml-auto"
+                >
+                  <LogOut className="w-4 h-4" /> Sign Out
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
       </main>
 
+      {/* MOBILE BOTTOM NAVIGATION BAR */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-[#120507]/95 backdrop-blur-lg border-t border-[#2e1015] p-2 flex justify-around items-center z-40">
+        {[
+          { id: 'overview', label: 'Home', icon: Tv },
+          { id: 'subscription', label: 'Pay', icon: CreditCard },
+          { id: 'direct_debit', label: 'Debit', icon: Landmark },
+          { id: 'requests', label: 'Request', icon: Film },
+          { id: 'affiliate', label: 'Earn', icon: Gift },
+          { id: 'account', label: 'More', icon: Settings },
+        ].map((item) => {
+          const Icon = item.icon;
+          const isSelected = activeTab === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => setActiveTab(item.id as any)}
+              className={`flex flex-col items-center justify-center p-1.5 rounded-xl transition cursor-pointer min-w-12 ${
+                isSelected ? 'text-[#ff4d64]' : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+            >
+              <div className={`p-1 rounded-lg ${isSelected ? 'bg-[#d31d38]/20 border border-[#d31d38]/30 shadow-[0_0_10px_rgba(211,29,56,0.3)]' : ''}`}>
+                <Icon className="w-4.5 h-4.5" />
+              </div>
+              <span className="text-[9px] font-bold mt-0.5 tracking-tight">{item.label}</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* REQUEST MODAL */}
+      {/* Custom Movie/Show Request Modal Form */}
+        {showRequestModal && (
+          <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className="bg-[#120507] border border-[#2e1015] rounded-2xl w-full max-w-md p-6 sm:p-8 shadow-2xl relative">
+              <button
+                onClick={() => setShowRequestModal(false)}
+                className="absolute top-4 right-4 text-zinc-400 hover:text-white transition cursor-pointer bg-transparent border-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="mb-6 text-left">
+                <h3 className="text-lg font-display font-extrabold text-white flex items-center gap-2">
+                  <PlusCircle className="w-5 h-5 text-[#ff4d64]" />
+                  <span>Request Content</span>
+                </h3>
+                <p className="text-zinc-400 text-xs mt-1">Submit the movie or TV show you want to watch on Cinode.</p>
+              </div>
+
+              <form onSubmit={handleMediaRequestSubmit} className="space-y-4 text-left">
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-zinc-300">Content Type</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setRequestType('movie')}
+                      className={`py-2 px-4 rounded-xl text-xs font-bold border transition cursor-pointer ${requestType === 'movie' ? 'bg-[#d31d38]/20 border-[#d31d38] text-[#ff4d64]' : 'bg-[#080203] border-[#2e1015] text-zinc-400 hover:border-zinc-700'}`}
+                    >
+                      Movie
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRequestType('show')}
+                      className={`py-2 px-4 rounded-xl text-xs font-bold border transition cursor-pointer ${requestType === 'show' ? 'bg-[#d31d38]/20 border-[#d31d38] text-[#ff4d64]' : 'bg-[#080203] border-[#2e1015] text-zinc-400 hover:border-zinc-700'}`}
+                    >
+                      TV Show
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-zinc-300">Title</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Enter full title of movie or show"
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-[#d31d38] transition"
+                    value={requestTitle}
+                    onChange={(e) => setRequestTitle(e.target.value)}
+                  />
+                </div>
+
+                {requestType === 'movie' ? (
+                  <div className="space-y-1">
+                    <label className="block text-xs font-bold text-zinc-300">Release Year (Optional)</label>
+                    <input
+                      type="number"
+                      placeholder="e.g. 2026"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-[#d31d38] transition"
+                      value={requestYear}
+                      onChange={(e) => setRequestYear(e.target.value)}
+                    />
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 py-1">
+                      <input
+                        type="checkbox"
+                        id="fullSeasonCheckbox"
+                        className="rounded border-[#2e1015] text-[#d31d38] focus:ring-[#d31d38]"
+                        checked={requestIsFullSeason}
+                        onChange={(e) => setRequestIsFullSeason(e.target.checked)}
+                      />
+                      <label htmlFor="fullSeasonCheckbox" className="text-xs text-zinc-300 font-semibold cursor-pointer select-none">
+                        Complete Season (All Episodes)
+                      </label>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="block text-[10px] font-bold text-zinc-400 uppercase">Season Number</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="e.g. 1"
+                          className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-[#d31d38] transition"
+                          value={requestSeason}
+                          onChange={(e) => setRequestSeason(e.target.value)}
+                        />
+                      </div>
+                      {!requestIsFullSeason && (
+                        <div className="space-y-1">
+                          <label className="block text-[10px] font-bold text-zinc-400 uppercase">Episode Number</label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="e.g. 4"
+                            className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-[#d31d38] transition"
+                            value={requestEpisode}
+                            onChange={(e) => setRequestEpisode(e.target.value)}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-3 pt-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowRequestModal(false)}
+                    className="bg-[#080203] border border-[#2e1015] text-zinc-400 font-bold py-2.5 px-4 rounded-xl text-xs hover:text-white transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submittingRequest}
+                    className="bg-[#d31d38] hover:bg-[#b0162c] text-white font-bold py-2.5 px-6 rounded-xl text-xs transition cursor-pointer flex items-center gap-2"
+                  >
+                    {submittingRequest ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                    Submit Request
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+      {/* AFFILIATE WITHDRAWAL REQUEST MODAL */}
+      {showWithdrawModal && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-[#120507] border border-[#2e1015] rounded-2xl p-6 sm:p-7 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+            <button 
+              onClick={() => { setShowWithdrawModal(false); setWithdrawError(null); setWithdrawSuccess(null); }}
+              className="absolute top-4 right-4 text-zinc-400 hover:text-white transition cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-5 border-b border-[#2e1015] pb-4">
+              <div className="p-3 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-xl">
+                <Wallet className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-display font-extrabold text-white">Affiliate Withdrawal</h3>
+                <p className="text-zinc-400 text-xs mt-0.5">Request manual bank transfer of your available earnings</p>
+              </div>
+            </div>
+
+            {withdrawError && (
+              <div className="mb-4 p-3.5 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-xl flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
+                <span>{withdrawError}</span>
+              </div>
+            )}
+
+            {withdrawSuccess && (
+              <div className="mb-4 p-3.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs rounded-xl flex items-start gap-2">
+                <CheckCircle className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
+                <span>{withdrawSuccess}</span>
+              </div>
+            )}
+
+            {/* Payout Amount Highlight */}
+            <div className="mb-5 p-4 bg-[#080203] border border-emerald-500/20 rounded-xl flex items-center justify-between">
+              <div>
+                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block">Withdrawal Amount</span>
+                <span className="text-xs text-zinc-400">100% Available Balance</span>
+              </div>
+              <div className="text-right">
+                <span className="text-2xl font-black text-emerald-400 font-mono">
+                  ₦{Number(affiliateStats?.availableEarnings ?? 0).toFixed(2)}
+                </span>
+                <span className="block text-[10px] text-zinc-500">Full payout amount</span>
+              </div>
+            </div>
+
+            <div className="p-3 bg-[#180608] border border-[#2e1015] rounded-xl text-zinc-400 text-xs mb-5 flex items-start gap-2">
+              <Info className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
+              <span>
+                Affiliate withdrawals are processed as a single transaction for the total available balance. An admin will review and manually transfer this amount to your bank account.
+              </span>
+            </div>
+
+            <form onSubmit={handleWithdrawalRequest} className="space-y-4" id="affiliate-withdraw-form">
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-zinc-300">Destination Bank</label>
+                <select
+                  value={withdrawBankName}
+                  onChange={(e) => setWithdrawBankName(e.target.value)}
+                  className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-emerald-500 transition cursor-pointer"
+                >
+                  {NIGERIAN_BANKS.map((b) => (
+                    <option key={b} value={b} className="bg-[#120507] text-white py-1">{b}</option>
+                  ))}
+                </select>
+              </div>
+
+              {withdrawBankName === 'Other Bank (Type Custom Name)' && (
+                <div className="space-y-1">
+                  <label className="block text-xs font-semibold text-zinc-300">Custom Bank Name</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Enter your financial institution name"
+                    value={withdrawCustomBank}
+                    onChange={(e) => setWithdrawCustomBank(e.target.value)}
+                    className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-emerald-500 transition"
+                  />
+                </div>
+              )}
+
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-zinc-300">Account Number (10 Digits)</label>
+                <input
+                  type="text"
+                  required
+                  maxLength={10}
+                  placeholder="0123456789"
+                  value={withdrawAccountNumber}
+                  onChange={(e) => setWithdrawAccountNumber(e.target.value.replace(/\D/g, ''))}
+                  className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs font-mono focus:outline-none focus:border-emerald-500 transition"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-zinc-300">Account Holder Name</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Johnathan Doe"
+                  value={withdrawAccountName}
+                  onChange={(e) => setWithdrawAccountName(e.target.value)}
+                  className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-emerald-500 transition"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => { setShowWithdrawModal(false); setWithdrawError(null); }}
+                  className="bg-[#080203] border border-[#2e1015] text-zinc-400 font-bold py-2.5 px-4 rounded-xl text-xs hover:text-white transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={withdrawLoading || Number(affiliateStats?.availableEarnings ?? 0) <= 0}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-6 rounded-xl text-xs transition cursor-pointer flex items-center gap-2 shadow-lg shadow-emerald-950/40 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {withdrawLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ArrowUpRight className="w-3.5 h-3.5" />}
+                  Submit Withdrawal Request
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ALL MODALS PRESERVED INTACT */}
       {/* RE-SYNC SESSION CREDENTIALS MODAL */}
       {showSyncModal && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="w-full max-w-sm bg-[#11131e] border border-slate-800 rounded-2xl p-6 shadow-2xl relative">
+          <div className="w-full max-w-sm bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-2xl relative">
             <button 
               onClick={() => { setShowSyncModal(false); setError(null); }}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white transition cursor-pointer"
+              className="absolute top-4 right-4 text-zinc-400 hover:text-white transition cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
 
             <div className="text-center mb-6">
-              <div className="inline-flex items-center justify-center p-3 bg-rose-500/10 text-rose-500 border border-rose-500/20 rounded-full mb-3">
+              <div className="inline-flex items-center justify-center p-3 bg-[#d31d38]/15 text-[#ff4d64] border border-[#d31d38]/30 rounded-full mb-3 shadow-[0_0_15px_rgba(211,29,56,0.3)]">
                 <Key className="w-6 h-6" />
               </div>
               <h3 className="text-xl font-display font-extrabold text-white">Synchronize Session</h3>
-              <p className="text-slate-400 text-xs mt-1">
+              <p className="text-zinc-400 text-xs mt-1">
                 Enter your account password to refresh your server login token.
               </p>
             </div>
 
             {error && (
-              <div className="mb-4 p-3 bg-rose-500/10 border border-rose-500/20 text-rose-200 text-xs rounded-xl">
+              <div className="mb-4 p-3 bg-[#d31d38]/10 border border-[#d31d38]/30 text-[#ff8093] text-xs rounded-xl">
                 {error}
               </div>
             )}
 
             <form onSubmit={handleSessionSync} className="space-y-4" id="session-sync-form">
               <div className="space-y-1">
-                <label className="block text-xs font-semibold text-slate-300">Account Password</label>
+                <label className="block text-xs font-semibold text-zinc-300">Account Password</label>
                 <input 
                   type="password" 
                   required
                   placeholder="••••••••" 
-                  className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:outline-none focus:border-rose-500 transition"
+                  className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-sm focus:outline-none focus:border-[#d31d38] transition"
                   value={syncPassword}
                   onChange={(e) => setSyncPassword(e.target.value)}
                 />
@@ -2908,7 +3788,7 @@ Note: My payment receipt has been uploaded to the portal.`;
               <button 
                 type="submit"
                 disabled={syncLoading}
-                className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-2.5 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-sm disabled:opacity-50"
+                className="w-full bg-[#d31d38] hover:bg-[#b0162c] text-white font-bold py-2.5 rounded-xl flex items-center justify-center gap-2 cursor-pointer transition text-sm disabled:opacity-50 shadow-lg shadow-[#d31d38]/30"
                 id="session-sync-submit"
               >
                 {syncLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Confirm & Sync'}
@@ -2921,7 +3801,7 @@ Note: My payment receipt has been uploaded to the portal.`;
       {/* SYSTEM NOTIFICATION MODAL (Payment Accepted/Declined) */}
       {showNotificationModal && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[100] flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-[#11131e] border border-slate-800 rounded-2xl p-6 shadow-2xl relative text-center">
+          <div className="w-full max-w-md bg-[#120507] border border-[#2e1015] rounded-2xl p-6 shadow-2xl relative text-center">
             {notificationType === 'accepted' ? (
               <>
                 <div className="inline-flex items-center justify-center p-4 bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 rounded-full mb-4 animate-bounce">
@@ -2930,7 +3810,7 @@ Note: My payment receipt has been uploaded to the portal.`;
                 <h3 className="text-2xl font-display font-black text-white tracking-tight mb-2">
                   Payment Confirmed! 🎉
                 </h3>
-                <p className="text-slate-300 text-sm leading-relaxed mb-6">
+                <p className="text-zinc-300 text-sm leading-relaxed mb-6">
                   Your subscription payment of ₦600 has been successfully verified by the administrator! You can now start streaming unlimited 4K movies and TV shows.
                 </p>
                 <button
@@ -2941,25 +3821,25 @@ Note: My payment receipt has been uploaded to the portal.`;
                     setDeviceNotice(null);
                     setShowDeviceModal(true);
                   }}
-                  className="w-full bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white font-bold py-3.5 px-6 rounded-xl transition cursor-pointer text-sm shadow-lg shadow-rose-950/20 flex items-center justify-center gap-2"
+                  className="w-full bg-[#d31d38] hover:bg-[#b0162c] text-white font-bold py-3.5 px-6 rounded-xl transition cursor-pointer text-sm shadow-lg shadow-[#d31d38]/30 flex items-center justify-center gap-2"
                 >
                   <Play className="w-4 h-4 fill-current text-white" /> Open Streaming Now {redirectCountdown !== null ? `(${redirectCountdown}s)` : ''}
                 </button>
               </>
             ) : (
               <>
-                <div className="inline-flex items-center justify-center p-4 bg-rose-500/10 text-rose-500 border border-rose-500/25 rounded-full mb-4">
+                <div className="inline-flex items-center justify-center p-4 bg-[#d31d38]/15 text-[#ff4d64] border border-[#d31d38]/30 rounded-full mb-4">
                   <AlertTriangle className="w-10 h-10" />
                 </div>
                 <h3 className="text-2xl font-display font-black text-white tracking-tight mb-2">
                   Payment Request Declined
                 </h3>
-                <p className="text-slate-300 text-sm leading-relaxed mb-4">
+                <p className="text-zinc-300 text-sm leading-relaxed mb-4">
                   We are sorry, but your payment verification request was declined by the administrator.
                 </p>
-                <div className="bg-rose-500/5 border border-rose-500/15 rounded-xl p-4 mb-6 text-left">
-                  <span className="block text-slate-500 text-[10px] uppercase font-bold tracking-wider mb-1">Reason Provided by Admin:</span>
-                  <p className="text-rose-200 text-xs font-medium italic leading-relaxed">
+                <div className="bg-[#d31d38]/10 border border-[#d31d38]/20 rounded-xl p-4 mb-6 text-left">
+                  <span className="block text-zinc-500 text-[10px] uppercase font-bold tracking-wider mb-1">Reason Provided by Admin:</span>
+                  <p className="text-[#ff8093] text-xs font-medium italic leading-relaxed">
                     "{notificationDeclineReason || 'No details provided.'}"
                   </p>
                 </div>
@@ -2967,7 +3847,7 @@ Note: My payment receipt has been uploaded to the portal.`;
                   onClick={() => {
                     setShowNotificationModal(false);
                   }}
-                  className="w-full bg-[#1b1d2a] hover:bg-[#25283a] text-white border border-slate-700 font-bold py-3 px-6 rounded-xl transition cursor-pointer text-sm"
+                  className="w-full bg-[#1c080b] hover:bg-[#220a0e] text-white border border-[#2e1015] font-bold py-3 px-6 rounded-xl transition cursor-pointer text-sm"
                 >
                   Acknowledge & Retry
                 </button>
@@ -2980,31 +3860,31 @@ Note: My payment receipt has been uploaded to the portal.`;
       {/* COMPLETE FULL NOTIFICATION MODAL */}
       {selectedModalNotif && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-[110]">
-          <div className="bg-[#11131e] border border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl relative overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-150">
-            <div className="absolute top-0 left-0 right-0 h-[4px] bg-gradient-to-r from-sky-500 via-indigo-500 to-rose-500"></div>
+          <div className="bg-[#120507] border border-[#2e1015] rounded-2xl w-full max-w-lg shadow-2xl relative overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-150">
+            <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-[#d31d38] via-[#ff3b53] to-[#d31d38]"></div>
             
-            <div className="p-6 border-b border-slate-800/60 flex items-start justify-between gap-4">
+            <div className="p-6 border-b border-[#2e1015] flex items-start justify-between gap-4">
               <div>
                 <h3 className="text-base font-display font-extrabold text-white">{selectedModalNotif.title}</h3>
-                <span className="text-[10px] text-slate-500 font-mono block mt-1">
+                <span className="text-[10px] text-zinc-500 font-mono block mt-1">
                   Sent: {new Date(selectedModalNotif.createdAt).toLocaleString()}
                 </span>
               </div>
               <button 
                 onClick={() => setSelectedModalNotif(null)}
-                className="text-slate-400 hover:text-white p-1.5 rounded-lg bg-slate-900 border border-slate-800/80 hover:border-slate-700 transition cursor-pointer"
+                className="text-zinc-400 hover:text-white p-1.5 rounded-lg bg-[#180608] border border-[#2e1015] hover:border-[#d31d38]/50 transition cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
             
             <div className="p-6 space-y-4 overflow-y-auto max-h-[60vh] text-left">
-              <p className="text-slate-300 text-xs leading-relaxed whitespace-pre-wrap">
+              <p className="text-zinc-300 text-xs leading-relaxed whitespace-pre-wrap">
                 {selectedModalNotif.message}
               </p>
               
               {selectedModalNotif.imageUrl && (
-                <div className="rounded-lg overflow-hidden border border-slate-800 bg-slate-950/40 w-fit max-w-full mt-2">
+                <div className="rounded-lg overflow-hidden border border-[#2e1015] bg-[#050102] w-fit max-w-full mt-2">
                   {selectedModalNotif.imageUrl.endsWith('.mp4') || 
                    selectedModalNotif.imageUrl.endsWith('.webm') || 
                    selectedModalNotif.imageUrl.endsWith('.ogg') || 
@@ -3027,10 +3907,10 @@ Note: My payment receipt has been uploaded to the portal.`;
               )}
             </div>
             
-            <div className="p-4 bg-slate-950/40 border-t border-slate-800/50 flex justify-end">
+            <div className="p-4 bg-[#080203] border-t border-[#2e1015] flex justify-end">
               <button 
                 onClick={() => setSelectedModalNotif(null)}
-                className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2 px-5 rounded-xl text-xs transition cursor-pointer"
+                className="bg-[#180608] hover:bg-[#220a0e] text-white border border-[#2e1015] font-bold py-2 px-5 rounded-xl text-xs transition cursor-pointer"
               >
                 Close
               </button>
@@ -3042,18 +3922,18 @@ Note: My payment receipt has been uploaded to the portal.`;
       {/* DEVICE SELECTION MODAL */}
       {showDeviceModal && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 z-[120]">
-          <div className="bg-[#11131e] border border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl relative overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-150 text-left">
-            <div className="absolute top-0 left-0 right-0 h-[4px] bg-gradient-to-r from-rose-500 via-amber-500 to-rose-500"></div>
+          <div className="bg-[#120507] border border-[#2e1015] rounded-2xl w-full max-w-lg shadow-2xl relative overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-150 text-left">
+            <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-[#d31d38] via-[#ff3b53] to-[#d31d38]"></div>
             
-            <div className="p-6 border-b border-slate-800/60 flex items-start justify-between gap-4">
+            <div className="p-6 border-b border-[#2e1015] flex items-start justify-between gap-4">
               <div>
-                <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider block mb-0.5">Stream Launcher</span>
+                <span className="text-[10px] font-bold text-[#ff4d64] uppercase tracking-wider block mb-0.5">Stream Launcher</span>
                 <h3 className="text-xl font-display font-extrabold text-white">Select Your Device</h3>
-                <p className="text-slate-400 text-xs mt-1">Which device are you streaming on today?</p>
+                <p className="text-zinc-400 text-xs mt-1">Which device are you streaming on today?</p>
               </div>
               <button 
                 onClick={() => { setShowDeviceModal(false); setDeviceNotice(null); }}
-                className="text-slate-400 hover:text-white p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 transition cursor-pointer"
+                className="text-zinc-400 hover:text-white p-1.5 rounded-lg bg-[#180608] border border-[#2e1015] hover:border-[#d31d38]/50 transition cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -3061,11 +3941,11 @@ Note: My payment receipt has been uploaded to the portal.`;
 
             <div className="p-6 space-y-3.5">
               {deviceNotice && (
-                <div className="p-3.5 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-xl mb-2 flex items-start justify-between gap-2">
+                <div className="p-3.5 bg-[#d31d38]/10 border border-[#d31d38]/30 text-[#ff8093] text-xs rounded-xl mb-2 flex items-start justify-between gap-2">
                   <span>{deviceNotice}</span>
                   <button 
                     onClick={() => setDeviceNotice(null)}
-                    className="text-slate-400 hover:text-white shrink-0 text-xs font-bold"
+                    className="text-zinc-400 hover:text-white shrink-0 text-xs font-bold"
                   >
                     &times;
                   </button>
@@ -3083,24 +3963,24 @@ Note: My payment receipt has been uploaded to the portal.`;
                     setDeviceNotice("The iOS app link is currently being configured by our admins. You can continue watching directly in your Web Browser!");
                   }
                 }}
-                className="w-full bg-[#080911] hover:bg-[#141727] border border-slate-800 hover:border-rose-500/40 p-4 rounded-xl text-left transition cursor-pointer group flex items-center justify-between shadow-md"
+                className="w-full bg-[#080203] hover:bg-[#180608] border border-[#2e1015] hover:border-[#d31d38]/60 p-4 rounded-xl text-left transition cursor-pointer group flex items-center justify-between shadow-md"
               >
                 <div className="flex items-center gap-3.5">
-                  <div className="w-10 h-10 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-center text-white group-hover:border-rose-500/50 group-hover:bg-rose-500/10 transition">
-                    <svg className="w-5 h-5 fill-current text-white group-hover:text-rose-400 transition" viewBox="0 0 24 24">
+                  <div className="w-10 h-10 bg-[#180608] border border-[#2e1015] rounded-xl flex items-center justify-center text-white group-hover:border-[#d31d38]/60 group-hover:bg-[#d31d38]/15 transition">
+                    <svg className="w-5 h-5 fill-current text-white group-hover:text-[#ff4d64] transition" viewBox="0 0 24 24">
                       <path d="M18.71,19.5C17.88,20.74 17,21.95 15.66,21.97C14.32,22 13.89,21.18 12.37,21.18C10.84,21.18 10.37,21.95 9.1,22C7.79,22.05 6.8,20.68 5.96,19.47C4.25,17 2.94,12.45 4.7,9.39C5.57,7.87 7.13,6.91 8.82,6.88C10.1,6.86 11.32,7.75 12.11,7.75C12.89,7.75 14.37,6.68 15.92,6.84C16.57,6.87 18.39,7.1 19.56,8.82C19.47,8.88 17.39,10.1 17.41,12.63C17.44,15.65 20.06,16.66 20.1,16.67C20.08,16.74 19.67,18.11 18.71,19.5M15.97,4.17C16.63,3.37 17.07,2.28 16.95,1C16,1.04 14.9,1.6 14.24,2.38C13.68,3.04 13.19,4.14 13.34,5.39C14.39,5.47 15.4,4.88 15.97,4.17Z" />
                     </svg>
                   </div>
                   <div>
-                    <span className="font-extrabold text-sm text-white block group-hover:text-rose-400 transition">
+                    <span className="font-extrabold text-sm text-white block group-hover:text-[#ff4d64] transition">
                       iPhone / iPad (iOS)
                     </span>
-                    <span className="text-slate-400 text-xs block mt-0.5">
+                    <span className="text-zinc-400 text-xs block mt-0.5">
                       Open or download official iOS mobile app
                     </span>
                   </div>
                 </div>
-                <ExternalLink className="w-4 h-4 text-slate-500 group-hover:text-rose-400 transition" />
+                <ExternalLink className="w-4 h-4 text-zinc-500 group-hover:text-[#ff4d64] transition" />
               </button>
 
               {/* Option 2: Android Phone / Tablet */}
@@ -3114,24 +3994,24 @@ Note: My payment receipt has been uploaded to the portal.`;
                     setDeviceNotice("The Android Play Store app link is currently being configured by our admins. You can continue watching directly in your Web Browser!");
                   }
                 }}
-                className="w-full bg-[#080911] hover:bg-[#141727] border border-slate-800 hover:border-amber-500/40 p-4 rounded-xl text-left transition cursor-pointer group flex items-center justify-between shadow-md"
+                className="w-full bg-[#080203] hover:bg-[#180608] border border-[#2e1015] hover:border-[#d31d38]/60 p-4 rounded-xl text-left transition cursor-pointer group flex items-center justify-between shadow-md"
               >
                 <div className="flex items-center gap-3.5">
-                  <div className="w-10 h-10 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-center text-white group-hover:border-amber-500/50 group-hover:bg-amber-500/10 transition">
-                    <svg className="w-5 h-5 fill-current text-amber-400 group-hover:text-amber-300 transition" viewBox="0 0 24 24">
+                  <div className="w-10 h-10 bg-[#180608] border border-[#2e1015] rounded-xl flex items-center justify-center text-white group-hover:border-[#d31d38]/60 group-hover:bg-[#d31d38]/15 transition">
+                    <svg className="w-5 h-5 fill-current text-white group-hover:text-[#ff4d64] transition" viewBox="0 0 24 24">
                       <path d="M3,5.27V18.73L16.55,12L3,5.27M17.87,11.33L19.43,12.11L17.87,12.89L16.67,12L17.87,11.33M3,3.41L15.67,9.7L18.11,8.47L3,3.41M3,20.59L18.11,15.53L15.67,14.3L3,20.59Z" />
                     </svg>
                   </div>
                   <div>
-                    <span className="font-extrabold text-sm text-white block group-hover:text-amber-400 transition">
+                    <span className="font-extrabold text-sm text-white block group-hover:text-[#ff4d64] transition">
                       Android Phone / Tablet
                     </span>
-                    <span className="text-slate-400 text-xs block mt-0.5">
+                    <span className="text-zinc-400 text-xs block mt-0.5">
                       Download app on Google Play Store
                     </span>
                   </div>
                 </div>
-                <ExternalLink className="w-4 h-4 text-slate-500 group-hover:text-amber-400 transition" />
+                <ExternalLink className="w-4 h-4 text-zinc-500 group-hover:text-[#ff4d64] transition" />
               </button>
 
               {/* Option 3: Web Browser / PC / Smart TV */}
@@ -3141,29 +4021,29 @@ Note: My payment receipt has been uploaded to the portal.`;
                   setShowDeviceModal(false);
                   launchStreaming('');
                 }}
-                className="w-full bg-[#080911] hover:bg-[#141727] border border-slate-800 hover:border-emerald-500/40 p-4 rounded-xl text-left transition cursor-pointer group flex items-center justify-between shadow-md"
+                className="w-full bg-[#080203] hover:bg-[#180608] border border-[#2e1015] hover:border-emerald-500/40 p-4 rounded-xl text-left transition cursor-pointer group flex items-center justify-between shadow-md"
               >
                 <div className="flex items-center gap-3.5">
-                  <div className="w-10 h-10 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-center text-white group-hover:border-emerald-500/50 group-hover:bg-emerald-500/10 transition">
+                  <div className="w-10 h-10 bg-[#180608] border border-[#2e1015] rounded-xl flex items-center justify-center text-white group-hover:border-emerald-500/50 group-hover:bg-emerald-500/10 transition">
                     <Tv className="w-5 h-5 text-emerald-400 group-hover:text-emerald-300 transition" />
                   </div>
                   <div>
                     <span className="font-extrabold text-sm text-white block group-hover:text-emerald-400 transition">
                       Web Browser / PC / Smart TV
                     </span>
-                    <span className="text-slate-400 text-xs block mt-0.5">
+                    <span className="text-zinc-400 text-xs block mt-0.5">
                       Watch instantly in browser with auto sign-in
                     </span>
                   </div>
                 </div>
-                <Play className="w-4 h-4 text-slate-500 group-hover:text-emerald-400 transition fill-current" />
+                <Play className="w-4 h-4 text-zinc-500 group-hover:text-emerald-400 transition fill-current" />
               </button>
             </div>
 
-            <div className="p-4 bg-slate-950/40 border-t border-slate-800/50 flex justify-end">
+            <div className="p-4 bg-[#080203] border-t border-[#2e1015] flex justify-end">
               <button 
                 onClick={() => { setShowDeviceModal(false); setDeviceNotice(null); }}
-                className="bg-slate-800 hover:bg-slate-700 text-white font-bold py-2 px-5 rounded-xl text-xs transition cursor-pointer"
+                className="bg-[#180608] hover:bg-[#220a0e] text-white border border-[#2e1015] font-bold py-2 px-5 rounded-xl text-xs transition cursor-pointer"
               >
                 Close
               </button>
@@ -3175,20 +4055,20 @@ Note: My payment receipt has been uploaded to the portal.`;
       {/* SQUAD DIRECT DEBIT SETUP MODAL */}
       {showDirectDebitModal && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-[#11131e] border border-slate-800 rounded-2xl shadow-2xl overflow-hidden relative">
-            <div className="p-5 border-b border-slate-800/80 flex items-center justify-between bg-[#0b0d17]">
+          <div className="w-full max-w-md bg-[#120507] border border-[#2e1015] rounded-2xl shadow-2xl overflow-hidden relative">
+            <div className="p-5 border-b border-[#2e1015] flex items-center justify-between bg-[#080203]">
               <div className="flex items-center gap-2.5">
                 <div className="p-2 bg-purple-500/10 text-purple-400 rounded-xl border border-purple-500/20">
                   <Landmark className="w-5 h-5" />
                 </div>
                 <div>
                   <h3 className="text-base font-display font-extrabold text-white">Automated Direct Debit</h3>
-                  <p className="text-[11px] text-slate-400">Powered by Squad (HabariPay)</p>
+                  <p className="text-[11px] text-zinc-400">Powered by Squad (HabariPay)</p>
                 </div>
               </div>
               <button 
                 onClick={() => { setShowDirectDebitModal(false); setDirectDebitError(null); setDirectDebitSuccess(null); }}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800/50 transition cursor-pointer"
+                className="text-zinc-400 hover:text-white p-1 rounded-lg hover:bg-[#180608] transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -3197,15 +4077,15 @@ Note: My payment receipt has been uploaded to the portal.`;
             <div className="p-6 space-y-4">
               <div className="bg-purple-950/20 border border-purple-500/30 rounded-xl p-3.5 flex items-start gap-3 text-xs">
                 <ShieldCheck className="w-5 h-5 text-purple-400 shrink-0 mt-0.5" />
-                <div className="text-slate-300 leading-relaxed">
+                <div className="text-zinc-300 leading-relaxed">
                   <strong className="text-white block font-semibold mb-0.5">Recurring Monthly Renewal (₦600/month)</strong>
                   Setting up a Direct Debit mandate guarantees that your streaming access never expires. Charges are processed automatically every 30 days. You can cancel at any time.
                 </div>
               </div>
 
               {directDebitError && (
-                <div className="p-3 bg-rose-500/10 border border-rose-500/25 text-rose-300 text-xs rounded-xl flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+                <div className="p-3 bg-[#d31d38]/10 border border-[#d31d38]/25 text-[#ff8093] text-xs rounded-xl flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-[#ff4d64]" />
                   <span>{directDebitError}</span>
                 </div>
               )}
@@ -3220,12 +4100,12 @@ Note: My payment receipt has been uploaded to the portal.`;
               {directDebitStep === 'input' && (
                 <form onSubmit={handleCreateMandate} className="space-y-4">
                   <div className="space-y-1">
-                    <label className="block text-xs font-semibold text-slate-300">Select Bank</label>
+                    <label className="block text-xs font-semibold text-zinc-300">Select Bank</label>
                     <select
                       value={selectedBankCode}
                       onChange={(e) => setSelectedBankCode(e.target.value)}
                       required
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
                     >
                       {directDebitBanks.length === 0 ? (
                         <option value="">Loading Nigerian Banks...</option>
@@ -3240,7 +4120,7 @@ Note: My payment receipt has been uploaded to the portal.`;
                   </div>
 
                   <div className="space-y-1">
-                    <label className="block text-xs font-semibold text-slate-300">10-Digit NUBAN Account Number</label>
+                    <label className="block text-xs font-semibold text-zinc-300">10-Digit NUBAN Account Number</label>
                     <input
                       type="text"
                       maxLength={10}
@@ -3249,18 +4129,18 @@ Note: My payment receipt has been uploaded to the portal.`;
                       value={directDebitAccountNo}
                       onChange={(e) => setDirectDebitAccountNo(e.target.value.replace(/[^0-9]/g, ''))}
                       required
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs font-mono focus:outline-none focus:border-purple-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs font-mono focus:outline-none focus:border-purple-500 transition"
                     />
                   </div>
 
                   <div className="space-y-1">
-                    <label className="block text-xs font-semibold text-slate-300">Account Holder Name (Optional)</label>
+                    <label className="block text-xs font-semibold text-zinc-300">Account Holder Name (Optional)</label>
                     <input
                       type="text"
                       placeholder={user.fullName || user.username}
                       value={directDebitAccountName}
                       onChange={(e) => setDirectDebitAccountName(e.target.value)}
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-2.5 px-3 text-white text-xs focus:outline-none focus:border-purple-500 transition"
                     />
                   </div>
 
@@ -3286,14 +4166,14 @@ Note: My payment receipt has been uploaded to the portal.`;
 
               {directDebitStep === 'otp' && (
                 <form onSubmit={handleValidateMandateOtp} className="space-y-4">
-                  <div className="p-3 bg-[#07080c] border border-purple-500/30 rounded-xl text-center">
+                  <div className="p-3 bg-[#080203] border border-purple-500/30 rounded-xl text-center">
                     <p className="text-xs text-purple-300 font-medium">
                       An OTP authorization code was sent by your bank to your registered phone number / email.
                     </p>
                   </div>
 
                   <div className="space-y-1">
-                    <label className="block text-xs font-semibold text-slate-300">Enter OTP Code</label>
+                    <label className="block text-xs font-semibold text-zinc-300">Enter OTP Code</label>
                     <input
                       type="text"
                       maxLength={8}
@@ -3302,7 +4182,7 @@ Note: My payment receipt has been uploaded to the portal.`;
                       onChange={(e) => setDirectDebitOtp(e.target.value)}
                       required
                       autoFocus
-                      className="w-full bg-[#07080c] border border-slate-800 rounded-xl py-3 px-3 text-white text-center text-lg font-mono tracking-widest focus:outline-none focus:border-purple-500 transition"
+                      className="w-full bg-[#080203] border border-[#2e1015] rounded-xl py-3 px-3 text-white text-center text-lg font-mono tracking-widest focus:outline-none focus:border-purple-500 transition"
                     />
                   </div>
 
@@ -3319,7 +4199,7 @@ Note: My payment receipt has been uploaded to the portal.`;
                       type="button"
                       onClick={handleResendMandateOtp}
                       disabled={resendingOtp}
-                      className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-3 rounded-xl transition cursor-pointer text-xs flex items-center gap-1 disabled:opacity-50"
+                      className="bg-[#180608] hover:bg-[#220a0e] text-zinc-300 border border-[#2e1015] font-bold py-2.5 px-3 rounded-xl transition cursor-pointer text-xs flex items-center gap-1 disabled:opacity-50"
                     >
                       {resendingOtp ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
                       <span>Resend OTP</span>
@@ -3334,7 +4214,7 @@ Note: My payment receipt has been uploaded to the portal.`;
                     <CheckCircle className="w-8 h-8" />
                   </div>
                   <h4 className="text-base font-extrabold text-white">Direct Debit Activated!</h4>
-                  <p className="text-xs text-slate-300 leading-relaxed max-w-xs mx-auto">
+                  <p className="text-xs text-zinc-300 leading-relaxed max-w-xs mx-auto">
                     Your bank account is now configured for automatic monthly renewal. Your streaming subscription is active!
                   </p>
                   <button
@@ -3355,7 +4235,6 @@ Note: My payment receipt has been uploaded to the portal.`;
           </div>
         </div>
       )}
-
     </div>
   );
 }

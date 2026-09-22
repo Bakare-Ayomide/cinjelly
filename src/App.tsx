@@ -6,6 +6,7 @@ import SetupWizard from './components/SetupWizard';
 import LandingPage from './components/LandingPage';
 import UserPortal from './components/UserPortal';
 import AdminDashboard from './components/AdminDashboard';
+import ResetPasswordPage from './components/ResetPasswordPage';
 
 export default function App() {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
@@ -13,6 +14,15 @@ export default function App() {
   const [jellyfinToken, setJellyfinToken] = useState<string>('');
   const [appLoading, setAppLoading] = useState(true);
   const [currentHash, setCurrentHash] = useState(window.location.hash);
+  const [isResetPasswordView, setIsResetPasswordView] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.location.pathname.startsWith('/reset-password') ||
+      window.location.hash.startsWith('#reset-password') ||
+      new URLSearchParams(window.location.search).has('token')
+    );
+  });
+  const [landingAuthModal, setLandingAuthModal] = useState<'login' | 'signup' | 'forgot' | null>(null);
   const [dbError, setDbError] = useState<string | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
 
@@ -57,7 +67,20 @@ export default function App() {
 
     // Set up lightweight hash-routing listener
     const handleHashChange = () => {
-      setCurrentHash(window.location.hash);
+      const hash = window.location.hash;
+      setCurrentHash(hash);
+      if (hash.startsWith('#reset-password')) {
+        setIsResetPasswordView(true);
+      } else if (hash === '#login') {
+        setIsResetPasswordView(false);
+        setLandingAuthModal('login');
+      } else if (hash === '#signup' || hash === '#register') {
+        setIsResetPasswordView(false);
+        setLandingAuthModal('signup');
+      } else if (hash === '#forgot') {
+        setIsResetPasswordView(false);
+        setLandingAuthModal('forgot');
+      }
     };
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
@@ -118,9 +141,9 @@ export default function App() {
 
   if (appLoading) {
     return (
-      <div className="min-h-screen bg-[#07080b] flex flex-col items-center justify-center text-white">
-        <Loader2 className="w-10 h-10 animate-spin text-red-600 mb-4" />
-        <p className="text-sm font-semibold text-gray-400">Loading Portal Services...</p>
+      <div className="min-h-screen bg-[#0a0304] flex flex-col items-center justify-center text-white selection:bg-[#d31d38] selection:text-white">
+        <Loader2 className="w-10 h-10 animate-spin text-[#d31d38] mb-4" />
+        <p className="text-sm font-semibold text-zinc-400">Loading Portal Services...</p>
       </div>
     );
   }
@@ -128,21 +151,21 @@ export default function App() {
   // Strict Database Connection Screen
   if (dbError) {
     return (
-      <div className="min-h-screen bg-[#090a0f] text-white selection:bg-rose-600 selection:text-white flex items-center justify-center p-6 relative overflow-hidden">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-red-950/15 via-transparent to-transparent pointer-events-none"></div>
+      <div className="min-h-screen bg-[#0a0304] text-white selection:bg-[#d31d38] selection:text-white flex items-center justify-center p-6 relative overflow-hidden">
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-[#d31d38]/15 via-transparent to-transparent pointer-events-none"></div>
 
-        <div className="w-full max-w-md bg-[#111320] border border-slate-800 rounded-2xl p-8 shadow-2xl relative z-10 text-center">
-          <div className="w-12 h-12 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-500 shadow-lg mx-auto mb-4">
+        <div className="w-full max-w-md bg-[#120507] border border-[#2e1015] rounded-2xl p-8 shadow-2xl relative z-10 text-center">
+          <div className="w-12 h-12 rounded-xl bg-[#d31d38]/10 border border-[#d31d38]/20 flex items-center justify-center text-[#ff4d64] shadow-lg mx-auto mb-4">
             <Database className="w-6 h-6" />
           </div>
           
           <h3 className="font-display font-black text-lg text-white tracking-tight mb-2">Database Connection Failed</h3>
-          <p className="text-xs text-slate-400 mb-6">Database connection failed.</p>
+          <p className="text-xs text-zinc-400 mb-6">Database connection failed.</p>
 
           <button
             onClick={handleRetryDb}
             disabled={isRetrying}
-            className="w-full bg-gradient-to-r from-rose-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 disabled:opacity-50 text-white font-bold py-3 px-4 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-lg shadow-rose-950/20"
+            className="w-full bg-[#d31d38] hover:bg-[#b0162c] disabled:opacity-50 text-white font-bold py-3 px-4 rounded-xl text-xs transition cursor-pointer flex items-center justify-center gap-2 shadow-lg shadow-[#d31d38]/20"
           >
             {isRetrying ? (
               <>
@@ -159,7 +182,29 @@ export default function App() {
     );
   }
 
-  // 1. Explicit Portal Setup routing
+  // Handler to return cleanly to the login screen on LandingPage
+  const handleBackToLoginFromReset = () => {
+    try {
+      if (window.history.pushState) {
+        window.history.pushState({}, '', '/#login');
+      }
+    } catch (e) {}
+    window.location.hash = '#login';
+    setCurrentHash('#login');
+    setIsResetPasswordView(false);
+    setLandingAuthModal('login');
+  };
+
+  // 1. Password Reset routing (via URL path /reset-password, hash #reset-password, or ?token=)
+  if (isResetPasswordView && !currentUser) {
+    return (
+      <ResetPasswordPage 
+        onBackToLogin={handleBackToLoginFromReset} 
+      />
+    );
+  }
+
+  // 2. Explicit Portal Setup routing
   if (currentHash === '#setup') {
     return (
       <SetupWizard 
@@ -172,14 +217,15 @@ export default function App() {
     );
   }
 
-  // 2. Landing page for unauthenticated users (always public) OR if hash is empty or explicitly requesting #landing
-  if (!currentUser || currentHash === '' || currentHash === '#landing') {
+  // 3. Landing page for unauthenticated users (always public) OR if hash is empty or auth modals
+  if (!currentUser || currentHash === '' || currentHash === '#landing' || currentHash === '#login' || currentHash === '#signup' || currentHash === '#register' || currentHash === '#forgot') {
     return (
       <LandingPage 
         currentUser={currentUser}
         systemStatus={systemStatus}
         onLoginSuccess={handleLoginSuccess}
         onRegisterSuccess={handleRegisterSuccess}
+        initialAuthModal={landingAuthModal}
       />
     );
   }

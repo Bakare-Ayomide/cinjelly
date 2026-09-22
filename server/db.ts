@@ -12,6 +12,7 @@ export interface JellyfinConfig {
   bankName?: string;
   bankBeneficiary?: string;
   bankInstructions?: string;
+  manualPaymentEnabled?: number | boolean;
   chatbotInfo?: string;
   chatbotInstructions?: string;
   contactEmail?: string;
@@ -76,6 +77,7 @@ export interface JellyfinConfig {
   squadSftpLastTxRef?: string;
   squadSftpLastError?: string;
   squadSftpLastStatus?: string;
+  heroSlideDelaySeconds?: number;
 }
 
 export interface UserRecord {
@@ -105,6 +107,9 @@ export interface UserRecord {
   emailVerified?: number;
   verificationToken?: string;
   verificationTokenExpires?: string;
+  bankName?: string;
+  accountNumber?: string;
+  accountName?: string;
 }
 
 export interface CommissionRecord {
@@ -135,7 +140,7 @@ export interface BroadcastNotificationRecord {
   title: string;
   message: string;
   imageUrl?: string;
-  targetType: 'all' | 'affiliate' | 'paid' | 'free' | 'user';
+  targetType: 'all' | 'affiliate' | 'paid' | 'free' | 'user' | 'admin';
   targetUserId?: string;
   createdAt: string;
 }
@@ -180,6 +185,41 @@ export interface SquadSftpLogRecord {
   createdAt: string;
 }
 
+export interface PasswordResetTokenRecord {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  expiresAt: string;
+  usedAt?: string | null;
+  createdAt: string;
+}
+
+export interface AffiliateWithdrawalRecord {
+  id: string;
+  affiliate_user_id: string;
+  affiliateName?: string;
+  affiliateUsername?: string;
+  affiliateEmail?: string;
+  fullName?: string;
+  full_name?: string;
+  username?: string;
+  email?: string;
+  phone?: string;
+  amount: number;
+  bank_name: string;
+  account_number: string;
+  account_name: string;
+  status: 'pending' | 'paid' | 'declined' | 'cancelled';
+  admin_note?: string | null;
+  requested_at: string;
+  processed_at?: string | null;
+  processed_by?: string | null;
+  payment_reference?: string | null;
+  decline_reason?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export let mysqlAvailable = false;
 export let mysqlErrorMsg: string | null = null;
 
@@ -194,6 +234,7 @@ const memoryConfig: JellyfinConfig = {
 export let localSystemConfig: JellyfinConfig | null = memoryConfig;
 export const localUsers: UserRecord[] = [];
 export const localCommissions: CommissionRecord[] = [];
+export const localAffiliateWithdrawals: AffiliateWithdrawalRecord[] = [];
 export const localMediaRequests: MediaRequestRecord[] = [];
 export const localBroadcastNotifications: BroadcastNotificationRecord[] = [];
 export const localSessions = new Map<string, { userId: string; expiresAt: number; jellyfinToken: string }>();
@@ -201,6 +242,210 @@ export const localProcessedTxs = new Set<string>();
 export const localPendingPayments = new Map<string, PendingPaymentRecord>();
 export const localSquadMandates: SquadMandateRecord[] = [];
 export const localSquadSftpLogs: SquadSftpLogRecord[] = [];
+export const localPasswordResetTokens: PasswordResetTokenRecord[] = [];
+
+export interface HeroSlideRecord {
+  id: string;
+  title: string;
+  tagline: string;
+  year: string;
+  rating: string;
+  quality: string;
+  duration: string;
+  mediaType: 'image' | 'video';
+  mediaUrl: string;
+  posterUrl?: string;
+  announcement: string;
+  slideOrder: number;
+  isActive: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LandingAboutRecord {
+  id: string;
+  header: string;
+  badge: string;
+  subtitle: string;
+  contentHtml: string;
+  imageUrl: string;
+  imageAlt?: string;
+  captionTitle?: string;
+  captionDesc?: string;
+  featurePillsJson?: string;
+  cardsJson?: string;
+  updatedAt: string;
+}
+
+export interface LandingFaqRecord {
+  id: string;
+  question: string;
+  answer: string;
+  faqOrder: number;
+  isActive: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const DEFAULT_HERO_SLIDES: HeroSlideRecord[] = [
+  {
+    id: 'slide-evil-dead',
+    title: 'EVIL DEAD',
+    tagline: 'CINODE 4K STREAMING NETWORK • ₦600 UNLIMITED PASS',
+    year: '1981 - 2023',
+    rating: '9.9',
+    quality: '4K Remaster',
+    duration: 'Franchise Boxset',
+    mediaType: 'image',
+    mediaUrl: '',
+    posterUrl: '',
+    announcement: "Bruce Campbell and Sam Raimi's legendary Evil Dead universe is fully remastered in 4K HDR. Stream unrated cuts and behind-the-scenes specials with zero buffer on Cinode.",
+    slideOrder: 0,
+    isActive: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  },
+  {
+    id: 'slide-dune-2',
+    title: 'DUNE: PART TWO',
+    tagline: 'IMAX ENHANCED 4K HDR • 45MBPS DIRECT STREAM',
+    year: '2024',
+    rating: '9.8',
+    quality: '4K Ultra HD',
+    duration: '2h 46m',
+    mediaType: 'image',
+    mediaUrl: 'https://image.tmdb.org/t/p/original/8b8R8l88Qje9dn9OE8PY05Nxl1X.jpg',
+    posterUrl: 'https://image.tmdb.org/t/p/w500/y4ml848KTz0zccQxfWlE8CMMC13.jpg',
+    announcement: "Denis Villeneuve's cinematic masterwork is now streaming in full 4K HDR. Experience Paul Atreides' destiny on any TV, PC, or mobile device with zero buffering.",
+    slideOrder: 1,
+    isActive: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  },
+  {
+    id: 'slide-stranger-things',
+    title: 'STRANGER THINGS',
+    tagline: 'COMPLETE 4K BINGE • OFFLINE DOWNLOADS READY',
+    year: '2025',
+    rating: '9.9',
+    quality: '4K BINGE',
+    duration: 'All Seasons',
+    mediaType: 'image',
+    mediaUrl: 'https://image.tmdb.org/t/p/original/56v2KjBlU4XaOv9rVYEQypROD7P.jpg',
+    posterUrl: 'https://image.tmdb.org/t/p/w500/uOOtwVbSr4QDjAGIifLDwpb2Pdl.jpg',
+    announcement: 'Every season of Stranger Things available in stunning 4K HDR. Save full episodes directly to your iOS or Android app to watch on the go without mobile data lag.',
+    slideOrder: 2,
+    isActive: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  },
+  {
+    id: 'slide-arcane',
+    title: 'ARCANE',
+    tagline: 'CRITICALLY ACCLAIMED MASTERPIECE • 9.9/10 RATING',
+    year: '2024',
+    rating: '9.9',
+    quality: '4K HDR',
+    duration: 'Season 1 & 2',
+    mediaType: 'image',
+    mediaUrl: 'https://image.tmdb.org/t/p/original/uDgy6hyPd82kOHh6I95FLtLnj6p.jpg',
+    posterUrl: 'https://image.tmdb.org/t/p/w500/abf8tHznhSvl9BAElD2cQeRr7do.jpg',
+    announcement: 'Experience the visual triumph of Piltover and Zaun. Stream every high-stakes episode in pristine 4K resolution with synchronized English/multi-language subtitles.',
+    slideOrder: 3,
+    isActive: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  },
+  {
+    id: 'slide-gladiator',
+    title: 'GLADIATOR II',
+    tagline: 'EPIC ACTION BLOCKBUSTER • UNTHROTTLED PLAYBACK',
+    year: '2024',
+    rating: '9.4',
+    quality: '4K HDR',
+    duration: '2h 28m',
+    mediaType: 'image',
+    mediaUrl: 'https://image.tmdb.org/t/p/original/euYIwmqkmz95mnXvufEmbL6ovhZ.jpg',
+    posterUrl: 'https://image.tmdb.org/t/p/w500/gUPnmDkNRSLFynbpNw9VJrYBEgT.jpg',
+    announcement: "Lucius enters the Colosseum in Ridley Scott's monumental return to ancient Rome. Stream with instant 1-click seeking and zero buffering on Cinode.",
+    slideOrder: 4,
+    isActive: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  }
+];
+
+export const DEFAULT_LANDING_ABOUT: LandingAboutRecord = {
+  id: 'main',
+  header: 'About',
+  badge: "⚡ NIGERIA'S HIGH-SPEED CINEMA NETWORK",
+  subtitle: 'Cinode: Unthrottled 4K Streaming for Everyone',
+  contentHtml: `<p>Cinode is a purpose-built, high-performance private streaming network engineered to deliver true 4K HDR and Full HD cinema directly to your screens without buffering or ISP throttling.</p><p>With a dedicated 45Mbps direct-play infrastructure, you bypass aggressive streaming compression to enjoy theater-quality audio, crystal-clear visuals, personalized watch histories, and instant movie requests.</p><p>One single ₦600/month pass gives you unhindered access across Smart TVs, Android, iPhone, iPad, Windows, and Mac with synchronized playback and offline mobile downloads.</p>`,
+  imageUrl: '',
+  imageAlt: 'Cinode 4K Cinema Engine',
+  captionTitle: 'Direct Cloud Storage Architecture',
+  captionDesc: '10,000+ Hours of 4K Remastered Cinema & TV Series',
+  featurePillsJson: JSON.stringify(["⚡ 45Mbps Direct Play Engine", "🛡️ 100% Ad-Free Private Profiles", "🍿 ₦600 All-Inclusive Pass"]),
+  cardsJson: JSON.stringify([
+    { id: 'c1', title: 'Zero Buffer Engine', desc: 'Direct-play 45Mbps video streams backed by dedicated high-speed storage. Movies and series launch instantly without waiting.', icon: 'Zap' },
+    { id: 'c2', title: 'Any Screen, Everywhere', desc: 'Stream on your Smart TV, Mobile Phone, Tablet, and PC without paying extra per device. Seamless playback synchronization.', icon: 'Tv' },
+    { id: 'c3', title: 'Offline Downloads', desc: 'Save HD blockbusters directly onto your iOS or Android app to watch on trips without spending mobile data.', icon: 'Smartphone' }
+  ]),
+  updatedAt: new Date().toISOString()
+};
+
+export const DEFAULT_LANDING_FAQS: LandingFaqRecord[] = [
+  {
+    id: 'faq-1',
+    question: 'What is Cinode Streaming Network?',
+    answer: 'Cinode is a high-speed private media streaming portal engineered for smooth, ad-free streaming of curated blockbuster movies, full franchises, and TV series directly on your phone, smart TV, or laptop.',
+    faqOrder: 0,
+    isActive: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  },
+  {
+    id: 'faq-2',
+    question: 'How does the ₦600 subscription work?',
+    answer: 'We keep premium streaming ultra-affordable. A single flat subscription fee of ₦600 unlocks 30 full days of unlimited, ad-free streaming in 4K HDR. You can renew instantly using Paystack, Monnify, Squad, or direct bank transfer.',
+    faqOrder: 1,
+    isActive: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  },
+  {
+    id: 'faq-3',
+    question: 'Can I watch offline on my mobile phone?',
+    answer: 'Yes! Download our official mobile client apps to save your favorite movies and series directly to your device and watch offline anywhere without using mobile data.',
+    faqOrder: 2,
+    isActive: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  },
+  {
+    id: 'faq-4',
+    question: 'How do I connect the Mobile App?',
+    answer: 'When you open the mobile app for the first time, simply enter our Server Address: https://cinode.zerolord.com and sign in with your Cinode portal account credentials.',
+    faqOrder: 3,
+    isActive: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  },
+  {
+    id: 'faq-5',
+    question: 'Can I request movies that are not available?',
+    answer: 'Absolutely! Our portal includes a built-in Content Request system. Simply submit the title you want, and our system will fetch and add it to the library.',
+    faqOrder: 4,
+    isActive: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  }
+];
+
+export const localHeroSlides: HeroSlideRecord[] = [...DEFAULT_HERO_SLIDES];
+export let localHeroSlideDelaySeconds = 5;
+export let localLandingAbout: LandingAboutRecord = { ...DEFAULT_LANDING_ABOUT };
+export const localLandingFaqs: LandingFaqRecord[] = [...DEFAULT_LANDING_FAQS];
 
 // Create connection pool to the user's MySQL database
 export const pool = mysql.createPool({
@@ -317,6 +562,7 @@ export async function initDb() {
     try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSecretKey TEXT NULL"); } catch (e) {}
     try { await pool.query("ALTER TABLE system_config ADD COLUMN squadApiKey TEXT NULL"); } catch (e) {}
     try { await pool.query("ALTER TABLE system_config ADD COLUMN squadMode VARCHAR(50) NOT NULL DEFAULT 'live'"); } catch (e) {}
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN manualPaymentEnabled TINYINT(1) NOT NULL DEFAULT 1"); } catch (e) {}
     try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpEnabled TINYINT(1) NOT NULL DEFAULT 0"); } catch (e) {}
     try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpHost VARCHAR(255) NULL"); } catch (e) {}
     try { await pool.query("ALTER TABLE system_config ADD COLUMN squadSftpPort INT NOT NULL DEFAULT 22"); } catch (e) {}
@@ -396,6 +642,30 @@ export async function initDb() {
       )
     `);
 
+    // Create affiliate_withdrawals table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS affiliate_withdrawals (
+        id VARCHAR(255) PRIMARY KEY,
+        affiliate_user_id VARCHAR(255) NOT NULL,
+        amount DECIMAL(10,2) NOT NULL,
+        bank_name VARCHAR(255) NOT NULL,
+        account_number VARCHAR(100) NOT NULL,
+        account_name VARCHAR(255) NOT NULL,
+        status VARCHAR(50) NOT NULL DEFAULT 'pending',
+        admin_note TEXT NULL,
+        requested_at VARCHAR(255) NOT NULL,
+        processed_at VARCHAR(255) NULL,
+        processed_by VARCHAR(255) NULL,
+        payment_reference VARCHAR(255) NULL,
+        decline_reason TEXT NULL,
+        created_at VARCHAR(255) NOT NULL,
+        updated_at VARCHAR(255) NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    try { await pool.query("CREATE INDEX idx_affiliate_user_withdrawals ON affiliate_withdrawals (affiliate_user_id)"); } catch (e) {}
+    try { await pool.query("CREATE INDEX idx_affiliate_withdrawal_status ON affiliate_withdrawals (status)"); } catch (e) {}
+
     // Create media_requests table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS media_requests (
@@ -426,6 +696,101 @@ export async function initDb() {
 
     try { await pool.query("ALTER TABLE broadcast_notifications ADD COLUMN targetUserId VARCHAR(255) NULL"); } catch (e) {}
 
+    try { await pool.query("ALTER TABLE system_config ADD COLUMN heroSlideDelaySeconds INT NOT NULL DEFAULT 5"); } catch (e) {}
+
+    // Create landing_hero_slides table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS landing_hero_slides (
+        id VARCHAR(255) PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        tagline VARCHAR(255) NULL,
+        year VARCHAR(50) NULL,
+        rating VARCHAR(50) NULL,
+        quality VARCHAR(50) NULL,
+        duration VARCHAR(100) NULL,
+        mediaType VARCHAR(50) NOT NULL DEFAULT 'image',
+        mediaUrl TEXT NOT NULL,
+        posterUrl TEXT NULL,
+        announcement TEXT NULL,
+        slideOrder INT NOT NULL DEFAULT 0,
+        isActive TINYINT(1) NOT NULL DEFAULT 1,
+        createdAt VARCHAR(255) NOT NULL,
+        updatedAt VARCHAR(255) NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Create landing_about table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS landing_about (
+        id VARCHAR(255) PRIMARY KEY,
+        header VARCHAR(255) NOT NULL,
+        badge VARCHAR(255) NULL,
+        subtitle VARCHAR(255) NULL,
+        contentHtml LONGTEXT NOT NULL,
+        imageUrl TEXT NULL,
+        imageAlt VARCHAR(255) NULL,
+        captionTitle VARCHAR(255) NULL,
+        captionDesc VARCHAR(255) NULL,
+        featurePillsJson TEXT NULL,
+        cardsJson TEXT NULL,
+        updatedAt VARCHAR(255) NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Create landing_faqs table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS landing_faqs (
+        id VARCHAR(255) PRIMARY KEY,
+        question TEXT NOT NULL,
+        answer TEXT NOT NULL,
+        faqOrder INT NOT NULL DEFAULT 0,
+        isActive TINYINT(1) NOT NULL DEFAULT 1,
+        createdAt VARCHAR(255) NOT NULL,
+        updatedAt VARCHAR(255) NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Seed landing tables if empty
+    try {
+      const [slidesCount]: any = await pool.query('SELECT COUNT(*) as cnt FROM landing_hero_slides');
+      if (slidesCount && slidesCount[0] && Number(slidesCount[0].cnt) === 0) {
+        for (const s of DEFAULT_HERO_SLIDES) {
+          await pool.query(`
+            INSERT INTO landing_hero_slides (id, title, tagline, year, rating, quality, duration, mediaType, mediaUrl, posterUrl, announcement, slideOrder, isActive, createdAt, updatedAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `, [s.id, s.title, s.tagline, s.year, s.rating, s.quality, s.duration, s.mediaType, s.mediaUrl, s.posterUrl || '', s.announcement, s.slideOrder, s.isActive, s.createdAt, s.updatedAt]);
+        }
+      }
+    } catch (e) {}
+
+    try {
+      const [aboutCount]: any = await pool.query('SELECT COUNT(*) as cnt FROM landing_about');
+      if (aboutCount && aboutCount[0] && Number(aboutCount[0].cnt) === 0) {
+        await pool.query(`
+          INSERT INTO landing_about (id, header, badge, subtitle, contentHtml, imageUrl, imageAlt, captionTitle, captionDesc, featurePillsJson, cardsJson, updatedAt)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          DEFAULT_LANDING_ABOUT.id, DEFAULT_LANDING_ABOUT.header, DEFAULT_LANDING_ABOUT.badge, DEFAULT_LANDING_ABOUT.subtitle,
+          DEFAULT_LANDING_ABOUT.contentHtml, DEFAULT_LANDING_ABOUT.imageUrl, DEFAULT_LANDING_ABOUT.imageAlt || '',
+          DEFAULT_LANDING_ABOUT.captionTitle || '', DEFAULT_LANDING_ABOUT.captionDesc || '',
+          DEFAULT_LANDING_ABOUT.featurePillsJson || '[]', DEFAULT_LANDING_ABOUT.cardsJson || '[]',
+          DEFAULT_LANDING_ABOUT.updatedAt
+        ]);
+      }
+    } catch (e) {}
+
+    try {
+      const [faqsCount]: any = await pool.query('SELECT COUNT(*) as cnt FROM landing_faqs');
+      if (faqsCount && faqsCount[0] && Number(faqsCount[0].cnt) === 0) {
+        for (const f of DEFAULT_LANDING_FAQS) {
+          await pool.query(`
+            INSERT INTO landing_faqs (id, question, answer, faqOrder, isActive, createdAt, updatedAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+          `, [f.id, f.question, f.answer, f.faqOrder, f.isActive, f.createdAt, f.updatedAt]);
+        }
+      }
+    } catch (e) {}
+
     // Create squad_mandates table for Direct Debit recurring billing
     await pool.query(`
       CREATE TABLE IF NOT EXISTS squad_mandates (
@@ -445,6 +810,20 @@ export async function initDb() {
         nextDebitDate VARCHAR(255) NULL,
         createdAt VARCHAR(255) NOT NULL,
         updatedAt VARCHAR(255) NOT NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
+    // Create password_reset_tokens table for secure forgot password recovery
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        id VARCHAR(255) PRIMARY KEY,
+        userId VARCHAR(255) NOT NULL,
+        tokenHash VARCHAR(255) NOT NULL,
+        expiresAt VARCHAR(255) NOT NULL,
+        usedAt VARCHAR(255) NULL,
+        createdAt VARCHAR(255) NOT NULL,
+        INDEX idx_reset_token_hash (tokenHash),
+        INDEX idx_reset_user_id (userId)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
     
@@ -518,6 +897,7 @@ export const db = {
             bankName: rows[0].bankName || '',
             bankBeneficiary: rows[0].bankBeneficiary || '',
             bankInstructions: rows[0].bankInstructions || '',
+            manualPaymentEnabled: rows[0].manualPaymentEnabled !== undefined ? Number(rows[0].manualPaymentEnabled) : 1,
             chatbotInfo: rows[0].chatbotInfo || '',
             chatbotInstructions: rows[0].chatbotInstructions || '',
             contactEmail: rows[0].contactEmail || '',
@@ -616,7 +996,7 @@ export const db = {
     await pool.query(`
       INSERT INTO system_config (
         id, serverUrl, adminUsername, adminPasswordFull, apiKey, defaultCommission, 
-        bankAccountNo, bankName, bankBeneficiary, bankInstructions, 
+        bankAccountNo, bankName, bankBeneficiary, bankInstructions, manualPaymentEnabled, 
         chatbotInfo, chatbotInstructions, contactEmail, contactPhone, contactWhatsApp, contactOther, 
         iosDownloadUrl, androidDownloadUrl,
         smtpEnabled, smtpHost, smtpPort, smtpSecure, smtpUser, smtpPass, smtpFromName, smtpFromEmail,
@@ -629,7 +1009,7 @@ export const db = {
         squadSftpEnabled, squadSftpHost, squadSftpPort, squadSftpUsername, squadSftpPassword, squadSftpPrivateKey,
         squadSftpRemoteDir, squadSftpProcessingDir, squadSftpGpgPrivateKey, squadSftpGpgPassphrase, squadSftpPollInterval
       )
-      VALUES ('main', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES ('main', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         serverUrl = VALUES(serverUrl),
         adminUsername = VALUES(adminUsername),
@@ -640,6 +1020,7 @@ export const db = {
         bankName = VALUES(bankName),
         bankBeneficiary = VALUES(bankBeneficiary),
         bankInstructions = VALUES(bankInstructions),
+        manualPaymentEnabled = VALUES(manualPaymentEnabled),
         chatbotInfo = VALUES(chatbotInfo),
         chatbotInstructions = VALUES(chatbotInstructions),
         contactEmail = VALUES(contactEmail),
@@ -702,6 +1083,7 @@ export const db = {
       config.bankName || null,
       config.bankBeneficiary || null,
       config.bankInstructions || null,
+      config.manualPaymentEnabled !== undefined ? (config.manualPaymentEnabled ? 1 : 0) : 1,
       config.chatbotInfo || null,
       config.chatbotInstructions || null,
       config.contactEmail || null,
@@ -946,6 +1328,413 @@ export const db = {
     await pool.query('UPDATE commissions SET status = ?, updatedAt = ? WHERE id = ?', [status, now, id]);
   },
 
+  async getAffiliateBalances(affiliateUserId: string) {
+    if (!mysqlAvailable) {
+      const userComms = localCommissions.filter(c => c.affiliateId === affiliateUserId && (c.status as any) !== 'Declined');
+      const totalEarned = userComms.reduce((sum, c) => sum + Number(c.amount || 0), 0);
+
+      const userWiths = localAffiliateWithdrawals.filter(w => w.affiliate_user_id === affiliateUserId);
+      const pendingAmount = userWiths.filter(w => w.status === 'pending').reduce((sum, w) => sum + Number(w.amount || 0), 0);
+      const paidAmount = userWiths.filter(w => w.status === 'paid').reduce((sum, w) => sum + Number(w.amount || 0), 0);
+
+      const totalEarnedCents = Math.round(totalEarned * 100);
+      const pendingCents = Math.round(pendingAmount * 100);
+      const paidCents = Math.round(paidAmount * 100);
+      const availableCents = Math.max(0, totalEarnedCents - pendingCents - paidCents);
+      const availableAmount = Math.round(availableCents) / 100;
+
+      return {
+        totalEarnings: Math.round(totalEarned * 100) / 100,
+        pendingWithdrawal: Math.round(pendingAmount * 100) / 100,
+        totalPaidOut: Math.round(paidAmount * 100) / 100,
+        availableEarnings: availableAmount,
+        totalEarningsCents: totalEarnedCents,
+        pendingCents,
+        paidCents,
+        availableCents
+      };
+    }
+
+    const [commsRows]: any = await pool.query(
+      "SELECT COALESCE(SUM(amount), 0) AS totalEarned FROM commissions WHERE affiliateId = ? AND status != 'Declined'",
+      [affiliateUserId]
+    );
+    const totalEarned = parseFloat(commsRows[0]?.totalEarned || '0');
+
+    const [withRows]: any = await pool.query(
+      `SELECT 
+        COALESCE(SUM(CASE WHEN status = 'pending' THEN amount ELSE 0 END), 0) AS pendingAmount,
+        COALESCE(SUM(CASE WHEN status = 'paid' THEN amount ELSE 0 END), 0) AS paidAmount
+      FROM affiliate_withdrawals
+      WHERE affiliate_user_id = ?`,
+      [affiliateUserId]
+    );
+
+    const pendingAmount = parseFloat(withRows[0]?.pendingAmount || '0');
+    const paidAmount = parseFloat(withRows[0]?.paidAmount || '0');
+
+    const totalEarnedCents = Math.round(totalEarned * 100);
+    const pendingCents = Math.round(pendingAmount * 100);
+    const paidCents = Math.round(paidAmount * 100);
+    const availableCents = Math.max(0, totalEarnedCents - pendingCents - paidCents);
+    const availableAmount = Math.round(availableCents) / 100;
+
+    return {
+      totalEarnings: Math.round(totalEarned * 100) / 100,
+      pendingWithdrawal: Math.round(pendingAmount * 100) / 100,
+      totalPaidOut: Math.round(paidAmount * 100) / 100,
+      availableEarnings: availableAmount,
+      totalEarningsCents: totalEarnedCents,
+      pendingCents,
+      paidCents,
+      availableCents
+    };
+  },
+
+  async requestAffiliateWithdrawal(affiliateUserId: string, bankName: string, accountNumber: string, accountName: string, requestedAmount?: number) {
+    const cleanBank = bankName.trim();
+    const cleanAccNo = accountNumber.trim();
+    const cleanAccName = accountName.trim();
+
+    if (!cleanBank || !cleanAccNo || !cleanAccName) {
+      throw new Error('Bank name, account number, and account holder name are all required.');
+    }
+
+    if (!mysqlAvailable) {
+      const user = localUsers.find(u => u.id === affiliateUserId);
+      if (!user) throw new Error('Affiliate user record not found.');
+
+      const balances = await this.getAffiliateBalances(affiliateUserId);
+      if (balances.availableCents <= 0) {
+        throw new Error('You have no available affiliate balance to withdraw.');
+      }
+
+      if (requestedAmount !== undefined && requestedAmount !== null) {
+        const reqCents = Math.round(Number(requestedAmount) * 100);
+        if (reqCents !== balances.availableCents) {
+          if (reqCents < balances.availableCents) {
+            throw new Error(`You must withdraw your full available earnings of ₦${balances.availableEarnings.toFixed(2)}`);
+          } else {
+            throw new Error(`Withdrawal amount cannot exceed your available earnings of ₦${balances.availableEarnings.toFixed(2)}`);
+          }
+        }
+      }
+
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
+      const record: AffiliateWithdrawalRecord = {
+        id,
+        affiliate_user_id: affiliateUserId,
+        amount: balances.availableEarnings,
+        bank_name: cleanBank,
+        account_number: cleanAccNo,
+        account_name: cleanAccName,
+        status: 'pending',
+        requested_at: now,
+        created_at: now,
+        updated_at: now,
+        fullName: user.fullName,
+        full_name: user.fullName,
+        username: user.username,
+        email: user.email,
+        phone: user.phone
+      };
+
+      localAffiliateWithdrawals.unshift(record);
+      user.bankName = cleanBank;
+      user.accountNumber = cleanAccNo;
+      user.accountName = cleanAccName;
+
+      return record;
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [userRows]: any = await conn.query('SELECT id, fullName, username, email, phone, bankName, accountNumber, accountName FROM users WHERE id = ? FOR UPDATE', [affiliateUserId]);
+      const userRow = userRows[0];
+      if (!userRow) {
+        throw new Error('Affiliate user record not found.');
+      }
+
+      const [commsRows]: any = await conn.query("SELECT COALESCE(SUM(amount), 0) AS totalEarned FROM commissions WHERE affiliateId = ? AND status != 'Declined'", [affiliateUserId]);
+      const totalEarned = parseFloat(commsRows[0]?.totalEarned || '0');
+
+      const [withRows]: any = await conn.query(
+        "SELECT COALESCE(SUM(amount), 0) AS pendingAmount FROM affiliate_withdrawals WHERE affiliate_user_id = ? AND status = 'pending' FOR UPDATE",
+        [affiliateUserId]
+      );
+      const pendingAmount = parseFloat(withRows[0]?.pendingAmount || '0');
+
+      const [paidRows]: any = await conn.query(
+        "SELECT COALESCE(SUM(amount), 0) AS paidAmount FROM affiliate_withdrawals WHERE affiliate_user_id = ? AND status = 'paid'",
+        [affiliateUserId]
+      );
+      const paidAmount = parseFloat(paidRows[0]?.paidAmount || '0');
+
+      const totalEarnedCents = Math.round(totalEarned * 100);
+      const pendingCents = Math.round(pendingAmount * 100);
+      const paidCents = Math.round(paidAmount * 100);
+      const availableCents = Math.max(0, totalEarnedCents - pendingCents - paidCents);
+      const availableAmount = Math.round(availableCents) / 100;
+
+      if (availableCents <= 0) {
+        throw new Error('You have no available affiliate balance to withdraw.');
+      }
+
+      if (requestedAmount !== undefined && requestedAmount !== null) {
+        const reqCents = Math.round(Number(requestedAmount) * 100);
+        if (reqCents !== availableCents) {
+          if (reqCents < availableCents) {
+            throw new Error(`You must withdraw your full available earnings of ₦${availableAmount.toFixed(2)}`);
+          } else {
+            throw new Error(`Withdrawal amount cannot exceed your available earnings of ₦${availableAmount.toFixed(2)}`);
+          }
+        }
+      }
+
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
+
+      await conn.query(
+        `INSERT INTO affiliate_withdrawals (
+          id, affiliate_user_id, amount, bank_name, account_number, account_name,
+          status, admin_note, requested_at, processed_at, processed_by, payment_reference,
+          decline_reason, created_at, updated_at
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?,
+          'pending', NULL, ?, NULL, NULL, NULL,
+          NULL, ?, ?
+        )`,
+        [id, affiliateUserId, availableAmount, cleanBank, cleanAccNo, cleanAccName, now, now, now]
+      );
+
+      await conn.query('UPDATE users SET bankName = ?, accountNumber = ?, accountName = ? WHERE id = ?', [cleanBank, cleanAccNo, cleanAccName, affiliateUserId]);
+
+      await conn.commit();
+
+      return {
+        id,
+        affiliate_user_id: affiliateUserId,
+        amount: availableAmount,
+        bank_name: cleanBank,
+        account_number: cleanAccNo,
+        account_name: cleanAccName,
+        status: 'pending',
+        requested_at: now,
+        created_at: now,
+        updated_at: now,
+        fullName: userRow.fullName,
+        full_name: userRow.fullName,
+        username: userRow.username,
+        email: userRow.email,
+        phone: userRow.phone
+      };
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  },
+
+  async getAffiliateWithdrawals(affiliateUserId: string): Promise<AffiliateWithdrawalRecord[]> {
+    if (!mysqlAvailable) {
+      return localAffiliateWithdrawals
+        .filter(w => w.affiliate_user_id === affiliateUserId)
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    }
+
+    const [rows]: any = await pool.query(
+      'SELECT * FROM affiliate_withdrawals WHERE affiliate_user_id = ? ORDER BY created_at DESC',
+      [affiliateUserId]
+    );
+    return rows.map((r: any) => ({ ...r, amount: Number(r.amount) }));
+  },
+
+  async getAffiliateWithdrawalById(id: string): Promise<AffiliateWithdrawalRecord | null> {
+    if (!mysqlAvailable) {
+      const record = localAffiliateWithdrawals.find(w => w.id === id);
+      return record || null;
+    }
+
+    const [rows]: any = await pool.query(
+      `SELECT w.*, 
+              u.fullName, 
+              u.fullName AS full_name, 
+              u.fullName AS affiliateName, 
+              u.username, 
+              u.username AS affiliateUsername, 
+              u.email, 
+              u.email AS affiliateEmail,
+              u.phone,
+              u.accountStatus
+       FROM affiliate_withdrawals w
+       LEFT JOIN users u ON w.affiliate_user_id = u.id
+       WHERE w.id = ?`,
+      [id]
+    );
+
+    if (rows && rows.length > 0) {
+      const r = rows[0];
+      return {
+        ...r,
+        amount: Number(r.amount),
+        fullName: r.fullName || r.affiliateName || '',
+        full_name: r.fullName || r.affiliateName || '',
+        username: r.username || r.affiliateUsername || '',
+        email: r.email || r.affiliateEmail || ''
+      };
+    }
+    return null;
+  },
+
+  async getAllAffiliateWithdrawals(statusFilter?: string | null): Promise<AffiliateWithdrawalRecord[]> {
+    if (!mysqlAvailable) {
+      let list = [...localAffiliateWithdrawals];
+      if (statusFilter && ['pending', 'paid', 'declined', 'cancelled'].includes(statusFilter.toLowerCase())) {
+        list = list.filter(w => w.status === statusFilter.toLowerCase());
+      }
+      return list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    }
+
+    let query = `
+      SELECT w.*, 
+             u.fullName, 
+             u.fullName AS full_name, 
+             u.fullName AS affiliateName, 
+             u.username, 
+             u.username AS affiliateUsername, 
+             u.email, 
+             u.email AS affiliateEmail,
+             u.phone,
+             u.accountStatus
+      FROM affiliate_withdrawals w
+      LEFT JOIN users u ON w.affiliate_user_id = u.id
+    `;
+    const params: any[] = [];
+
+    if (statusFilter && ['pending', 'paid', 'declined', 'cancelled'].includes(statusFilter.toLowerCase())) {
+      query += ' WHERE w.status = ?';
+      params.push(statusFilter.toLowerCase());
+    }
+
+    query += ' ORDER BY w.created_at DESC';
+
+    const [rows]: any = await pool.query(query, params);
+    return rows.map((r: any) => ({
+      ...r,
+      amount: Number(r.amount),
+      fullName: r.fullName || r.affiliateName || '',
+      full_name: r.fullName || r.affiliateName || '',
+      username: r.username || r.affiliateUsername || '',
+      email: r.email || r.affiliateEmail || ''
+    }));
+  },
+
+  async markAffiliateWithdrawalAsPaid(withdrawalId: string, adminUsername: string, paymentReference?: string | null): Promise<AffiliateWithdrawalRecord> {
+    const now = new Date().toISOString();
+    const cleanRef = paymentReference?.trim() || null;
+
+    if (!mysqlAvailable) {
+      const idx = localAffiliateWithdrawals.findIndex(w => w.id === withdrawalId);
+      if (idx === -1) throw new Error('Withdrawal request not found.');
+      if (localAffiliateWithdrawals[idx].status !== 'pending') {
+        throw new Error(`Only pending withdrawals can be marked as paid. Current status: ${localAffiliateWithdrawals[idx].status}`);
+      }
+      localAffiliateWithdrawals[idx].status = 'paid';
+      localAffiliateWithdrawals[idx].processed_at = now;
+      localAffiliateWithdrawals[idx].processed_by = adminUsername;
+      localAffiliateWithdrawals[idx].payment_reference = cleanRef;
+      localAffiliateWithdrawals[idx].updated_at = now;
+      return localAffiliateWithdrawals[idx];
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [rows]: any = await conn.query('SELECT * FROM affiliate_withdrawals WHERE id = ? FOR UPDATE', [withdrawalId]);
+      const withdrawal = rows[0];
+      if (!withdrawal) throw new Error('Withdrawal request not found.');
+      if (withdrawal.status !== 'pending') {
+        throw new Error(`Only pending withdrawals can be marked as paid. Current status: ${withdrawal.status}`);
+      }
+
+      await conn.query(
+        `UPDATE affiliate_withdrawals
+         SET status = 'paid',
+             processed_at = ?,
+             processed_by = ?,
+             payment_reference = ?,
+             updated_at = ?
+         WHERE id = ?`,
+        [now, adminUsername, cleanRef, now, withdrawalId]
+      );
+
+      await conn.commit();
+      const updated = await this.getAffiliateWithdrawalById(withdrawalId);
+      return updated!;
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  },
+
+  async markAffiliateWithdrawalAsDeclined(withdrawalId: string, adminUsername: string, declineReason: string): Promise<AffiliateWithdrawalRecord> {
+    const reason = declineReason.trim();
+    if (!reason) throw new Error('A decline reason is mandatory.');
+
+    const now = new Date().toISOString();
+
+    if (!mysqlAvailable) {
+      const idx = localAffiliateWithdrawals.findIndex(w => w.id === withdrawalId);
+      if (idx === -1) throw new Error('Withdrawal request not found.');
+      if (localAffiliateWithdrawals[idx].status !== 'pending') {
+        throw new Error(`Only pending withdrawals can be declined. Current status: ${localAffiliateWithdrawals[idx].status}`);
+      }
+      localAffiliateWithdrawals[idx].status = 'declined';
+      localAffiliateWithdrawals[idx].decline_reason = reason;
+      localAffiliateWithdrawals[idx].processed_at = now;
+      localAffiliateWithdrawals[idx].processed_by = adminUsername;
+      localAffiliateWithdrawals[idx].updated_at = now;
+      return localAffiliateWithdrawals[idx];
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [rows]: any = await conn.query('SELECT * FROM affiliate_withdrawals WHERE id = ? FOR UPDATE', [withdrawalId]);
+      const withdrawal = rows[0];
+      if (!withdrawal) throw new Error('Withdrawal request not found.');
+      if (withdrawal.status !== 'pending') {
+        throw new Error(`Only pending withdrawals can be declined. Current status: ${withdrawal.status}`);
+      }
+
+      await conn.query(
+        `UPDATE affiliate_withdrawals
+         SET status = 'declined',
+             decline_reason = ?,
+             processed_at = ?,
+             processed_by = ?,
+             updated_at = ?
+         WHERE id = ?`,
+        [reason, now, adminUsername, now, withdrawalId]
+      );
+
+      await conn.commit();
+      const updated = await this.getAffiliateWithdrawalById(withdrawalId);
+      return updated!;
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
+  },
+
   async updateUser(id: string, updates: Partial<UserRecord>): Promise<UserRecord | null> {
     if (!mysqlAvailable) {
       const idx = localUsers.findIndex(u => u.id === id);
@@ -1059,6 +1848,106 @@ export const db = {
     }
   },
 
+  async invalidateUserSessions(userId: string): Promise<void> {
+    if (!mysqlAvailable) {
+      for (const [token, sess] of localSessions.entries()) {
+        if (sess.userId === userId) {
+          localSessions.delete(token);
+        }
+      }
+      return;
+    }
+    try {
+      await pool.query('DELETE FROM sessions WHERE userId = ?', [userId]);
+    } catch (err) {
+      console.error('Error invalidating user sessions from DB:', err);
+    }
+  },
+
+  async createPasswordResetToken(userId: string, tokenHash: string, expiresAt: string): Promise<string> {
+    const id = `rst_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const createdAt = new Date().toISOString();
+
+    if (!mysqlAvailable) {
+      localPasswordResetTokens.push({
+        id,
+        userId,
+        tokenHash,
+        expiresAt,
+        usedAt: null,
+        createdAt
+      });
+      return id;
+    }
+
+    try {
+      await pool.query(`
+        INSERT INTO password_reset_tokens (id, userId, tokenHash, expiresAt, usedAt, createdAt)
+        VALUES (?, ?, ?, ?, NULL, ?)
+      `, [id, userId, tokenHash, expiresAt, createdAt]);
+      return id;
+    } catch (err) {
+      console.error('Error creating password reset token in DB:', err);
+      throw err;
+    }
+  },
+
+  async getPasswordResetTokenByHash(tokenHash: string): Promise<PasswordResetTokenRecord | null> {
+    if (!mysqlAvailable) {
+      return localPasswordResetTokens.find(t => t.tokenHash === tokenHash) || null;
+    }
+
+    try {
+      const [rows]: any = await pool.query(
+        'SELECT * FROM password_reset_tokens WHERE tokenHash = ? ORDER BY createdAt DESC LIMIT 1',
+        [tokenHash]
+      );
+      if (rows && rows.length > 0) {
+        return rows[0] as PasswordResetTokenRecord;
+      }
+    } catch (err) {
+      console.error('Error getting password reset token by hash from DB:', err);
+    }
+    return null;
+  },
+
+  async markPasswordResetTokenUsed(id: string): Promise<void> {
+    const usedAt = new Date().toISOString();
+    if (!mysqlAvailable) {
+      const tok = localPasswordResetTokens.find(t => t.id === id);
+      if (tok) {
+        tok.usedAt = usedAt;
+      }
+      return;
+    }
+
+    try {
+      await pool.query('UPDATE password_reset_tokens SET usedAt = ? WHERE id = ?', [usedAt, id]);
+    } catch (err) {
+      console.error('Error marking password reset token used in DB:', err);
+    }
+  },
+
+  async getRecentResetRequestCount(userId: string, windowSeconds: number = 120): Promise<number> {
+    const cutoff = new Date(Date.now() - windowSeconds * 1000).toISOString();
+    if (!mysqlAvailable) {
+      return localPasswordResetTokens.filter(t => t.userId === userId && t.createdAt >= cutoff).length;
+    }
+
+    try {
+      const [rows]: any = await pool.query(
+        'SELECT COUNT(*) as count FROM password_reset_tokens WHERE userId = ? AND createdAt >= ?',
+        [userId, cutoff]
+      );
+      if (rows && rows.length > 0) {
+        return Number(rows[0].count) || 0;
+      }
+    } catch (err) {
+      console.error('Error getting recent reset request count:', err);
+    }
+    return 0;
+  },
+
   async cleanupExpiredSessions(): Promise<void> {
     if (!mysqlAvailable) {
       const now = Date.now();
@@ -1146,6 +2035,27 @@ export const db = {
     }
     const [rows]: any = await pool.query('SELECT * FROM broadcast_notifications ORDER BY createdAt DESC');
     return rows;
+  },
+
+  async deleteBroadcastNotification(id: string): Promise<boolean> {
+    if (!mysqlAvailable) {
+      const idx = localBroadcastNotifications.findIndex(n => n.id === id);
+      if (idx !== -1) {
+        localBroadcastNotifications.splice(idx, 1);
+        return true;
+      }
+      return false;
+    }
+    const [result]: any = await pool.query('DELETE FROM broadcast_notifications WHERE id = ?', [id]);
+    return result.affectedRows > 0;
+  },
+
+  async clearAllBroadcastNotifications(): Promise<void> {
+    if (!mysqlAvailable) {
+      localBroadcastNotifications.length = 0;
+      return;
+    }
+    await pool.query('DELETE FROM broadcast_notifications');
   },
 
   async savePendingPayment(record: PendingPaymentRecord): Promise<void> {
@@ -1432,6 +2342,275 @@ export const db = {
       }
     } catch (e) {
       console.error('Error updating squad SFTP status:', e);
+    }
+  },
+
+  async getLandingContent(): Promise<{
+    heroSlides: any[];
+    heroSlideDelaySeconds: number;
+    about: any;
+    faqs: any[];
+  }> {
+    let heroSlides: any[] = [];
+    let heroSlideDelaySeconds = 5;
+    let about: any = null;
+    let faqs: any[] = [];
+
+    if (!mysqlAvailable) {
+      heroSlides = localHeroSlides.map(s => ({ ...s, isActive: Boolean(s.isActive) }));
+      heroSlideDelaySeconds = localHeroSlideDelaySeconds || (localSystemConfig?.heroSlideDelaySeconds ?? 5);
+      about = {
+        ...localLandingAbout,
+        featurePills: localLandingAbout.featurePillsJson ? JSON.parse(localLandingAbout.featurePillsJson) : [],
+        cards: localLandingAbout.cardsJson ? JSON.parse(localLandingAbout.cardsJson) : []
+      };
+      faqs = localLandingFaqs.map(f => ({ ...f, isActive: Boolean(f.isActive) }));
+      return { heroSlides, heroSlideDelaySeconds, about, faqs };
+    }
+
+    try {
+      // Get delay
+      const [cfgRows]: any = await pool.query("SELECT heroSlideDelaySeconds FROM system_config WHERE id = 'main'");
+      if (cfgRows && cfgRows[0] && cfgRows[0].heroSlideDelaySeconds) {
+        heroSlideDelaySeconds = Number(cfgRows[0].heroSlideDelaySeconds);
+      }
+
+      // Get slides
+      const [slideRows]: any = await pool.query('SELECT * FROM landing_hero_slides ORDER BY slideOrder ASC, createdAt ASC');
+      if (slideRows && slideRows.length > 0) {
+        heroSlides = slideRows.map((r: any) => ({
+          id: r.id,
+          title: r.title,
+          tagline: r.tagline || '',
+          year: r.year || '',
+          rating: r.rating || '',
+          quality: r.quality || '',
+          duration: r.duration || '',
+          mediaType: r.mediaType || 'image',
+          mediaUrl: r.mediaUrl || '',
+          posterUrl: r.posterUrl || '',
+          announcement: r.announcement || '',
+          slideOrder: Number(r.slideOrder || 0),
+          isActive: Boolean(r.isActive)
+        }));
+      } else {
+        heroSlides = DEFAULT_HERO_SLIDES.map(s => ({ ...s, isActive: Boolean(s.isActive) }));
+      }
+
+      // Get about
+      const [aboutRows]: any = await pool.query("SELECT * FROM landing_about WHERE id = 'main'");
+      if (aboutRows && aboutRows.length > 0) {
+        const ab = aboutRows[0];
+        let pills: string[] = [];
+        let cards: any[] = [];
+        try { pills = ab.featurePillsJson ? JSON.parse(ab.featurePillsJson) : []; } catch (e) {}
+        try { cards = ab.cardsJson ? JSON.parse(ab.cardsJson) : []; } catch (e) {}
+        about = {
+          header: ab.header || 'About',
+          badge: ab.badge || '',
+          subtitle: ab.subtitle || '',
+          contentHtml: ab.contentHtml || '',
+          imageUrl: ab.imageUrl || '',
+          imageAlt: ab.imageAlt || '',
+          captionTitle: ab.captionTitle || '',
+          captionDesc: ab.captionDesc || '',
+          featurePills: pills,
+          cards: cards
+        };
+      } else {
+        about = {
+          ...DEFAULT_LANDING_ABOUT,
+          featurePills: JSON.parse(DEFAULT_LANDING_ABOUT.featurePillsJson || '[]'),
+          cards: JSON.parse(DEFAULT_LANDING_ABOUT.cardsJson || '[]')
+        };
+      }
+
+      // Get faqs
+      const [faqRows]: any = await pool.query('SELECT * FROM landing_faqs ORDER BY faqOrder ASC, createdAt ASC');
+      if (faqRows && faqRows.length > 0) {
+        faqs = faqRows.map((r: any) => ({
+          id: r.id,
+          question: r.question,
+          answer: r.answer,
+          faqOrder: Number(r.faqOrder || 0),
+          isActive: Boolean(r.isActive)
+        }));
+      } else {
+        faqs = DEFAULT_LANDING_FAQS.map(f => ({ ...f, isActive: Boolean(f.isActive) }));
+      }
+
+    } catch (err) {
+      console.error('Error in getLandingContent:', err);
+      heroSlides = DEFAULT_HERO_SLIDES.map(s => ({ ...s, isActive: Boolean(s.isActive) }));
+      about = {
+        ...DEFAULT_LANDING_ABOUT,
+        featurePills: JSON.parse(DEFAULT_LANDING_ABOUT.featurePillsJson || '[]'),
+        cards: JSON.parse(DEFAULT_LANDING_ABOUT.cardsJson || '[]')
+      };
+      faqs = DEFAULT_LANDING_FAQS.map(f => ({ ...f, isActive: Boolean(f.isActive) }));
+    }
+
+    return { heroSlides, heroSlideDelaySeconds, about, faqs };
+  },
+
+  async saveHeroSlides(slides: any[], delaySeconds?: number): Promise<void> {
+    if (delaySeconds !== undefined) {
+      localHeroSlideDelaySeconds = delaySeconds;
+      if (localSystemConfig) localSystemConfig.heroSlideDelaySeconds = delaySeconds;
+    }
+
+    if (!mysqlAvailable) {
+      localHeroSlides.length = 0;
+      slides.forEach((s, idx) => {
+        localHeroSlides.push({
+          id: s.id || `slide-${Date.now()}-${idx}`,
+          title: s.title || '',
+          tagline: s.tagline || '',
+          year: s.year || '',
+          rating: s.rating || '',
+          quality: s.quality || '',
+          duration: s.duration || '',
+          mediaType: s.mediaType || 'image',
+          mediaUrl: s.mediaUrl || '',
+          posterUrl: s.posterUrl || '',
+          announcement: s.announcement || '',
+          slideOrder: s.slideOrder !== undefined ? s.slideOrder : idx,
+          isActive: s.isActive !== undefined ? (s.isActive ? 1 : 0) : 1,
+          createdAt: s.createdAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        });
+      });
+      return;
+    }
+
+    try {
+      if (delaySeconds !== undefined) {
+        await pool.query("UPDATE system_config SET heroSlideDelaySeconds = ? WHERE id = 'main'", [delaySeconds]);
+      }
+
+      await pool.query('DELETE FROM landing_hero_slides');
+      for (let idx = 0; idx < slides.length; idx++) {
+        const s = slides[idx];
+        const id = s.id || `slide-${Date.now()}-${idx}`;
+        const title = s.title || 'Untitled Movie';
+        const tagline = s.tagline || '';
+        const year = s.year || '';
+        const rating = s.rating || '9.0';
+        const quality = s.quality || '4K HDR';
+        const duration = s.duration || '';
+        const mediaType = s.mediaType || 'image';
+        const mediaUrl = s.mediaUrl || '';
+        const posterUrl = s.posterUrl || '';
+        const announcement = s.announcement || '';
+        const slideOrder = s.slideOrder !== undefined ? s.slideOrder : idx;
+        const isActive = s.isActive !== undefined ? (s.isActive ? 1 : 0) : 1;
+        const now = new Date().toISOString();
+
+        await pool.query(`
+          INSERT INTO landing_hero_slides (id, title, tagline, year, rating, quality, duration, mediaType, mediaUrl, posterUrl, announcement, slideOrder, isActive, createdAt, updatedAt)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [id, title, tagline, year, rating, quality, duration, mediaType, mediaUrl, posterUrl, announcement, slideOrder, isActive, now, now]);
+      }
+    } catch (e) {
+      console.error('Error saving hero slides to MySQL:', e);
+      throw e;
+    }
+  },
+
+  async saveAboutConfig(about: any): Promise<void> {
+    const pillsJson = JSON.stringify(about.featurePills || []);
+    const cardsJson = JSON.stringify(about.cards || []);
+    const now = new Date().toISOString();
+
+    if (!mysqlAvailable) {
+      localLandingAbout = {
+        id: 'main',
+        header: about.header || 'About',
+        badge: about.badge || '',
+        subtitle: about.subtitle || '',
+        contentHtml: about.contentHtml || '',
+        imageUrl: about.imageUrl || '',
+        imageAlt: about.imageAlt || '',
+        captionTitle: about.captionTitle || '',
+        captionDesc: about.captionDesc || '',
+        featurePillsJson: pillsJson,
+        cardsJson: cardsJson,
+        updatedAt: now
+      };
+      return;
+    }
+
+    try {
+      await pool.query(`
+        INSERT INTO landing_about (id, header, badge, subtitle, contentHtml, imageUrl, imageAlt, captionTitle, captionDesc, featurePillsJson, cardsJson, updatedAt)
+        VALUES ('main', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          header = VALUES(header),
+          badge = VALUES(badge),
+          subtitle = VALUES(subtitle),
+          contentHtml = VALUES(contentHtml),
+          imageUrl = VALUES(imageUrl),
+          imageAlt = VALUES(imageAlt),
+          captionTitle = VALUES(captionTitle),
+          captionDesc = VALUES(captionDesc),
+          featurePillsJson = VALUES(featurePillsJson),
+          cardsJson = VALUES(cardsJson),
+          updatedAt = VALUES(updatedAt)
+      `, [
+        about.header || 'About',
+        about.badge || '',
+        about.subtitle || '',
+        about.contentHtml || '',
+        about.imageUrl || '',
+        about.imageAlt || '',
+        about.captionTitle || '',
+        about.captionDesc || '',
+        pillsJson,
+        cardsJson,
+        now
+      ]);
+    } catch (e) {
+      console.error('Error saving about config to MySQL:', e);
+      throw e;
+    }
+  },
+
+  async saveFaqs(faqs: any[]): Promise<void> {
+    if (!mysqlAvailable) {
+      localLandingFaqs.length = 0;
+      faqs.forEach((f, idx) => {
+        localLandingFaqs.push({
+          id: f.id || `faq-${Date.now()}-${idx}`,
+          question: f.question || f.q || '',
+          answer: f.answer || f.a || '',
+          faqOrder: f.faqOrder !== undefined ? f.faqOrder : idx,
+          isActive: f.isActive !== undefined ? (f.isActive ? 1 : 0) : 1,
+          createdAt: f.createdAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        });
+      });
+      return;
+    }
+
+    try {
+      await pool.query('DELETE FROM landing_faqs');
+      for (let idx = 0; idx < faqs.length; idx++) {
+        const f = faqs[idx];
+        const id = f.id || `faq-${Date.now()}-${idx}`;
+        const question = f.question || f.q || '';
+        const answer = f.answer || f.a || '';
+        const faqOrder = f.faqOrder !== undefined ? f.faqOrder : idx;
+        const isActive = f.isActive !== undefined ? (f.isActive ? 1 : 0) : 1;
+        const now = new Date().toISOString();
+
+        await pool.query(`
+          INSERT INTO landing_faqs (id, question, answer, faqOrder, isActive, createdAt, updatedAt)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `, [id, question, answer, faqOrder, isActive, now, now]);
+      }
+    } catch (e) {
+      console.error('Error saving FAQs to MySQL:', e);
+      throw e;
     }
   }
 };

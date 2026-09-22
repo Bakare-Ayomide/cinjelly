@@ -10,6 +10,11 @@ HTACCESS_CONTENT = """<IfModule mod_rewrite.c>
     RewriteEngine On
     RewriteBase /
 
+    # Do not rewrite direct requests to uploaded media files
+    RewriteCond %{REQUEST_URI} ^/uploads/ [NC]
+    RewriteCond %{REQUEST_FILENAME} -f
+    RewriteRule ^ - [L]
+
     # Route /api, /jellyfin, /php-backend, and /backend requests directly to php-backend/index.php
     RewriteRule ^api(/.*)?$ php-backend/index.php [QSA,L]
     RewriteRule ^jellyfin(/.*)?$ php-backend/index.php [QSA,L]
@@ -20,6 +25,38 @@ HTACCESS_CONTENT = """<IfModule mod_rewrite.c>
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteCond %{REQUEST_FILENAME} !-d
     RewriteRule . index.html [L]
+</IfModule>
+
+<IfModule mod_headers.c>
+    # Prevent caching of index.html so updates are visible immediately
+    <FilesMatch "\.(html|htm)$">
+        Header set Cache-Control "max-age=0, no-cache, no-store, must-revalidate"
+        Header set Pragma "no-cache"
+        Header set Expires "Wed, 11 Jan 1984 05:00:00 GMT"
+    </FilesMatch>
+
+    # Cache static assets and video/media files efficiently with streaming support
+    <FilesMatch "\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|webp|avif|mp4|webm|mov|mkv|avi|ogg|m4v|ts|m3u8)$">
+        Header set Cache-Control "max-age=31536000, public"
+        Header set Access-Control-Allow-Origin "*"
+        Header set Accept-Ranges bytes
+    </FilesMatch>
+</IfModule>
+
+<IfModule mod_php7.c>
+    php_value upload_max_filesize 256M
+    php_value post_max_size 256M
+    php_value memory_limit 512M
+    php_value max_execution_time 300
+    php_value max_input_time 300
+</IfModule>
+
+<IfModule mod_php.c>
+    php_value upload_max_filesize 256M
+    php_value post_max_size 256M
+    php_value memory_limit 512M
+    php_value max_execution_time 300
+    php_value max_input_time 300
 </IfModule>
 """
 
@@ -95,9 +132,24 @@ def deploy():
                 if os.path.isfile(local_file_path):
                     upload_file(ftp, local_file_path, filename)
                 
-        # 4. Upload .htaccess to root
-        print("\n--- Step 4: Deploying root .htaccess ---")
+        # 4. Ensure upload directories exist
+        print("\n--- Step 4: Ensuring uploads storage directories ---")
+        for upload_sub in ["uploads", "uploads/landing", "uploads/landing/temp", "uploads/notifications"]:
+            try:
+                ftp.cwd(f"/{upload_sub}")
+            except ftplib.error_perm:
+                try:
+                    ftp.cwd("/")
+                    ftp.mkd(upload_sub)
+                    print(f"Created remote directory: /{upload_sub}")
+                except Exception as e:
+                    print(f"Notice: /{upload_sub}: {e}")
+
+        # 5. Upload .user.ini and .htaccess to root
+        print("\n--- Step 5: Deploying root .htaccess and .user.ini ---")
         ftp.cwd("/")
+        if os.path.exists("php-backend/.user.ini"):
+            upload_file(ftp, "php-backend/.user.ini", ".user.ini")
         
         # Save temporary .htaccess locally to upload it
         temp_htaccess_path = "temp_htaccess"
